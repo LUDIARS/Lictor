@@ -4,6 +4,10 @@ import { resetTitle, setTitle } from "./osc.js";
 import type { Meta } from "./meta.js";
 import type { ConcordiaClient } from "./concordia.js";
 import type { SkillInjector } from "./skill-injector.js";
+import type { NotifyState } from "./event-reactor.js";
+import type { ConflictState } from "./conflict-watcher.js";
+import type { TaskState } from "./task-relay.js";
+import { relayTask } from "./task-relay.js";
 
 export interface TitleState {
   manualOverride: string | null;
@@ -24,6 +28,13 @@ export interface SidecarContext {
    * when this is null.
    */
   ptyWriter: ((data: string) => void) | null;
+  /**
+   * v0.4 live state mutated by background cron + WS event reactor. Always
+   * provided (default zero values) so handlers don't have to null-check.
+   */
+  notifyState: NotifyState;
+  conflictState: ConflictState;
+  taskState: TaskState;
 }
 
 export interface Sidecar {
@@ -113,6 +124,77 @@ async function handle(
     ctx.titleState.manualOverride = null;
     resetTitle();
     writeJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/keys") {
+    if (!ctx.ptyWriter) {
+      return writeJson(res, 503, { error: "pty not available — sidecar not wrapping a claude session" });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const data = (body.value as { data?: unknown }).data;
+    if (typeof data !== "string") {
+      return writeJson(res, 400, { error: "body.data (string) is required" });
+    }
+    const safe = sanitizeKeySeq(data);
+    if (!safe) {
+      return writeJson(res, 400, { error: "data is empty after sanitization" });
+    }
+    ctx.ptyWriter(safe);
+    writeJson(res, 200, { ok: true, sent_bytes: Buffer.byteLength(safe, "utf8") });
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/answer") {
+    if (!ctx.ptyWriter) {
+      return writeJson(res, 503, { error: "pty not available — sidecar not wrapping a claude session" });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { choice?: unknown; escape_first?: unknown };
+    if (typeof payload.choice !== "number") {
+      return writeJson(res, 400, { error: "body.choice (number ≥ 1) is required" });
+    }
+    try {
+      const seq = buildAnswerSequence(payload.choice, payload.escape_first === true);
+      ctx.ptyWriter(seq);
+      writeJson(res, 200, { ok: true, choice: payload.choice });
+    } catch (err) {
+      writeJson(res, 400, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/slash") {
+    if (!ctx.ptyWriter) {
+      return writeJson(res, 503, {
+        error: "pty not available — sidecar not wrapping a claude session",
+      });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { cmd?: unknown; args?: unknown };
+    if (typeof payload.cmd !== "string") {
+      return writeJson(res, 400, { error: "body.cmd (string) is required" });
+    }
+    const cmd = sanitizeSlashCmd(payload.cmd);
+    if (!cmd) {
+      return writeJson(res, 400, {
+        error: "cmd must match ^[a-z][a-z0-9-]{0,40}$ (claude slash command grammar)",
+      });
+    }
+    let line: string;
+    if (payload.args === undefined || payload.args === null || payload.args === "") {
+      line = `/${cmd}\r`;
+    } else if (typeof payload.args !== "string") {
+      return writeJson(res, 400, { error: "body.args must be a string when provided" });
+    } else {
+      const args = sanitizeRenameArg(payload.args);
+      line = args ? `/${cmd} ${args}\r` : `/${cmd}\r`;
+    }
+    ctx.ptyWriter(line);
+    writeJson(res, 200, { ok: true, sent: line.trimEnd() });
     return;
   }
 
@@ -222,6 +304,53 @@ async function handle(
     return;
   }
 
+  if (method === "POST" && url === "/v1/lictor/task") {
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { branch?: unknown; desc?: unknown };
+    const branch =
+      payload.branch === undefined || payload.branch === null
+        ? undefined
+        : typeof payload.branch === "string"
+          ? payload.branch
+          : undefined;
+    const desc =
+      payload.desc === undefined || payload.desc === null
+        ? undefined
+        : typeof payload.desc === "string"
+          ? payload.desc
+          : undefined;
+    if (branch === undefined && desc === undefined) {
+      return writeJson(res, 400, { error: "at least one of branch or desc must be a string" });
+    }
+    const next = await relayTask({
+      client: ctx.concordia,
+      sessionId: ctx.sessionId,
+      injector: ctx.injector,
+      state: ctx.taskState,
+      branch,
+      desc,
+      source: "explicit",
+    });
+    ctx.taskState = next;
+    writeJson(res, 200, { ok: true, task: next });
+    return;
+  }
+
+  if (method === "GET" && url === "/v1/lictor/task") {
+    writeJson(res, 200, ctx.taskState);
+    return;
+  }
+
+  if (method === "GET" && url === "/v1/lictor/state") {
+    writeJson(res, 200, {
+      notify: ctx.notifyState,
+      conflict: ctx.conflictState,
+      task: ctx.taskState,
+    });
+    return;
+  }
+
   if (method === "GET" && url.startsWith("/v1/conflicts")) {
     if (!ctx.concordia) {
       return writeJson(res, 503, { error: "Concordia not registered for this session" });
@@ -270,6 +399,56 @@ export function sanitizeRenameArg(text: string): string {
     .replace(/^\/+/, "")
     .trim()
     .slice(0, 200);
+}
+
+/**
+ * Validate a slash-command name. Claude Code recognizes `/clear`,
+ * `/compact`, `/help`, `/cost`, `/model`, `/export`, `/rename`, `/init`,
+ * `/resume`, etc. All are lowercase ASCII + dash, ≤ 40 chars. Anything
+ * else is almost certainly an injection attempt or typo — return null
+ * and let the caller 400.
+ */
+export function sanitizeSlashCmd(cmd: string): string | null {
+  const trimmed = cmd.trim().replace(/^\/+/, "").toLowerCase();
+  if (!/^[a-z][a-z0-9-]{0,40}$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+/**
+ * Strip dangerous control bytes from a raw keystroke payload, allowing
+ * the few that TUIs legitimately need (Enter, Tab, Backspace, DEL, ESC).
+ * `\x03` (Ctrl-C / SIGINT) is intentionally dropped — a caller that
+ * wanted to interrupt the wrapped claude would use OS signals, not
+ * loopback HTTP, and we don't want a stray hook to terminate the user's
+ * session by accident.
+ */
+export function sanitizeKeySeq(data: string): string {
+  // Allow: \b (0x08), \t (0x09), \n (0x0a), \r (0x0d), ESC (0x1b),
+  //         all printable ≥ 0x20 (incl. DEL 0x7f), all multibyte.
+  // Reject: 0x00-0x07, 0x0b, 0x0c, 0x0e-0x1a, 0x1c-0x1f.
+  return data.replace(/[\x00-\x07\x0b\x0c\x0e-\x1a\x1c-\x1f]/g, "");
+}
+
+/**
+ * Build the keystroke sequence needed to pick the Nth option in
+ * Claude Code's AskUserQuestion picker (1-indexed).
+ *
+ *   answer=1                       → just Enter (default is first option)
+ *   answer=N (N > 1)               → (N-1) Down-Arrow then Enter
+ *
+ * `escape_first` prepends ESC, useful when an editor / autocomplete is
+ * already open and the picker is one level up the focus stack.
+ */
+export function buildAnswerSequence(choice: number, escapeFirst = false): string {
+  if (!Number.isInteger(choice) || choice < 1 || choice > 50) {
+    throw new Error("choice must be an integer in [1, 50]");
+  }
+  const DOWN = "\x1b[B";
+  let seq = "";
+  if (escapeFirst) seq += "\x1b";
+  seq += DOWN.repeat(choice - 1);
+  seq += "\r";
+  return seq;
 }
 
 function writeJson(res: http.ServerResponse, status: number, body: unknown): void {

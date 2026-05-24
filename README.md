@@ -69,12 +69,18 @@ lictor cli conflicts                  # other sessions on the same repo
 | POST   | `/v1/title`                | `{"text":"<title>"}`                   | Emit OSC 0 + set manual override |
 | POST   | `/v1/title/auto`           | —                                      | Drop manual override + reset title (auto resumes next stat cycle) |
 | POST   | `/v1/rename`               | `{"text":"<title>"}`                   | Inject `/rename <text>\r` into claude's TUI stdin (503 if not wrapping a real session) |
+| POST   | `/v1/slash`                | `{cmd, args?}`                         | Generalized slash injection — sends `/<cmd> <args>\r`. `cmd` regex: `^[a-z][a-z0-9-]{0,40}$`. |
+| POST   | `/v1/keys`                 | `{data}`                               | Raw keystroke injection (C0 controls stripped except `\t \n \r \b ESC`; Ctrl-C dropped to prevent accidental session kill) |
+| POST   | `/v1/answer`               | `{choice, escape_first?}`              | Send `(choice-1)` Down-Arrow + Enter to answer an `AskUserQuestion` picker. `choice` 1-based, 1–50. |
 | POST   | `/v1/chat`                 | `{channel, text, author_label?, scope?}` | Proxy to Concordia /v1/chat; auto-fills `author_label` |
 | POST   | `/v1/event`                | `{kind, payload?, ts?}`                | Proxy to Concordia /v1/sessions/:id/event |
 | GET    | `/v1/conflicts`            | `?repo=<path>&branch=<name>`           | Proxy to Concordia /v1/monitor/conflicts (excludes self) |
 | GET    | `/v1/skill`                | —                                      | List injected skill names + the dir claude scans |
 | POST   | `/v1/skill`                | `{name, content}`                      | Write/overwrite a SKILL.md (live-reloaded by claude) |
 | DELETE | `/v1/skill/<name>`         | —                                      | Remove an injected skill |
+| GET    | `/v1/lictor/task`          | —                                      | Current task state `{branch, desc, updatedAt}` |
+| POST   | `/v1/lictor/task`          | `{branch?, desc?}`                     | PATCH Concordia session + emit event + refresh `lictor-current-task` skill |
+| GET    | `/v1/lictor/state`         | —                                      | `{notify, conflict, task}` snapshot for dashboards |
 
 All requests must originate from `127.0.0.1` / `::1`. The port is bound on
 `127.0.0.1:0` (ephemeral) and exported as `$LICTOR_PORT` to the wrapped
@@ -190,8 +196,30 @@ Brings up the sidecar with `ptyWriter` replaced by a stdout logger, so
 `POST /v1/rename` prints what bytes _would have_ hit claude's TUI. Useful
 for HTTP-layer iteration and curl-driven smoke checks.
 
+## v0.4 — bidirectional Concordia loop
+
+v0.1 was outbound only (register / chat / stat). v0.4 closes the loop by
+reacting to Concordia state and relaying changes back automatically:
+
+- **WS event reactor** — incoming WS broadcasts drive short-lived title
+  marks (`[!]` for chat from another session) and force-refresh the
+  title on `conflict_detected`.
+- **60s poll loop** — when Concordia is reachable:
+  - `lictor-pending-tasks` skill is rewritten from `/v1/sessions/<id>/pending-tasks`
+  - `lictor-conflicts` skill + title `⚠N` prefix from `/v1/monitor/conflicts`
+  - branch poll detects `git checkout -b`, PATCHes Concordia + emits
+    `lictor.task.changed` event + refreshes `lictor-current-task` skill
+- **Live session-state skill** — every 10-min stat cycle also overwrites
+  `lictor-session-state` (current branch / dirty / unpushed snapshot).
+- **Task declaration** — `lictor cli task set --branch <b> --desc <text>`
+  for explicit task description (auto branch detection covers the rest).
+  Seeded `lictor-task-protocol` skill tells the wrapped claude to call it.
+- **Session-end report** — `DELETE /v1/sessions/<id>`'s `report` field is
+  now printed to stderr on exit.
+
 ## Status
 
+- v0.4 — Bidirectional Concordia loop (WS reactor + 60s poll for tasks/conflicts/branch + session-state skill + end report).
 - v0.3 — pty-wrapped claude (node-pty) + `/v1/rename` keystroke injection + `lictor cli rename`.
 - v0.2 — Skill injection (persona + repo-relevant memories) via `--add-dir`.
 - v0.1 — Concordia integration + auto title + stat cron + chat/event/conflicts proxies.
