@@ -23,6 +23,7 @@ const ctx = {
   notifyState: { mark: null, expiresAt: null },
   conflictState: { count: 0, titleMark: null },
   taskState: { branch: null, desc: null, updatedAt: null },
+  pendingPermissions: new Map(),
 };
 const sidecar = await startSidecar(ctx);
 const base = `http://127.0.0.1:${sidecar.port}`;

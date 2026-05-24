@@ -8,9 +8,15 @@ import type { NotifyState } from "./event-reactor.js";
 import type { ConflictState } from "./conflict-watcher.js";
 import type { TaskState } from "./task-relay.js";
 import { relayTask } from "./task-relay.js";
+import { fsRead, fsList, fsGrep } from "./fs-rpc.js";
 
 export interface TitleState {
   manualOverride: string | null;
+}
+
+export interface PermissionDecision {
+  decision: "allow" | "deny" | "ask";
+  reason?: string;
 }
 
 export interface SidecarContext {
@@ -35,6 +41,14 @@ export interface SidecarContext {
   notifyState: NotifyState;
   conflictState: ConflictState;
   taskState: TaskState;
+  /**
+   * v0.6 permission proxy — map of pending PreToolUse requests waiting for
+   * a Web UI / Concordia response. Key is request_id (uuid). The promise
+   * resolver lets `/v1/internal/permission-check` block until either a
+   * matching `/v1/internal/permission-response` arrives or the timeout
+   * fires (default-allow).
+   */
+  pendingPermissions: Map<string, (decision: PermissionDecision) => void>;
 }
 
 export interface Sidecar {
@@ -351,6 +365,33 @@ async function handle(
     return;
   }
 
+  // Filesystem RPC — cwd-confined. Concordia proxies through these.
+  if (method === "GET" && url.startsWith("/v1/fs/read")) {
+    const u = new URL(url, "http://localhost");
+    const p = u.searchParams.get("path") ?? "";
+    const out = fsRead(ctx.meta.cwd, p);
+    if ("error" in out) return writeJson(res, 400, out);
+    return writeJson(res, 200, out);
+  }
+
+  if (method === "GET" && url.startsWith("/v1/fs/list")) {
+    const u = new URL(url, "http://localhost");
+    const p = u.searchParams.get("path") ?? ".";
+    const out = fsList(ctx.meta.cwd, p);
+    if ("error" in out) return writeJson(res, 400, out);
+    return writeJson(res, 200, out);
+  }
+
+  if (method === "GET" && url.startsWith("/v1/fs/grep")) {
+    const u = new URL(url, "http://localhost");
+    const pattern = u.searchParams.get("pattern") ?? "";
+    const path = u.searchParams.get("path") ?? undefined;
+    const flags = u.searchParams.get("flags") ?? undefined;
+    const out = fsGrep(ctx.meta.cwd, pattern, { path, flags });
+    if ("error" in out) return writeJson(res, 400, out);
+    return writeJson(res, 200, out);
+  }
+
   if (method === "GET" && url.startsWith("/v1/conflicts")) {
     if (!ctx.concordia) {
       return writeJson(res, 503, { error: "Concordia not registered for this session" });
@@ -367,7 +408,85 @@ async function handle(
     return;
   }
 
+  // /v1/internal/* — called by `lictor cli permission-hook` (the PreToolUse
+  // hook script) and by Concordia's permission-response proxy. Not for hooks
+  // running inside claude (those should use /v1/title, /v1/chat, etc.).
+  if (method === "POST" && url === "/v1/internal/permission-check") {
+    if (!ctx.concordia || !ctx.sessionId) {
+      // No Concordia means nobody to ask. Fall through to allow so the
+      // wrapped session keeps moving — Lictor never silently denies.
+      return writeJson(res, 200, { decision: "allow", reason: "no concordia" });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { tool_name?: unknown; tool_input?: unknown; timeout_ms?: unknown };
+    if (typeof payload.tool_name !== "string") {
+      return writeJson(res, 400, { error: "tool_name (string) required" });
+    }
+    const requestId = randomUuid();
+    const timeoutMs = typeof payload.timeout_ms === "number" && payload.timeout_ms > 0
+      ? Math.min(payload.timeout_ms, 600_000)
+      : 60_000;
+
+    // Post the request to Concordia so the Web UI modal can show up.
+    try {
+      await ctx.concordia.permissionRequest(ctx.sessionId, {
+        request_id: requestId,
+        tool_name: payload.tool_name,
+        tool_input: payload.tool_input,
+      });
+    } catch (err) {
+      return writeJson(res, 200, {
+        decision: "allow",
+        reason: `concordia unreachable (${(err as Error).message})`,
+      });
+    }
+
+    const decision = await new Promise<{ decision: "allow" | "deny" | "ask"; reason?: string }>((resolve) => {
+      const timer = setTimeout(() => {
+        ctx.pendingPermissions.delete(requestId);
+        resolve({ decision: "allow", reason: "timeout (default-allow)" });
+      }, timeoutMs);
+      ctx.pendingPermissions.set(requestId, (d) => {
+        clearTimeout(timer);
+        ctx.pendingPermissions.delete(requestId);
+        resolve(d);
+      });
+    });
+    writeJson(res, 200, decision);
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/internal/permission-response") {
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { request_id?: unknown; decision?: unknown; reason?: unknown };
+    if (typeof payload.request_id !== "string") {
+      return writeJson(res, 400, { error: "request_id (string) required" });
+    }
+    if (payload.decision !== "allow" && payload.decision !== "deny" && payload.decision !== "ask") {
+      return writeJson(res, 400, { error: "decision must be 'allow', 'deny', or 'ask'" });
+    }
+    const resolver = ctx.pendingPermissions.get(payload.request_id);
+    if (!resolver) {
+      return writeJson(res, 404, { error: "no pending request with that id (timed out or unknown)" });
+    }
+    resolver({
+      decision: payload.decision,
+      reason: typeof payload.reason === "string" ? payload.reason : undefined,
+    });
+    writeJson(res, 200, { ok: true });
+    return;
+  }
+
   writeJson(res, 404, { error: "not found" });
+}
+
+function randomUuid(): string {
+  // Avoid a top-level import just for this — keep sidecar.ts minimal-dep.
+  // Node's randomUUID is on `node:crypto`.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return (globalThis.crypto?.randomUUID?.() as string | undefined) ?? Math.random().toString(36).slice(2);
 }
 
 /**

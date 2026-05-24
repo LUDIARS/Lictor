@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as pty from "node-pty";
-import { startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
+import { sanitizeKeySeq, startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
 import { gatherBaseMeta, type Meta } from "./meta.js";
 import { resetTitle } from "./osc.js";
 import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./concordia.js";
@@ -18,6 +18,7 @@ import { refreshPendingTasksSkill } from "./pending-tasks.js";
 import { newTaskState, relayTask, seedTaskProtocolSkill } from "./task-relay.js";
 import { writeSessionStateSkill } from "./session-state-skill.js";
 import { type ProviderConfig, PROVIDERS } from "./provider.js";
+import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
 
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
@@ -69,9 +70,25 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     notifyState: newNotifyState(),
     conflictState: { count: 0, titleMark: null },
     taskState: newTaskState(),
+    pendingPermissions: new Map(),
   };
 
   const sidecar = await startSidecar(ctx);
+
+  // Publish our sidecar port to Concordia so per-session HTTP proxies
+  // (filesystem RPC, permission checks, etc.) can reach this Lictor. The
+  // initial register fired BEFORE startSidecar (we needed the persona for
+  // skill seeding), so the port wasn't known then. Best-effort — failure
+  // only breaks the proxy features, not the wrapped claude.
+  if (concordia) {
+    concordia.client
+      .patchSession(concordia.id, { metadata: { lictor_port: sidecar.port } })
+      .catch((err) => {
+        process.stderr.write(
+          `lictor: failed to publish lictor_port to Concordia (${(err as Error).message})\n`,
+        );
+      });
+  }
 
   // Initial auto title (composed with conflict/notify marks once they exist).
   applyAutoTitle(ctx, gatherRepoStat(meta.cwd));
@@ -91,6 +108,20 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           if (ctx.concordia && ctx.sessionId && ctx.injector) {
             void refreshPendingTasksSkill(ctx.concordia, ctx.sessionId, ctx.injector);
           }
+        },
+        onInject: (text, source) => {
+          if (!ctx.ptyWriter) return;
+          // Reuse the same sanitizer as /v1/keys — TUI-safe controls only.
+          // Append \r so the line submits as a single user input rather than
+          // sitting in the prompt buffer waiting for Enter.
+          const safe = sanitizeKeySeq(text);
+          if (!safe) return;
+          ctx.ptyWriter(safe + "\r");
+          // Telemetry breadcrumb — surface that the inject landed so the
+          // user can see who pushed what without trawling Concordia logs.
+          process.stderr.write(
+            `lictor: injected ${safe.length} bytes from Concordia (source=${source ?? "?"})\n`,
+          );
         },
       }),
     );
@@ -131,12 +162,29 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     if (meta.role_label) env.LICTOR_ROLE_LABEL = meta.role_label;
   }
 
-  // Spawn-arg injection only applies for the claude-add-dir strategy.
-  // Codex auto-walks ~/.agents/skills/ so no flag is needed.
+  // Spawn-arg injection. Two pieces compose here:
+  //   1. --add-dir <sessionDir> for the claude-add-dir strategy (Codex
+  //      auto-walks ~/.agents/skills/ so the flag is omitted there).
+  //   2. --settings <path> wiring claude's PreToolUse to our permission-hook
+  //      bridge. Only applies when Concordia is up AND we have an injector
+  //      (i.e. a real session dir to write the settings file into). For
+  //      Codex we skip — claude's --settings flag is not portable.
   const providerArgs =
     provider.skillStrategy === "claude-add-dir" && injector
       ? ["--add-dir", injector.sessionDir, ...args]
       : [...args];
+
+  let extraSettingsPath: string | null = null;
+  if (concordia && injector && provider.name === "claude") {
+    try {
+      extraSettingsPath = writePermissionHookSettings(injector.sessionDir);
+    } catch (err) {
+      process.stderr.write(
+        `lictor: permission-hook settings write failed: ${(err as Error).message}\n`,
+      );
+    }
+  }
+  if (extraSettingsPath) providerArgs.push("--settings", extraSettingsPath);
 
   // node-pty on Windows uses CreateProcessW which does not auto-resolve .cmd
   // extensions. CLI bins ship as `<name>.cmd` in npm global bin, so wrap via
@@ -157,6 +205,19 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   });
 
   ctx.ptyWriter = (data: string) => child.write(data);
+
+  // Transcript tail — start watching ~/.claude/projects/<cwdKey>/ for the
+  // new .jsonl claude will create, then relay each parsed line to
+  // Concordia as a transcript-frame. Best-effort; failures don't affect
+  // the wrapped session at all. Only meaningful when concordia is up.
+  let transcriptTail: TranscriptTailHandle | null = null;
+  if (concordia) {
+    transcriptTail = startTranscriptTail({
+      cwd: meta.cwd,
+      sessionId: concordia.id,
+      concordiaBaseUrl: `http://${process.env.CONCORDIA_HOST ?? "127.0.0.1"}:${process.env.CONCORDIA_PORT ?? "17330"}`,
+    });
+  }
 
   // pty → real terminal stdout.
   const onData = (data: string) => {
@@ -206,6 +267,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   const cleanup = async () => {
     if (statTimer) clearInterval(statTimer);
     if (pollTimer) clearInterval(pollTimer);
+    transcriptTail?.stop();
     concordia?.liveness.close();
     sidecar.close();
     resetTitle();
@@ -265,6 +327,42 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   if (process.platform !== "win32") {
     process.on("SIGHUP", forward("SIGHUP"));
   }
+}
+
+/**
+ * Write a per-session settings.json that maps PreToolUse to our
+ * permission-hook bridge. Passed to claude via `--settings <path>` so it
+ * stacks on top of user/project settings rather than replacing them. The
+ * file lives in the same sessionDir as the injected skills, so cleanup
+ * (injector.cleanup() removing sessionDir) takes care of it on exit.
+ *
+ * The command points at the `lictor` binary on PATH plus our cli
+ * subcommand. Matcher is a regex covering the tools we care to gate
+ * (Bash/Edit/Write — write paths) plus MCP tools whose name starts with
+ * `mcp__`. Read-only tools (Read/Glob/Grep) are intentionally NOT gated
+ * — they would explode the modal count and add no value.
+ */
+function writePermissionHookSettings(sessionDir: string): string {
+  const path = `${sessionDir}/lictor-hook-settings.json`;
+  const content = JSON.stringify({
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__.*",
+          hooks: [
+            {
+              type: "command",
+              command: "lictor cli permission-hook",
+              timeout: 65,
+            },
+          ],
+        },
+      ],
+    },
+  }, null, 2);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("node:fs").writeFileSync(path, content, "utf8");
+  return path;
 }
 
 function currentSize(): { cols: number; rows: number } {

@@ -1,6 +1,7 @@
 import { runWrapped } from "./wrap.js";
 import { runClient } from "./client.js";
 import { getProvider } from "./provider.js";
+import { runPermissionHook } from "./permission-hook.js";
 
 const HELP = `lictor — per-session sidecar for agent TUI CLIs (LUDIARS / Li)
 
@@ -86,6 +87,15 @@ async function main() {
   }
 
   if (cmd === "cli") {
+    // permission-hook bypasses the LICTOR_PORT requirement check in
+    // runClient — it must NEVER error/exit-nonzero (claude would block
+    // tool execution waiting for hook output). Internal fallback paths
+    // emit no JSON on stdout and exit 0 (claude falls through to its
+    // built-in permission flow).
+    if (rest[0] === "permission-hook") {
+      await runPermissionHook();
+      return;
+    }
     await runClient(rest);
     return;
   }

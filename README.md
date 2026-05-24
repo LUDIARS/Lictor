@@ -218,6 +218,11 @@ reacting to Concordia state and relaying changes back automatically:
 - **WS event reactor** — incoming WS broadcasts drive short-lived title
   marks (`[!]` for chat from another session) and force-refresh the
   title on `conflict_detected`.
+- **Remote inject** — Concordia `session.inject` events whose
+  `target_session_id` matches this session are sanitized
+  (`sanitizeKeySeq`) and written to the pty with a trailing `\r`, landing
+  in the wrapped claude as user-typed input. Three drivers share the
+  Concordia API: Web UI form, other Claude sessions, external scripts.
 - **60s poll loop** — when Concordia is reachable:
   - `lictor-pending-tasks` skill is rewritten from `/v1/sessions/<id>/pending-tasks`
   - `lictor-conflicts` skill + title `⚠N` prefix from `/v1/monitor/conflicts`
@@ -233,7 +238,11 @@ reacting to Concordia state and relaying changes back automatically:
 
 ## Status
 
-- v0.5 — Provider abstraction; `lictor codex [args]` added. Skill injection cleanly disabled for Codex (no SKILL.md discovery upstream).
+- v0.7 — Provider abstraction; `lictor codex [args]` added (skill injection cleanly disabled for Codex pre-Agent-Skills; re-enabled in v0.5 cont. via `~/.agents/skills/`). Merged on top of v0.5+v0.6 main work (fs-rpc, permission-hook, transcript-tail).
+- v0.6 — Tool permission proxy: PreToolUse hook bridge writes a session-scoped `--settings` file so claude defers ASK decisions to Concordia's Web UI (PR-D).
+- v0.5 — `transcript-tail` relays Claude's session JSONL to Concordia (PR-C). `filesystem-rpc` adds cwd-confined read/list/grep (PR-E). `transcript-frame` ingest (PR-F).
+- v0.4.2 — `lictor_port` published into Concordia session metadata after sidecar bind (PR-B).
+- v0.4.1 — `session.inject` reactor handles remote instructions from Concordia (Web UI / other sessions / scripts → ptyWriter as user input).
 - v0.4 — Bidirectional Concordia loop (WS reactor + 60s poll for tasks/conflicts/branch + session-state skill + end report) + generalized slash/keys/answer pty injection.
 - v0.3 — pty-wrapped claude (node-pty) + `/v1/rename` keystroke injection + `lictor cli rename`.
 - v0.2 — Skill injection (persona + repo-relevant memories) via `--add-dir`.
