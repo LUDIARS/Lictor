@@ -16,6 +16,14 @@ export interface SidecarContext {
   sessionId: string | null;
   roleLabel: string | null;
   injector: SkillInjector | null;
+  /**
+   * Writes raw bytes to the wrapped claude's pty stdin. Set by wrap.ts after
+   * the pty is spawned; null when the sidecar is started without a pty (e.g.
+   * the smoke-sidecar.mjs harness or local-server.mjs). Endpoints that
+   * require keystroke injection (`/v1/rename`, future `/v1/keys`) must 503
+   * when this is null.
+   */
+  ptyWriter: ((data: string) => void) | null;
 }
 
 export interface Sidecar {
@@ -105,6 +113,28 @@ async function handle(
     ctx.titleState.manualOverride = null;
     resetTitle();
     writeJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/rename") {
+    if (!ctx.ptyWriter) {
+      return writeJson(res, 503, { error: "pty not available — sidecar not wrapping a claude session" });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const text = (body.value as { text?: unknown }).text;
+    if (typeof text !== "string") {
+      return writeJson(res, 400, { error: "body.text (string) is required" });
+    }
+    const sanitized = sanitizeRenameArg(text);
+    if (!sanitized) {
+      return writeJson(res, 400, { error: "text is empty after sanitization" });
+    }
+    // \r is what TUIs (incl. claude in raw mode) treat as Enter. We send the
+    // full slash command as one write so claude's input parser sees an atomic
+    // submission; partial writes would race with user keystrokes.
+    ctx.ptyWriter(`/rename ${sanitized}\r`);
+    writeJson(res, 200, { ok: true, sent: sanitized });
     return;
   }
 
@@ -225,6 +255,21 @@ function defaultAuthorLabel(ctx: SidecarContext): string {
   if (role) return role;
   if (displayName) return displayName;
   return "lictor";
+}
+
+/**
+ * Strip controls / quotes / leading slashes that would break claude's
+ * /rename parser or let a malicious caller chain commands.
+ * - C0 + DEL: would terminate the line early or inject other key events.
+ * - Leading "/": prevents the caller from sneaking in another slash command.
+ * - 200-char cap matches sanitizeTitle's contract — Web UI truncates anyway.
+ */
+export function sanitizeRenameArg(text: string): string {
+  return text
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .replace(/^\/+/, "")
+    .trim()
+    .slice(0, 200);
 }
 
 function writeJson(res: http.ServerResponse, status: number, body: unknown): void {

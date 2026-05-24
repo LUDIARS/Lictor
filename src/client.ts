@@ -21,6 +21,9 @@ export async function runClient(args: string[]): Promise<void> {
     case "title-auto":
       await postNoBody(port, "/v1/title/auto");
       return;
+    case "rename":
+      await cmdRename(port, rest);
+      return;
     case "meta":
       process.stdout.write((await getText(port, "/v1/meta")) + "\n");
       return;
@@ -45,7 +48,7 @@ export async function runClient(args: string[]): Promise<void> {
     default:
       process.stderr.write(
         `lictor cli: unknown subcommand '${sub ?? "(none)"}'.\n` +
-          `Available: title, title-auto, meta, health, session, chat, event, conflicts, skill.\n`,
+          `Available: title, title-auto, rename, meta, health, session, chat, event, conflicts, skill.\n`,
       );
       process.exit(2);
   }
@@ -98,6 +101,15 @@ async function cmdTitle(port: string, rest: string[]): Promise<void> {
     process.exit(2);
   }
   await postJson(port, "/v1/title", { text });
+}
+
+async function cmdRename(port: string, rest: string[]): Promise<void> {
+  const text = rest.join(" ");
+  if (!text) {
+    process.stderr.write("usage: lictor cli rename <text>\n");
+    process.exit(2);
+  }
+  await postJson(port, "/v1/rename", { text });
 }
 
 async function cmdChat(port: string, rest: string[]): Promise<void> {
