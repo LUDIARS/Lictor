@@ -8,6 +8,7 @@ import type { NotifyState } from "./event-reactor.js";
 import type { ConflictState } from "./conflict-watcher.js";
 import type { TaskState } from "./task-relay.js";
 import { relayTask } from "./task-relay.js";
+import { fsRead, fsList, fsGrep } from "./fs-rpc.js";
 
 export interface TitleState {
   manualOverride: string | null;
@@ -349,6 +350,33 @@ async function handle(
       task: ctx.taskState,
     });
     return;
+  }
+
+  // Filesystem RPC — cwd-confined. Concordia proxies through these.
+  if (method === "GET" && url.startsWith("/v1/fs/read")) {
+    const u = new URL(url, "http://localhost");
+    const p = u.searchParams.get("path") ?? "";
+    const out = fsRead(ctx.meta.cwd, p);
+    if ("error" in out) return writeJson(res, 400, out);
+    return writeJson(res, 200, out);
+  }
+
+  if (method === "GET" && url.startsWith("/v1/fs/list")) {
+    const u = new URL(url, "http://localhost");
+    const p = u.searchParams.get("path") ?? ".";
+    const out = fsList(ctx.meta.cwd, p);
+    if ("error" in out) return writeJson(res, 400, out);
+    return writeJson(res, 200, out);
+  }
+
+  if (method === "GET" && url.startsWith("/v1/fs/grep")) {
+    const u = new URL(url, "http://localhost");
+    const pattern = u.searchParams.get("pattern") ?? "";
+    const path = u.searchParams.get("path") ?? undefined;
+    const flags = u.searchParams.get("flags") ?? undefined;
+    const out = fsGrep(ctx.meta.cwd, pattern, { path, flags });
+    if ("error" in out) return writeJson(res, 400, out);
+    return writeJson(res, 200, out);
   }
 
   if (method === "GET" && url.startsWith("/v1/conflicts")) {
