@@ -15,7 +15,7 @@ test("newTaskState is empty", () => {
 
 test("relayTask: branch change updates state + skill", async () => {
   const root = mkdtempSync(join(tmpdir(), "lictor-task-"));
-  const injector = new SkillInjector("s", root);
+  const injector = new SkillInjector("s", "claude-add-dir", { homeRoot: root });
   const next = await relayTask({
     client: null,
     sessionId: null,
@@ -38,7 +38,7 @@ test("relayTask: branch change updates state + skill", async () => {
 
 test("relayTask: desc-only update keeps branch", async () => {
   const root = mkdtempSync(join(tmpdir(), "lictor-task-"));
-  const injector = new SkillInjector("s", root);
+  const injector = new SkillInjector("s", "claude-add-dir", { homeRoot: root });
   const s1 = await relayTask({
     client: null,
     sessionId: null,
@@ -64,7 +64,7 @@ test("relayTask: desc-only update keeps branch", async () => {
 
 test("relayTask: no-change returns same state", async () => {
   const root = mkdtempSync(join(tmpdir(), "lictor-task-"));
-  const injector = new SkillInjector("s", root);
+  const injector = new SkillInjector("s", "claude-add-dir", { homeRoot: root });
   const initial = { branch: "feat/x", desc: "fix bug", updatedAt: "2026-01-01T00:00:00Z" };
   const same = await relayTask({
     client: null,
@@ -80,7 +80,7 @@ test("relayTask: no-change returns same state", async () => {
 
 test("seedTaskProtocolSkill writes a usable instruction skill", () => {
   const root = mkdtempSync(join(tmpdir(), "lictor-task-"));
-  const injector = new SkillInjector("s", root);
+  const injector = new SkillInjector("s", "claude-add-dir", { homeRoot: root });
   seedTaskProtocolSkill(injector);
   const md = readFileSync(join(injector.skillsDir, "lictor-task-protocol", "SKILL.md"), "utf8");
   assert.match(md, /^---\nname: lictor-task-protocol\n/);

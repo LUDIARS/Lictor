@@ -1,13 +1,27 @@
 # Lictor (Li)
 
-Per-session sidecar that wraps `claude` so hooks running inside a Claude Code
-session can drive the host terminal — primarily the **window/tab title** —
-inject keystrokes into the wrapped TUI (`/rename` to set the session name
-visible on claude.ai/code), query session meta, and talk to [Concordia](https://github.com/LUDIARS/Concordia)
-(the LUDIARS multi-agent session coordinator).
+Per-session sidecar that wraps **agent TUI CLIs** (Claude Code or OpenAI Codex)
+so hooks running inside the session can drive the host terminal — primarily
+the **window/tab title** — inject keystrokes into the wrapped TUI (`/rename`
+to set the session name visible on claude.ai/code, generalized `/slash` /
+`/keys` / `/answer` for any TUI), query session meta, and talk to
+[Concordia](https://github.com/LUDIARS/Concordia) (the LUDIARS multi-agent
+session coordinator).
 
 LUDIARS short code: **Li**. Default loopback port: ephemeral (registered in
-`LICTOR_PORT` env var that `lictor claude ...` injects into the child).
+`LICTOR_PORT` env var that `lictor <provider> ...` injects into the child).
+
+## Providers
+
+| Provider              | Command               | Skill injection | Slash/keys/answer | Concordia |
+|----------------------|-----------------------|-----------------|--------------------|-----------|
+| Claude Code          | `lictor claude [args]`| ✅ (`--add-dir`) | ✅                  | ✅         |
+| OpenAI Codex CLI     | `lictor codex [args]` | ❌ (no SKILL.md disco) | ✅                  | ✅         |
+
+Both providers share the title/Concordia/session-meta/pty surface; only the
+skill-injection paths differ. Codex's own `--add-dir` widens the writable
+sandbox but doesn't trigger skill scanning, so `/v1/skill` returns 503 for
+Codex sessions.
 
 ## Why
 
@@ -224,8 +238,12 @@ reacting to Concordia state and relaying changes back automatically:
 
 ## Status
 
+- v0.7 — Provider abstraction; `lictor codex [args]` added (skill injection cleanly disabled for Codex pre-Agent-Skills; re-enabled in v0.5 cont. via `~/.agents/skills/`). Merged on top of v0.5+v0.6 main work (fs-rpc, permission-hook, transcript-tail).
+- v0.6 — Tool permission proxy: PreToolUse hook bridge writes a session-scoped `--settings` file so claude defers ASK decisions to Concordia's Web UI (PR-D).
+- v0.5 — `transcript-tail` relays Claude's session JSONL to Concordia (PR-C). `filesystem-rpc` adds cwd-confined read/list/grep (PR-E). `transcript-frame` ingest (PR-F).
+- v0.4.2 — `lictor_port` published into Concordia session metadata after sidecar bind (PR-B).
 - v0.4.1 — `session.inject` reactor handles remote instructions from Concordia (Web UI / other sessions / scripts → ptyWriter as user input).
-- v0.4 — Bidirectional Concordia loop (WS reactor + 60s poll for tasks/conflicts/branch + session-state skill + end report).
+- v0.4 — Bidirectional Concordia loop (WS reactor + 60s poll for tasks/conflicts/branch + session-state skill + end report) + generalized slash/keys/answer pty injection.
 - v0.3 — pty-wrapped claude (node-pty) + `/v1/rename` keystroke injection + `lictor cli rename`.
 - v0.2 — Skill injection (persona + repo-relevant memories) via `--add-dir`.
 - v0.1 — Concordia integration + auto title + stat cron + chat/event/conflicts proxies.
