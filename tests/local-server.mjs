@@ -37,6 +37,10 @@ const ctx = {
     ptyLog.push({ ts: new Date().toISOString(), bytes: data });
     process.stdout.write(`[ptyWriter] ${JSON.stringify(data)}\n`);
   },
+  notifyState: { mark: null, expiresAt: null },
+  conflictState: { count: 0, titleMark: null },
+  taskState: { branch: null, desc: null, updatedAt: null },
+  pendingPermissions: new Map(),
 };
 
 const sidecar = await startSidecar(ctx);
