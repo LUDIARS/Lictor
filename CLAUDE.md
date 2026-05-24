@@ -43,6 +43,19 @@ npx tsx tests/smoke-roundtrip.mjs         # registers a real Concordia session
 create + delete a real `lictor-smoke-<uuid>` session. It's a tracked file
 but not part of `npm test`.
 
+## Skill injection module (v0.2)
+
+- `src/skill-injector.ts` owns the per-session dir lifecycle. Always go
+  through `writeSkill` / `deleteSkill` — they enforce the name regex and
+  the 32 KiB body cap. Never `writeFileSync` directly into `skillsDir`.
+- `src/memory-loader.ts` is pure: given `(memoryDir, repoLeaf)` it
+  returns matched files with scores. If you change the scoring, update
+  `tests/memory-loader.test.ts` — the "scores by filename + body" case
+  pins the current behavior.
+- The `cwdToProjectKey` encoding mirrors how Claude Code names
+  `~/.claude/projects/<key>/`. If Anthropic ever changes that encoding,
+  patch only the one function.
+
 ## Cross-repo touchpoints
 
 - `LUDIARS/LUDIARS` (`PROJECT-CODES.md`) — Li registered (PR #21 merged).

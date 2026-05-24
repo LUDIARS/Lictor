@@ -17,6 +17,11 @@ Usage:
   lictor cli event <kind> [json]       Post a session event to Concordia.
   lictor cli conflicts [repo] [branch] Ask Concordia which other sessions are
                                        touching the same repo/branch.
+  lictor cli skill list                List currently-injected skill names.
+  lictor cli skill set <name> <file>   Write/overwrite a SKILL.md from a file.
+                                       Edits to existing skills hot-reload in
+                                       claude; brand-new names need a restart.
+  lictor cli skill delete <name>       Remove an injected skill.
 
   lictor --help                        Show this help.
 

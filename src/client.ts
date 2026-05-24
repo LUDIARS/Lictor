@@ -1,4 +1,5 @@
 import http from "node:http";
+import { readFileSync } from "node:fs";
 
 export async function runClient(args: string[]): Promise<void> {
   const [sub, ...rest] = args;
@@ -38,13 +39,56 @@ export async function runClient(args: string[]): Promise<void> {
     case "conflicts":
       await cmdConflicts(port, rest);
       return;
+    case "skill":
+      await cmdSkill(port, rest);
+      return;
     default:
       process.stderr.write(
         `lictor cli: unknown subcommand '${sub ?? "(none)"}'.\n` +
-          `Available: title, title-auto, meta, health, session, chat, event, conflicts.\n`,
+          `Available: title, title-auto, meta, health, session, chat, event, conflicts, skill.\n`,
       );
       process.exit(2);
   }
+}
+
+async function cmdSkill(port: string, rest: string[]): Promise<void> {
+  const [op, ...more] = rest;
+  if (!op || op === "list") {
+    process.stdout.write((await getText(port, "/v1/skill")) + "\n");
+    return;
+  }
+  if (op === "set") {
+    const name = more[0];
+    const file = more[1];
+    if (!name || !file) {
+      process.stderr.write("usage: lictor cli skill set <name> <markdown-file>\n");
+      process.exit(2);
+    }
+    let content: string;
+    try {
+      content = readFileSync(file, "utf8");
+    } catch (err) {
+      process.stderr.write(`lictor cli skill set: cannot read ${file}: ${(err as Error).message}\n`);
+      process.exit(2);
+    }
+    await postJson(port, "/v1/skill", { name, content });
+    return;
+  }
+  if (op === "delete" || op === "rm") {
+    const name = more[0];
+    if (!name) {
+      process.stderr.write("usage: lictor cli skill delete <name>\n");
+      process.exit(2);
+    }
+    const { status, body } = await request(port, "DELETE", `/v1/skill/${encodeURIComponent(name)}`);
+    process.stdout.write(body + "\n");
+    if (status !== 200) process.exit(1);
+    return;
+  }
+  process.stderr.write(
+    `lictor cli skill: unknown op '${op}'. Use list | set <name> <file> | delete <name>.\n`,
+  );
+  process.exit(2);
 }
 
 async function cmdTitle(port: string, rest: string[]): Promise<void> {

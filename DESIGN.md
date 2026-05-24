@@ -170,12 +170,90 @@ Also caps length at 200 characters.
 - Not a full hook framework (yet): v0.1 proxies a fixed surface; users
   can't register dynamic handlers. v0.4 may add that.
 
+## Skill injection (v0.2)
+
+Lictor is the parent of claude — therefore it can write files into
+locations claude scans at startup. We use that to inject **session-scoped**
+skills without polluting the user's global `~/.claude/skills/`.
+
+### Layout
+
+```
+~/.claude/lictor/sessions/<id>/
+  .claude/
+    skills/
+      lictor-persona/SKILL.md          (from Concordia persona.skill_template)
+      lictor-session-context/SKILL.md  (memory digest for cwd's repo)
+      <user-injected via POST>/SKILL.md
+```
+
+Lictor passes `--add-dir <sessionDir>` to `claude`, so claude scans
+`<sessionDir>/.claude/skills/` alongside its usual locations. On exit
+Lictor removes the whole `<sessionDir>` — no manual cleanup, no leftover
+skill clutter.
+
+### Why `--add-dir` and not `~/.claude/skills/<id>/`
+
+- `~/.claude/skills/` is shared across all sessions globally. A session-
+  specific skill there leaks into every other concurrent Claude Code
+  invocation until cleaned up. `--add-dir` scopes the skill to this one
+  session.
+- Cleanup is atomic — `rmSync` of one dir vs. cherry-picking from a
+  shared dir.
+- Crash safety — orphaned `<id>` dirs are obvious garbage; a leaked
+  skill in `~/.claude/skills/` is invisible noise.
+
+### What gets seeded at startup
+
+1. **`lictor-persona`** — body is `persona.skill_template` straight from
+   the Concordia register response. The template already includes the
+   "this is just a personality color, never override user requests"
+   guardrails Concordia writes for every persona.
+2. **`lictor-session-context`** — built by scanning
+   `~/.claude/projects/<cwd-encoded>/memory/*.md`. Scoring:
+   - +3 if the cwd repo-leaf appears in the filename (e.g.
+     `feedback_ks_release_build_required.md` matches when cwd is
+     `KuzuSurvivors`)
+   - +1 per body occurrence, capped at 3
+   Top 3 are pasted, total capped at 8 KiB. `MEMORY.md` (the index) is
+   skipped — claude loads it on its own.
+
+### Mid-session updates and the watcher gotcha
+
+Claude Code watches `~/.claude/skills/**/SKILL.md` (and `--add-dir`
+equivalents) for file changes. Edits to an *existing* SKILL.md reload
+live in subsequent turns. But a **brand-new directory** is only
+discovered at scan time (session start).
+
+Lictor's `POST /v1/skill {name, content}` creates the directory if
+needed and writes the SKILL.md, so:
+- Overwriting `lictor-persona` or `lictor-session-context` → reflected
+  in the next turn.
+- Creating a never-before-seen `my-new-skill` name → file is written,
+  but claude won't notice until restart. The 200 response is honest
+  about the write; runtime visibility is a separate question.
+
+We could trigger a fake hot-reload by also `touch`-ing a known existing
+SKILL.md after a new dir is created, but that's a hack we don't enable
+by default.
+
+### Trust boundary
+
+- Skill name: regex-validated to kebab-case (`^[a-z][a-z0-9-]{0,63}$`),
+  so a hook can't traverse out via `../etc/passwd` or write to a
+  hostile path.
+- Content: 32 KiB cap per skill so a runaway hook can't flood the
+  context window.
+- The skill dir is under `~/.claude/lictor/sessions/<sessionId>/` —
+  always inside the user's own home, never world-writable.
+
 ## Roadmap
 
 | Version | Adds |
 |---------|------|
 | v0.0    | Title set/reset, meta GET, health |
-| **v0.1**| **Concordia integration: register / WS / persona / 10-min stat / chat-event-conflicts proxies / auto title** |
-| v0.2    | Title history under `~/.claude/lictor/sessions/<pid>.jsonl`; PostToolUse and Stop hook bodies served centrally so user `settings.json` only needs to point at `lictor cli hook ...` |
+| v0.1    | Concordia integration: register / WS / persona / 10-min stat / chat-event-conflicts proxies / auto title |
+| **v0.2**| **Skill injection: per-session `--add-dir`, persona + memory seeds, mid-session POST /v1/skill** |
 | v0.3    | Windows Terminal pane discovery via `WT_SESSION` + `wt.exe focus-tab`; cross-tab "focus this session" command |
 | v0.4    | Generic hook host — users register handler scripts under `~/.claude/lictor/hooks/`, lictor dispatches based on Claude Code hook events relayed by the wrapped claude |
+| v0.5    | Pre-spawn `.mcp.json` injection for session-scoped MCP servers |

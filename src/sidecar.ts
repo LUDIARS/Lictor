@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { resetTitle, setTitle } from "./osc.js";
 import type { Meta } from "./meta.js";
 import type { ConcordiaClient } from "./concordia.js";
+import type { SkillInjector } from "./skill-injector.js";
 
 export interface TitleState {
   manualOverride: string | null;
@@ -14,6 +15,7 @@ export interface SidecarContext {
   concordia: ConcordiaClient | null;
   sessionId: string | null;
   roleLabel: string | null;
+  injector: SkillInjector | null;
 }
 
 export interface Sidecar {
@@ -152,6 +154,41 @@ async function handle(
       ts: typeof payload.ts === "number" ? payload.ts : undefined,
     });
     writeJson(res, 200, reply);
+    return;
+  }
+
+  if (method === "GET" && url === "/v1/skill") {
+    if (!ctx.injector) return writeJson(res, 503, { error: "skill injector not initialized" });
+    writeJson(res, 200, {
+      session_dir: ctx.injector.sessionDir,
+      skills_dir: ctx.injector.skillsDir,
+      skills: ctx.injector.list(),
+    });
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/skill") {
+    if (!ctx.injector) return writeJson(res, 503, { error: "skill injector not initialized" });
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { name?: unknown; content?: unknown };
+    if (typeof payload.name !== "string" || typeof payload.content !== "string") {
+      return writeJson(res, 400, { error: "name and content (string) required" });
+    }
+    try {
+      ctx.injector.writeSkill(payload.name, payload.content);
+      writeJson(res, 200, { ok: true });
+    } catch (err) {
+      writeJson(res, 400, { error: (err as Error).message });
+    }
+    return;
+  }
+
+  if (method === "DELETE" && url.startsWith("/v1/skill/")) {
+    if (!ctx.injector) return writeJson(res, 503, { error: "skill injector not initialized" });
+    const name = decodeURIComponent(url.slice("/v1/skill/".length));
+    const ok = ctx.injector.deleteSkill(name);
+    writeJson(res, ok ? 200 : 404, { ok });
     return;
   }
 

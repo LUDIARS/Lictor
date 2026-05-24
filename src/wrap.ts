@@ -6,6 +6,8 @@ import { resetTitle, setTitle } from "./osc.js";
 import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./concordia.js";
 import { gatherRepoStat } from "./stat.js";
 import { buildAutoTitle } from "./auto-title.js";
+import { renderSkillMd, SkillInjector } from "./skill-injector.js";
+import { findRepoMemories, memoryDirForCwd, renderMemoryDigest, repoLeafFromCwd } from "./memory-loader.js";
 
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 
@@ -24,12 +26,21 @@ export async function runWrapped(args: string[]): Promise<void> {
   }
 
   const titleState: TitleState = { manualOverride: null };
+
+  // Skill injection — pre-spawn writes go to <root>/.claude/skills/, and we
+  // pass <root> to claude via --add-dir so it's scanned at boot. Mid-session
+  // overwrites of existing SKILL.md files reload live via claude's watcher.
+  const sessionIdForSkills = concordia?.id ?? `lictor-${randomUUID()}`;
+  const injector = new SkillInjector(sessionIdForSkills);
+  seedSkills(injector, meta);
+
   const ctx: SidecarContext = {
     meta,
     titleState,
     concordia: concordia?.client ?? null,
     sessionId: concordia?.id ?? null,
     roleLabel: meta.role_label,
+    injector,
   };
 
   const sidecar = await startSidecar(ctx);
@@ -59,7 +70,9 @@ export async function runWrapped(args: string[]): Promise<void> {
   }
 
   const useShell = process.platform === "win32";
-  const child = spawn("claude", args, { stdio: "inherit", env, shell: useShell });
+  // Prepend --add-dir <sessionDir> so claude scans our injected skill dir.
+  const claudeArgs = ["--add-dir", injector.sessionDir, ...args];
+  const child = spawn("claude", claudeArgs, { stdio: "inherit", env, shell: useShell });
 
   let childExited = false;
   const cleanup = async () => {
@@ -67,6 +80,7 @@ export async function runWrapped(args: string[]): Promise<void> {
     concordia?.liveness.close();
     sidecar.close();
     resetTitle();
+    injector.cleanup();
     if (concordia) {
       try {
         await concordia.client.unregister(concordia.id);
@@ -158,6 +172,57 @@ export function applyAutoTitle(ctx: SidecarContext, stat: ReturnType<typeof gath
     cwd: ctx.meta.cwd,
   });
   if (title) setTitle(title);
+}
+
+/**
+ * Pre-spawn skill seeding. Writes:
+ *   - lictor-persona   : Concordia's persona.skill_template (if assigned)
+ *   - lictor-session-context : repo-relevant memories scraped from
+ *                              ~/.claude/projects/<cwd-key>/memory/
+ *
+ * Both are best-effort — failures log to stderr but don't block startup.
+ */
+function seedSkills(injector: SkillInjector, meta: Meta): void {
+  // Persona skill
+  const persona = meta.persona as Record<string, unknown> | null;
+  const skillTemplate = persona && typeof persona.skill_template === "string"
+    ? persona.skill_template
+    : null;
+  if (skillTemplate) {
+    const display = (persona?.display_name as string | undefined) ?? "";
+    const role = (persona?.name as string | undefined) ?? "persona";
+    const description = display
+      ? `Concordia-assigned persona for this session (${role} / ${display})`
+      : `Concordia-assigned persona for this session (${role})`;
+    try {
+      injector.writeSkill(
+        "lictor-persona",
+        renderSkillMd({ name: "lictor-persona", description, body: skillTemplate }),
+      );
+    } catch (err) {
+      process.stderr.write(`lictor: skill seed (persona) failed: ${(err as Error).message}\n`);
+    }
+  }
+
+  // Session-context skill from memories
+  try {
+    const memDir = memoryDirForCwd(meta.cwd);
+    const repoLeaf = repoLeafFromCwd(meta.cwd);
+    const matches = findRepoMemories(memDir, repoLeaf, 3);
+    if (matches.length > 0) {
+      const body = renderMemoryDigest(matches);
+      injector.writeSkill(
+        "lictor-session-context",
+        renderSkillMd({
+          name: "lictor-session-context",
+          description: `Repo-relevant memory matches for ${repoLeaf} (lictor-scoped, this session only)`,
+          body,
+        }),
+      );
+    }
+  } catch (err) {
+    process.stderr.write(`lictor: skill seed (memory) failed: ${(err as Error).message}\n`);
+  }
 }
 
 async function pushStat(ctx: SidecarContext): Promise<void> {

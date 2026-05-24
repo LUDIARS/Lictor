@@ -63,6 +63,9 @@ lictor cli conflicts                  # other sessions on the same repo
 | POST   | `/v1/chat`                 | `{channel, text, author_label?, scope?}` | Proxy to Concordia /v1/chat; auto-fills `author_label` |
 | POST   | `/v1/event`                | `{kind, payload?, ts?}`                | Proxy to Concordia /v1/sessions/:id/event |
 | GET    | `/v1/conflicts`            | `?repo=<path>&branch=<name>`           | Proxy to Concordia /v1/monitor/conflicts (excludes self) |
+| GET    | `/v1/skill`                | —                                      | List injected skill names + the dir claude scans |
+| POST   | `/v1/skill`                | `{name, content}`                      | Write/overwrite a SKILL.md (live-reloaded by claude) |
+| DELETE | `/v1/skill/<name>`         | —                                      | Remove an injected skill |
 
 All requests must originate from `127.0.0.1` / `::1`. The port is bound on
 `127.0.0.1:0` (ephemeral) and exported as `$LICTOR_PORT` to the wrapped
@@ -113,6 +116,41 @@ When `lictor claude ...` starts, it:
 If Concordia is unreachable at startup, Lictor logs a one-line warning and
 degrades to v0.0 behavior (title set/get/meta still work; chat/event/
 conflicts return 503).
+
+## Skill injection (v0.2)
+
+On startup Lictor creates a per-session directory
+`~/.claude/lictor/sessions/<id>/.claude/skills/`, seeds it with the skills
+listed below, and prepends `--add-dir <sessionDir>` to the spawned
+`claude` so the directory is scanned at boot.
+
+| Skill name                | Source                                                    |
+|--------------------------|-----------------------------------------------------------|
+| `lictor-persona`         | Concordia's `persona.skill_template` for the assigned role |
+| `lictor-session-context` | Top 3 memory files under `~/.claude/projects/<cwd>/memory/` whose filename or body mentions the cwd's repo leaf |
+
+On exit the whole session dir is removed — no clutter in `~/.claude/skills/`.
+
+### Mid-session updates
+
+`POST /v1/skill { name, content }` overwrites an existing SKILL.md, which
+claude's file watcher reloads live. Adding a **brand-new** skill name
+mid-session writes the file but claude needs a restart to discover it;
+the v0.2 docs note this. CLI shortcut:
+
+```sh
+lictor cli skill list
+lictor cli skill set my-skill ./my-skill.md
+lictor cli skill delete my-skill
+```
+
+### Constraints
+
+- Skill names: `^[a-z][a-z0-9-]{0,63}$` (kebab-case). Anything else 400s.
+- Per-skill body cap: 32 KiB. Skills are loaded into every claude turn,
+  so we don't let one balloon the context.
+- Memory digest: capped at 8 KiB total, top 3 files. Index `MEMORY.md` is
+  skipped (already loaded by claude on its own).
 
 ## Migration from raw Concordia hooks
 
