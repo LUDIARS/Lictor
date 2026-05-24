@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import * as pty from "node-pty";
 import { sanitizeKeySeq, startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
 import { gatherBaseMeta, type Meta } from "./meta.js";
@@ -360,8 +361,7 @@ function writePermissionHookSettings(sessionDir: string): string {
       ],
     },
   }, null, 2);
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  require("node:fs").writeFileSync(path, content, "utf8");
+  writeFileSync(path, content, "utf8");
   return path;
 }
 
