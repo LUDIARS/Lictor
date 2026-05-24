@@ -204,6 +204,11 @@ reacting to Concordia state and relaying changes back automatically:
 - **WS event reactor** — incoming WS broadcasts drive short-lived title
   marks (`[!]` for chat from another session) and force-refresh the
   title on `conflict_detected`.
+- **Remote inject** — Concordia `session.inject` events whose
+  `target_session_id` matches this session are sanitized
+  (`sanitizeKeySeq`) and written to the pty with a trailing `\r`, landing
+  in the wrapped claude as user-typed input. Three drivers share the
+  Concordia API: Web UI form, other Claude sessions, external scripts.
 - **60s poll loop** — when Concordia is reachable:
   - `lictor-pending-tasks` skill is rewritten from `/v1/sessions/<id>/pending-tasks`
   - `lictor-conflicts` skill + title `⚠N` prefix from `/v1/monitor/conflicts`
@@ -219,6 +224,7 @@ reacting to Concordia state and relaying changes back automatically:
 
 ## Status
 
+- v0.4.1 — `session.inject` reactor handles remote instructions from Concordia (Web UI / other sessions / scripts → ptyWriter as user input).
 - v0.4 — Bidirectional Concordia loop (WS reactor + 60s poll for tasks/conflicts/branch + session-state skill + end report).
 - v0.3 — pty-wrapped claude (node-pty) + `/v1/rename` keystroke injection + `lictor cli rename`.
 - v0.2 — Skill injection (persona + repo-relevant memories) via `--add-dir`.
