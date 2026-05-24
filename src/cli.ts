@@ -11,6 +11,9 @@ Usage:
   lictor codex [args...]               Wrap OpenAI Codex CLI. pty + title +
                                        Concordia (no skill injection — Codex
                                        lacks a SKILL.md discovery mechanism).
+  lictor gemini [args...]              Wrap Gemini CLI. pty + title + Concordia
+                                       (no skill injection — Gemini lacks a
+                                       SKILL.md discovery mechanism).
 
   lictor cli title <text>              Set the host terminal title (manual override).
   lictor cli title-auto                Drop the manual override; resume auto title.
