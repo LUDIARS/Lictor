@@ -1,6 +1,6 @@
 {
   "name": "@ludiars/lictor",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Per-session sidecar that wraps `claude` so hooks inside a Claude Code session can drive the host terminal (OSC title), inject keystrokes into the wrapped TUI (e.g. /rename), integrate with Concordia (session register / persona / chat / stat / conflicts / WS event reactor / pending-tasks / branch relay), and inject scoped skills (persona + repo-relevant memories + live session state) via --add-dir.",
   "type": "module",
   "bin": {
