@@ -17,6 +17,7 @@ import { refreshConflictState } from "./conflict-watcher.js";
 import { refreshPendingTasksSkill } from "./pending-tasks.js";
 import { newTaskState, relayTask, seedTaskProtocolSkill } from "./task-relay.js";
 import { writeSessionStateSkill } from "./session-state-skill.js";
+import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
 
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
@@ -166,6 +167,19 @@ export async function runWrapped(args: string[]): Promise<void> {
 
   ctx.ptyWriter = (data: string) => child.write(data);
 
+  // Transcript tail — start watching ~/.claude/projects/<cwdKey>/ for the
+  // new .jsonl claude will create, then relay each parsed line to
+  // Concordia as a transcript-frame. Best-effort; failures don't affect
+  // the wrapped session at all. Only meaningful when concordia is up.
+  let transcriptTail: TranscriptTailHandle | null = null;
+  if (concordia) {
+    transcriptTail = startTranscriptTail({
+      cwd: meta.cwd,
+      sessionId: concordia.id,
+      concordiaBaseUrl: `http://${process.env.CONCORDIA_HOST ?? "127.0.0.1"}:${process.env.CONCORDIA_PORT ?? "17330"}`,
+    });
+  }
+
   // pty → real terminal stdout.
   const onData = (data: string) => {
     try {
@@ -214,6 +228,7 @@ export async function runWrapped(args: string[]): Promise<void> {
   const cleanup = async () => {
     if (statTimer) clearInterval(statTimer);
     if (pollTimer) clearInterval(pollTimer);
+    transcriptTail?.stop();
     concordia?.liveness.close();
     sidecar.close();
     resetTitle();
