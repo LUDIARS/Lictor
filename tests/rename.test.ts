@@ -46,6 +46,10 @@ async function withSidecar<T>(
     roleLabel: null,
     injector,
     ptyWriter: null,
+    notifyState: { mark: null, expiresAt: null },
+    conflictState: { count: 0, titleMark: null },
+    taskState: { branch: null, desc: null, updatedAt: null },
+    pendingPermissions: new Map(),
     ...ctxOverrides,
   };
   const sidecar = await startSidecar(ctx);

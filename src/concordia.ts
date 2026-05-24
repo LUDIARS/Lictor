@@ -90,6 +90,24 @@ export class ConcordiaClient {
     );
   }
 
+  /**
+   * Notify Concordia that a PreToolUse hook is blocked waiting for a
+   * decision. Concordia broadcasts a session-targeted
+   * `session.permission_request` event so the Web UI modal shows up.
+   * Response arrives separately via `/v1/internal/permission-response`
+   * (proxied from Concordia's `/v1/sessions/:id/permission-response`).
+   */
+  async permissionRequest(
+    id: string,
+    payload: { request_id: string; tool_name: string; tool_input: unknown },
+  ): Promise<unknown> {
+    return this.fetchJson(
+      "POST",
+      `/v1/sessions/${encodeURIComponent(id)}/permission-request`,
+      payload,
+    );
+  }
+
   async conflicts(opts: {
     repo: string;
     branch?: string;
