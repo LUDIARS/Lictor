@@ -42,11 +42,14 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // Skill injection — pre-spawn writes go to <root>/.claude/skills/, and we
   // pass <root> to claude via --add-dir so it's scanned at boot. Mid-session
   // overwrites of existing SKILL.md files reload live via claude's watcher.
-  // Skill injection is only meaningful when the provider actually scans
-  // injected SKILL.md files. For Codex (no equivalent), we skip the injector
-  // entirely so the sidecar's /v1/skill endpoints return 503 cleanly.
-  const sessionIdForSkills = concordia?.id ?? `lictor-${randomUUID()}`;
-  const injector = provider.supportsSkills ? new SkillInjector(sessionIdForSkills) : null;
+  // Skill injection: layout/scope depends on provider.skillStrategy.
+  //   - claude-add-dir: session-scoped dir, passed via --add-dir
+  //   - codex-user-agents: ~/.agents/skills/lictor-<sessionId>-<name>/, no spawn arg
+  //   - none: no injector
+  const sessionIdForSkills = (concordia?.id ?? `lictor-${randomUUID()}`).replace(/[^a-zA-Z0-9-]/g, "-");
+  const injector = provider.supportsSkills
+    ? new SkillInjector(sessionIdForSkills, provider.skillStrategy)
+    : null;
   if (injector) {
     seedSkills(injector, meta);
     seedTaskProtocolSkill(injector);
@@ -128,11 +131,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     if (meta.role_label) env.LICTOR_ROLE_LABEL = meta.role_label;
   }
 
-  // Prepend the provider's skill-dir flag so claude scans our injected skill
-  // dir. Codex (skillDirFlag=null) gets the args verbatim.
+  // Spawn-arg injection only applies for the claude-add-dir strategy.
+  // Codex auto-walks ~/.agents/skills/ so no flag is needed.
   const providerArgs =
-    provider.skillDirFlag && injector
-      ? [provider.skillDirFlag, injector.sessionDir, ...args]
+    provider.skillStrategy === "claude-add-dir" && injector
+      ? ["--add-dir", injector.sessionDir, ...args]
       : [...args];
 
   // node-pty on Windows uses CreateProcessW which does not auto-resolve .cmd

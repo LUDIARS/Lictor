@@ -8,22 +8,39 @@
  * downgrades to a no-op rather than breaking.
  */
 
+/**
+ * How lictor delivers SKILL.md files to the wrapped CLI.
+ *
+ *  - `claude-add-dir`: write to `<sessionDir>/.claude/skills/<name>/SKILL.md`
+ *    and pass `--add-dir <sessionDir>` to claude so it picks them up at scan.
+ *    Session-scoped; cleanup removes the whole sessionDir.
+ *
+ *  - `codex-user-agents`: write to `~/.agents/skills/lictor-<sessionId>-<name>/SKILL.md`.
+ *    Codex walks `$HOME/.agents/skills/` at startup (user scope) and
+ *    hot-reloads SKILL.md edits, so no spawn arg is needed. The
+ *    `lictor-<sessionId>-` prefix namespaces our writes so they can't
+ *    collide with the user's own skills, and cleanup deletes them by
+ *    prefix on session exit.
+ *
+ *  - `none`: provider has no SKILL.md discovery mechanism. seedSkills /
+ *    /v1/skill endpoints become no-ops.
+ */
+export type SkillStrategy = "claude-add-dir" | "codex-user-agents" | "none";
+
 export interface ProviderConfig {
   /** Identifier used in CLI: `lictor <name> [args...]`. */
   name: string;
   /** Binary to spawn. Resolved via PATH (with shell:true on Windows for .cmd). */
   binary: string;
   /**
-   * If non-null, lictor will pass `<flag> <sessionSkillDir>` to the spawn args
-   * so the CLI auto-loads skills from that dir. Only Claude Code supports this
-   * for skill discovery (Codex's `--add-dir` exists but only widens the
-   * writable sandbox — it does NOT trigger skill scanning).
+   * Strategy for delivering SKILL.md files to the wrapped CLI. See
+   * {@link SkillStrategy} for layout details. `none` disables skill
+   * injection entirely for the provider.
    */
-  skillDirFlag: string | null;
+  skillStrategy: SkillStrategy;
   /**
-   * True only when `skillDirFlag` actually causes the CLI to load SKILL.md
-   * files. Drives both the `seedSkills` call AND the sidecar's behavior
-   * for /v1/skill (writes are no-ops when this is false).
+   * Derived convenience: true iff `skillStrategy !== "none"`. Drives both
+   * `seedSkills` invocation AND the sidecar `/v1/skill` behavior.
    */
   supportsSkills: boolean;
   /**
@@ -39,7 +56,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
   claude: {
     name: "claude",
     binary: "claude",
-    skillDirFlag: "--add-dir",
+    skillStrategy: "claude-add-dir",
     supportsSkills: true,
     concordiaProvider: "claude-code",
     displayName: "Claude Code",
@@ -47,11 +64,12 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
   codex: {
     name: "codex",
     binary: "codex",
-    // Codex CLI has `--add-dir` but it widens the writable sandbox; it does
-    // NOT trigger skill-style discovery. Leave null until/unless Codex grows
-    // a real equivalent.
-    skillDirFlag: null,
-    supportsSkills: false,
+    // Codex Agent Skills (documented at developers.openai.com/codex/skills):
+    // `.agents/skills/<name>/SKILL.md`. Repo / user / admin / system scopes.
+    // We use the user scope (~/.agents/skills/) with a per-session prefix
+    // so writes are auto-discovered without polluting the user's repo.
+    skillStrategy: "codex-user-agents",
+    supportsSkills: true,
     concordiaProvider: "codex-cli",
     displayName: "OpenAI Codex",
   },

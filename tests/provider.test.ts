@@ -2,21 +2,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { getProvider, PROVIDERS } from "../src/provider.js";
 
-test("PROVIDERS registers claude with skill support", () => {
+test("PROVIDERS registers claude with claude-add-dir skill strategy", () => {
   const p = PROVIDERS.claude;
   assert.equal(p.name, "claude");
   assert.equal(p.binary, "claude");
-  assert.equal(p.skillDirFlag, "--add-dir");
+  assert.equal(p.skillStrategy, "claude-add-dir");
   assert.equal(p.supportsSkills, true);
   assert.equal(p.concordiaProvider, "claude-code");
 });
 
-test("PROVIDERS registers codex without skill support", () => {
+test("PROVIDERS registers codex with codex-user-agents skill strategy", () => {
   const p = PROVIDERS.codex;
   assert.equal(p.name, "codex");
   assert.equal(p.binary, "codex");
-  assert.equal(p.skillDirFlag, null);
-  assert.equal(p.supportsSkills, false);
+  assert.equal(p.skillStrategy, "codex-user-agents");
+  assert.equal(p.supportsSkills, true);
   assert.equal(p.concordiaProvider, "codex-cli");
 });
 

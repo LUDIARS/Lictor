@@ -10,7 +10,7 @@ import { join } from "node:path";
 const meta = gatherBaseMeta();
 meta.provider = "claude";
 const tmpRoot = mkdtempSync(join(tmpdir(), "lictor-smoke-"));
-const injector = new SkillInjector("session-smoke", tmpRoot);
+const injector = new SkillInjector("session-smoke", "claude-add-dir", { homeRoot: tmpRoot });
 const ptyLog = [];
 const ctx = {
   meta,
