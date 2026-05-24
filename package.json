@@ -1,7 +1,7 @@
 {
   "name": "@ludiars/lictor",
-  "version": "0.2.0",
-  "description": "Per-session sidecar that wraps `claude` so hooks inside a Claude Code session can drive the host terminal (OSC title), integrate with Concordia (session register / persona / chat / stat / conflicts), and inject scoped skills (persona + repo-relevant memories) via --add-dir.",
+  "version": "0.3.0",
+  "description": "Per-session sidecar that wraps `claude` so hooks inside a Claude Code session can drive the host terminal (OSC title), inject keystrokes into the wrapped TUI (e.g. /rename), integrate with Concordia (session register / persona / chat / stat / conflicts), and inject scoped skills (persona + repo-relevant memories) via --add-dir.",
   "type": "module",
   "bin": {
     "lictor": "./bin/lictor.mjs"
@@ -25,5 +25,8 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/LUDIARS/Lictor.git"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
   }
 }

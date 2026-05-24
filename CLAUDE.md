@@ -6,15 +6,21 @@ architecture.
 ## When working on this repo
 
 - Stack: Node ≥ 22 (we use the global `WebSocket`), TypeScript (strict),
-  no native deps. Keep it that way — the value proposition is "drop-in
-  wrapper for `claude`", so a `node-pty` or `ws` native build break would
-  kill adoption.
+  prebuilt-only native deps. `node-pty@^1.1` is the one current native
+  dep — it ships ConPTY/macOS/Linux prebuilds in the tarball so `npm
+  install` works without a compiler. If you add another native dep, it
+  must ship prebuilds (gyp-from-source is banned — that's the original
+  "drop-in wrapper" invariant).
 - Test runner: built-in `node:test` via `tsx`. No vitest / jest.
 - All HTTP endpoints must keep the `127.0.0.1` guard. This is a security
   invariant, not a code style preference.
 - Title sanitization (`src/osc.ts`) is the trust boundary. New writers
   must funnel through `setTitle` / `writeOsc`, never `process.stdout.write`
   directly with raw payloads.
+- Keystroke injection (`ctx.ptyWriter`) is the OTHER trust boundary. Any
+  endpoint that writes to the pty MUST sanitize first (`sanitizeRenameArg`
+  is the pattern: strip C0/DEL, strip leading `/` to prevent slash-command
+  chaining, cap length, trim). Never call `ctx.ptyWriter(rawUserInput)`.
 - Concordia integration is best-effort. Anything that calls Concordia
   must catch and degrade — Lictor users should never see a stack trace
   from a coordinator outage.
@@ -34,14 +40,19 @@ architecture.
 ## Running smoke / round-trip checks
 
 ```sh
-npm test                                  # unit tests (15 cases, no network)
+npm test                                  # unit tests (sanitizer + rename + auto-title + ...), no network
 npx tsx tests/smoke-sidecar.mjs           # in-process sidecar, no Concordia
 npx tsx tests/smoke-roundtrip.mjs         # registers a real Concordia session
+npx tsx tests/local-server.mjs            # long-running sidecar w/ ptyWriter→stdout logger
 ```
 
 `smoke-roundtrip.mjs` requires Concordia on `127.0.0.1:17330` and will
 create + delete a real `lictor-smoke-<uuid>` session. It's a tracked file
 but not part of `npm test`.
+
+`local-server.mjs` stays running so you can curl the sidecar from another
+terminal — useful for HTTP-layer iteration on `/v1/rename` without
+spawning a real claude.
 
 ## Skill injection module (v0.2)
 
@@ -65,3 +76,5 @@ but not part of `npm test`.
   surface.
 - Skill `window-title-ja` — should be updated to call `lictor cli title`
   when `$LICTOR_PORT` is set, falling back to "manual rename" when not.
+  v0.3 onward, the skill should also call `lictor cli rename "<text>"`
+  to keep the claude.ai/code session name in sync with the OSC title.

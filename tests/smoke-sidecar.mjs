@@ -10,6 +10,7 @@ import { join } from "node:path";
 const meta = gatherBaseMeta();
 const tmpRoot = mkdtempSync(join(tmpdir(), "lictor-smoke-"));
 const injector = new SkillInjector("session-smoke", tmpRoot);
+const ptyLog = [];
 const ctx = {
   meta,
   titleState: { manualOverride: null },
@@ -17,6 +18,7 @@ const ctx = {
   sessionId: null,
   roleLabel: null,
   injector,
+  ptyWriter: (data) => ptyLog.push(data),
 };
 const sidecar = await startSidecar(ctx);
 const base = `http://127.0.0.1:${sidecar.port}`;
@@ -46,6 +48,9 @@ const out = {
   sessionInfo: await get("/v1/concordia/session"),
   titleOk: await post("/v1/title", { text: "[Li] smoke v0.2" }),
   titleAuto: await post("/v1/title/auto"),
+  rename: await post("/v1/rename", { text: "[Li] smoke rename" }),
+  renameSanitized: await post("/v1/rename", { text: "/clear" }),
+  renameEmpty: await post("/v1/rename", { text: "\x00\x07" }),
   chatNoConcordia: await post("/v1/chat", { channel: "team", text: "hi" }),
   eventNoConcordia: await post("/v1/event", { kind: "test" }),
   conflictsNoConcordia: await get("/v1/conflicts?repo=E:/x"),
@@ -60,5 +65,6 @@ const out = {
   notFound: await get("/v1/nope"),
 };
 console.log(JSON.stringify(out, null, 2));
+console.log("ptyWriter received:", ptyLog);
 sidecar.close();
 rmSync(tmpRoot, { recursive: true, force: true });

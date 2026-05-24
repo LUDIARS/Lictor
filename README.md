@@ -2,7 +2,8 @@
 
 Per-session sidecar that wraps `claude` so hooks running inside a Claude Code
 session can drive the host terminal — primarily the **window/tab title** —
-query session meta, and talk to [Concordia](https://github.com/LUDIARS/Concordia)
+inject keystrokes into the wrapped TUI (`/rename` to set the session name
+visible on claude.ai/code), query session meta, and talk to [Concordia](https://github.com/LUDIARS/Concordia)
 (the LUDIARS multi-agent session coordinator).
 
 LUDIARS short code: **Li**. Default loopback port: ephemeral (registered in
@@ -30,6 +31,12 @@ repo + branch + dirty/unpushed marks, runs the 10-minute /stat polling
 that used to live in per-session hooks, and proxies chat/event/conflicts
 calls so hooks don't have to know the Concordia URL.
 
+Since v0.3 lictor spawns claude inside a pty it controls (via `node-pty`),
+which lets the sidecar inject keystrokes into claude's TUI input — used
+today by `POST /v1/rename` to type `/rename <text>\r` on the user's behalf
+so the session name visible on claude.ai/code can be set from a hook or CLI
+without the user touching the keyboard.
+
 ## Quick start
 
 ```sh
@@ -44,6 +51,7 @@ curl -s -X POST -H 'content-type: application/json' \
 # Or via the bundled CLI shortcut (also reads LICTOR_PORT):
 lictor cli title "[Cr] 認証 502 デバッグ"
 lictor cli title-auto                 # drop manual override, resume auto title
+lictor cli rename "[Cr] 認証 502 デバッグ"  # types /rename ... into claude
 lictor cli meta                       # PID / cwd / WT_SESSION / persona
 lictor cli session                    # Concordia session id + persona JSON
 lictor cli chat team "デプロイ前確認" # author_label auto-filled from persona
@@ -60,6 +68,7 @@ lictor cli conflicts                  # other sessions on the same repo
 | GET    | `/v1/concordia/session`    | —                                      | `{session_id, persona, role_label, concordia_enabled}` |
 | POST   | `/v1/title`                | `{"text":"<title>"}`                   | Emit OSC 0 + set manual override |
 | POST   | `/v1/title/auto`           | —                                      | Drop manual override + reset title (auto resumes next stat cycle) |
+| POST   | `/v1/rename`               | `{"text":"<title>"}`                   | Inject `/rename <text>\r` into claude's TUI stdin (503 if not wrapping a real session) |
 | POST   | `/v1/chat`                 | `{channel, text, author_label?, scope?}` | Proxy to Concordia /v1/chat; auto-fills `author_label` |
 | POST   | `/v1/event`                | `{kind, payload?, ts?}`                | Proxy to Concordia /v1/sessions/:id/event |
 | GET    | `/v1/conflicts`            | `?repo=<path>&branch=<name>`           | Proxy to Concordia /v1/monitor/conflicts (excludes self) |
@@ -169,8 +178,22 @@ the old hooks remain the only path. We recommend switching launchers (shell
 alias, Windows Terminal profile command) to `lictor claude` and removing the
 old hook entries after one stable week.
 
+## Local test server
+
+For tweaking endpoints without spinning up a real Claude Code session:
+
+```sh
+npx tsx tests/local-server.mjs
+```
+
+Brings up the sidecar with `ptyWriter` replaced by a stdout logger, so
+`POST /v1/rename` prints what bytes _would have_ hit claude's TUI. Useful
+for HTTP-layer iteration and curl-driven smoke checks.
+
 ## Status
 
+- v0.3 — pty-wrapped claude (node-pty) + `/v1/rename` keystroke injection + `lictor cli rename`.
+- v0.2 — Skill injection (persona + repo-relevant memories) via `--add-dir`.
 - v0.1 — Concordia integration + auto title + stat cron + chat/event/conflicts proxies.
 - v0.0 — title set/reset, meta GET, health.
 

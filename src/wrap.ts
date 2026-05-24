@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import * as pty from "node-pty";
 import { startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
 import { gatherBaseMeta, type Meta } from "./meta.js";
 import { resetTitle, setTitle } from "./osc.js";
@@ -34,6 +34,9 @@ export async function runWrapped(args: string[]): Promise<void> {
   const injector = new SkillInjector(sessionIdForSkills);
   seedSkills(injector, meta);
 
+  // ptyWriter is wired into ctx so sidecar endpoints (e.g. /v1/rename) can
+  // inject keystrokes into claude's TUI input stream. Assigned after the pty
+  // is spawned below.
   const ctx: SidecarContext = {
     meta,
     titleState,
@@ -41,6 +44,7 @@ export async function runWrapped(args: string[]): Promise<void> {
     sessionId: concordia?.id ?? null,
     roleLabel: meta.role_label,
     injector,
+    ptyWriter: null,
   };
 
   const sidecar = await startSidecar(ctx);
@@ -69,10 +73,72 @@ export async function runWrapped(args: string[]): Promise<void> {
     if (meta.role_label) env.LICTOR_ROLE_LABEL = meta.role_label;
   }
 
-  const useShell = process.platform === "win32";
   // Prepend --add-dir <sessionDir> so claude scans our injected skill dir.
   const claudeArgs = ["--add-dir", injector.sessionDir, ...args];
-  const child = spawn("claude", claudeArgs, { stdio: "inherit", env, shell: useShell });
+
+  // node-pty on Windows uses CreateProcessW which does not auto-resolve .cmd
+  // extensions. `claude` ships as `claude.cmd` in npm global bin, so wrap via
+  // cmd.exe; on POSIX, spawn claude directly.
+  const isWindows = process.platform === "win32";
+  const ptyFile = isWindows ? process.env.ComSpec ?? "cmd.exe" : "claude";
+  const ptyArgs = isWindows ? ["/d", "/s", "/c", "claude", ...claudeArgs] : claudeArgs;
+
+  const { cols, rows } = currentSize();
+  const child = pty.spawn(ptyFile, ptyArgs, {
+    name: process.env.TERM ?? "xterm-256color",
+    cols,
+    rows,
+    cwd: process.cwd(),
+    env: env as { [key: string]: string },
+    // useConpty is on by default on Windows 10 1809+; node-pty falls back to
+    // winpty otherwise. We do not override.
+  });
+
+  ctx.ptyWriter = (data: string) => child.write(data);
+
+  // pty → real terminal stdout.
+  const onData = (data: string) => {
+    try {
+      process.stdout.write(data);
+    } catch {
+      // stdout may be torn down during shutdown; ignore.
+    }
+  };
+  child.onData(onData);
+
+  // real terminal stdin → pty. In raw mode the kernel delivers Ctrl-C as a
+  // byte (0x03) which we forward verbatim — the pty's line discipline (or
+  // claude's own TUI) interprets it. We do NOT install a SIGINT handler in
+  // raw mode because the kernel won't generate one.
+  const stdin = process.stdin;
+  const stdinWasRaw = stdin.isTTY ? stdin.isRaw : false;
+  if (stdin.isTTY) {
+    try {
+      stdin.setRawMode(true);
+    } catch {
+      // some shells (e.g. piped stdin) don't support raw mode; ignore.
+    }
+  }
+  const onStdin = (chunk: Buffer) => {
+    try {
+      child.write(chunk.toString("utf8"));
+    } catch {
+      // child may have exited; ignore.
+    }
+  };
+  stdin.on("data", onStdin);
+  stdin.resume();
+
+  // Forward terminal resize events to the pty so claude's TUI relayouts.
+  const onResize = () => {
+    const { cols: c, rows: r } = currentSize();
+    try {
+      child.resize(c, r);
+    } catch {
+      // pty may have exited; ignore.
+    }
+  };
+  process.stdout.on("resize", onResize);
 
   let childExited = false;
   const cleanup = async () => {
@@ -81,6 +147,16 @@ export async function runWrapped(args: string[]): Promise<void> {
     sidecar.close();
     resetTitle();
     injector.cleanup();
+    stdin.off("data", onStdin);
+    process.stdout.off("resize", onResize);
+    if (stdin.isTTY) {
+      try {
+        stdin.setRawMode(stdinWasRaw);
+      } catch {
+        // ignore
+      }
+    }
+    stdin.pause();
     if (concordia) {
       try {
         await concordia.client.unregister(concordia.id);
@@ -90,29 +166,55 @@ export async function runWrapped(args: string[]): Promise<void> {
     }
   };
 
-  child.on("exit", (code, signal) => {
+  child.onExit(({ exitCode, signal }) => {
     childExited = true;
     void cleanup().finally(() => {
-      if (signal) {
-        process.kill(process.pid, signal);
+      if (signal && process.platform !== "win32") {
+        // POSIX: re-raise so wait status mirrors the child's.
+        process.kill(process.pid, signalNumberToName(signal));
         return;
       }
-      process.exit(code ?? 0);
+      process.exit(exitCode ?? 0);
     });
   });
 
-  child.on("error", (err) => {
-    process.stderr.write(`lictor: failed to spawn claude: ${err.message}\n`);
-    void cleanup().finally(() => process.exit(127));
-  });
-
+  // OS-level signals to lictor itself (e.g. external kill). Forward to pty,
+  // then let onExit drive cleanup.
   const forward = (sig: NodeJS.Signals) => () => {
-    if (!childExited) child.kill(sig);
+    if (childExited) return;
+    try {
+      child.kill(sig);
+    } catch {
+      // node-pty on Windows ignores signal name; falls back to terminate.
+    }
   };
   process.on("SIGINT", forward("SIGINT"));
   process.on("SIGTERM", forward("SIGTERM"));
   if (process.platform !== "win32") {
     process.on("SIGHUP", forward("SIGHUP"));
+  }
+}
+
+function currentSize(): { cols: number; rows: number } {
+  const cols = process.stdout.columns ?? 80;
+  const rows = process.stdout.rows ?? 24;
+  return { cols, rows };
+}
+
+function signalNumberToName(signal: number): NodeJS.Signals {
+  // node-pty reports signal as a number on POSIX. Map the common ones; fall
+  // back to SIGTERM which is universally accepted by process.kill.
+  switch (signal) {
+    case 1:
+      return "SIGHUP";
+    case 2:
+      return "SIGINT";
+    case 9:
+      return "SIGKILL";
+    case 15:
+      return "SIGTERM";
+    default:
+      return "SIGTERM";
   }
 }
 

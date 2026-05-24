@@ -23,7 +23,7 @@ PostToolUse / Stop hooks is fragile — the registration races the Bash
 tool's first command, and the polling is just a glorified setInterval the
 hook can't actually run between Claude turns.
 
-## Architecture (v0.1)
+## Architecture (v0.3)
 
 ```
 ┌────────────────────┐
@@ -35,13 +35,15 @@ hook can't actually run between Claude turns.
 ┌──────────────────────────────────────────────────────────┐
 │  lictor wrapper (Node 22+, this repo)                    │
 │  ├─ process.stdout → the real pty                        │
-│  ├─ child = spawn('claude', { inherit })                 │
+│  ├─ child = pty.spawn('claude', { node-pty })            │
+│  ├─ stdin (raw) → pty.write   /   pty.onData → stdout    │
+│  ├─ ctx.ptyWriter → /v1/rename keystroke injection       │
 │  ├─ HTTP sidecar on 127.0.0.1:<ephemeral>                │
 │  ├─ Concordia session registered + WS liveness           │
 │  ├─ 10-min stat cron → POST /v1/stat/<id>                │
 │  └─ auto-title cycle (persona + repo + branch + marks)   │
 └──────────┬───────────────────────────────────────────────┘
-           │ stdio: inherit + env injection                          ┌──────────────────────────────────┐
+           │ node-pty ConPTY/forkpty + env injection                 ┌──────────────────────────────────┐
            ▼                                                          │ Concordia (127.0.0.1:17330)      │
 ┌─────────────────────────────────────────┐                          │ ┌──────────────────────────────┐ │
 │  claude (Claude Code TUI)               │                          │ │ /v1/sessions  (register)     │ │
@@ -88,16 +90,39 @@ Loopback hardening: per-handler check rejects any request whose
 `remoteAddress` isn't `127.0.0.1` / `::1` / `::ffff:127.0.0.1`. Belt-and-
 braces alongside the explicit `listen(0, '127.0.0.1', ...)` bind.
 
-## Why stdio: inherit (not node-pty)
+## Why pty.spawn (revised in v0.3)
 
-`stdio: 'inherit'` makes claude's stdin/stdout/stderr the same file
-descriptors as lictor's, which are the same as Windows Terminal's pty. No
-native dependency on `node-pty`, no ConPTY juggling, no buffering layer.
+v0.0–v0.2 used `child_process.spawn('claude', { stdio: 'inherit' })` and
+explicitly avoided `node-pty`: claude's stdin/stdout were the real terminal
+pty fds, lictor's job was just emitting OSC sequences alongside, and a
+native dep would have hurt the "drop-in wrapper" property.
 
-The cost: lictor cannot intercept or transform claude's output stream. We
-don't need to — we only need to inject our own OSC writes alongside, and
-OSC sequences are out-of-band as far as the terminal renderer is concerned
-(they don't display as visible text and don't disrupt cursor position).
+v0.3 changes the trade. The sidecar now needs to inject keystrokes into
+claude's TUI input — `/v1/rename` types `/rename <text>\r` on the user's
+behalf so the session name on claude.ai/code can be set without the user
+touching the keyboard. With `stdio: 'inherit'`, lictor has no handle to
+write to claude's stdin (the fd is owned by the kernel/terminal). The
+only way to push bytes in is to be the pty master.
+
+So v0.3:
+- `pty.spawn('claude', ...)` via `node-pty@^1.1` (prebuilds for
+  Win/macOS/Linux ship in the npm tarball — no `node-gyp` build step).
+- `pty.onData(data => process.stdout.write(data))` — claude output to real
+  terminal.
+- `process.stdin` set to raw mode, `data` events forwarded to `pty.write`.
+  In raw mode the kernel does not synthesize SIGINT from Ctrl-C; the byte
+  is forwarded verbatim and claude's TUI (or its inner line discipline)
+  interprets it.
+- `process.stdout.on('resize')` → `pty.resize(cols, rows)` so the TUI
+  relayouts when the terminal is resized.
+- On Windows, the executable is `cmd.exe /d /s /c claude ...` because
+  ConPTY's CreateProcessW doesn't auto-resolve `.cmd` extensions and
+  `claude` ships as `claude.cmd` in npm global bin.
+
+The cost we accepted: one prebuilt native dep (`node-pty`), a small chance
+of ConPTY edge cases on older Windows, and slightly more complex shutdown
+(restoring stdin raw-mode in cleanup). The benefit: any sidecar endpoint
+can now drive claude's TUI as if the user typed it.
 
 ## Concordia integration details
 
@@ -154,14 +179,23 @@ reasons.
 
 ## Trust boundary
 
-`sanitizeTitle` (src/osc.ts) is the **only** function that hands user-
-supplied text to `process.stdout.write`. It strips all C0 controls
-(`\x00-\x1f`) and DEL (`\x7f`) so a malformed payload can't:
+There are two functions that hand user-supplied text to the host terminal
+/ wrapped TUI; both must sanitize first.
+
+`sanitizeTitle` (src/osc.ts) gates `process.stdout.write` for OSC payloads.
+It strips all C0 controls (`\x00-\x1f`) and DEL (`\x7f`) so a malformed
+payload can't:
 - terminate the OSC string early and inject a new escape,
 - send a different OSC,
 - inject a BEL outside the sequence.
 
 Also caps length at 200 characters.
+
+`sanitizeRenameArg` (src/sidecar.ts) gates `ctx.ptyWriter` for `/v1/rename`.
+It strips C0/DEL (same reasons — could inject other key events), strips a
+leading `/` (prevents the caller from sneaking another slash command in
+front), trims whitespace, and caps at 200 chars. New endpoints that write
+to the pty must use the same pattern; never call `ctx.ptyWriter(rawInput)`.
 
 ## Non-goals
 
@@ -253,7 +287,8 @@ by default.
 |---------|------|
 | v0.0    | Title set/reset, meta GET, health |
 | v0.1    | Concordia integration: register / WS / persona / 10-min stat / chat-event-conflicts proxies / auto title |
-| **v0.2**| **Skill injection: per-session `--add-dir`, persona + memory seeds, mid-session POST /v1/skill** |
-| v0.3    | Windows Terminal pane discovery via `WT_SESSION` + `wt.exe focus-tab`; cross-tab "focus this session" command |
-| v0.4    | Generic hook host — users register handler scripts under `~/.claude/lictor/hooks/`, lictor dispatches based on Claude Code hook events relayed by the wrapped claude |
-| v0.5    | Pre-spawn `.mcp.json` injection for session-scoped MCP servers |
+| v0.2    | Skill injection: per-session `--add-dir`, persona + memory seeds, mid-session POST /v1/skill |
+| **v0.3**| **pty wrapper (node-pty) + `/v1/rename` keystroke injection + `lictor cli rename` + `tests/local-server.mjs` dev harness** |
+| v0.4    | Windows Terminal pane discovery via `WT_SESSION` + `wt.exe focus-tab`; cross-tab "focus this session" command |
+| v0.5    | Generic hook host — users register handler scripts under `~/.claude/lictor/hooks/`, lictor dispatches based on Claude Code hook events relayed by the wrapped claude |
+| v0.6    | Pre-spawn `.mcp.json` injection for session-scoped MCP servers |

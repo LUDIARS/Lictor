@@ -9,6 +9,9 @@ Usage:
 
   lictor cli title <text>              Set the host terminal title (manual override).
   lictor cli title-auto                Drop the manual override; resume auto title.
+  lictor cli rename <text>             Inject \`/rename <text>\` into claude's TUI
+                                       — updates the session name visible on
+                                       claude.ai/code and the TUI prompt.
   lictor cli meta                      Print this session's meta as JSON.
   lictor cli health                    Ping the sidecar.
   lictor cli session                   Print Concordia session id / persona.
