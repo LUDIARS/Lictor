@@ -60,6 +60,7 @@ export async function runWrapped(args: string[]): Promise<void> {
     notifyState: newNotifyState(),
     conflictState: { count: 0, titleMark: null },
     taskState: newTaskState(),
+    pendingPermissions: new Map(),
   };
 
   const sidecar = await startSidecar(ctx);
@@ -144,8 +145,24 @@ export async function runWrapped(args: string[]): Promise<void> {
     if (meta.role_label) env.LICTOR_ROLE_LABEL = meta.role_label;
   }
 
+  // Write a per-session settings.json that wires PreToolUse to our
+  // permission-hook bridge. Only do this when Concordia is up — without it
+  // the hook would always fall through, so there's no point asking claude
+  // to call it. Failure to write the file is non-fatal (we just skip the
+  // --settings flag).
+  let extraSettingsPath: string | null = null;
+  if (concordia) {
+    try {
+      extraSettingsPath = writePermissionHookSettings(injector.sessionDir);
+    } catch (err) {
+      process.stderr.write(`lictor: permission-hook settings write failed: ${(err as Error).message}\n`);
+    }
+  }
+
   // Prepend --add-dir <sessionDir> so claude scans our injected skill dir.
+  // Append --settings <path> when we wrote a hook-config file.
   const claudeArgs = ["--add-dir", injector.sessionDir, ...args];
+  if (extraSettingsPath) claudeArgs.push("--settings", extraSettingsPath);
 
   // node-pty on Windows uses CreateProcessW which does not auto-resolve .cmd
   // extensions. `claude` ships as `claude.cmd` in npm global bin, so wrap via
@@ -288,6 +305,42 @@ export async function runWrapped(args: string[]): Promise<void> {
   if (process.platform !== "win32") {
     process.on("SIGHUP", forward("SIGHUP"));
   }
+}
+
+/**
+ * Write a per-session settings.json that maps PreToolUse to our
+ * permission-hook bridge. Passed to claude via `--settings <path>` so it
+ * stacks on top of user/project settings rather than replacing them. The
+ * file lives in the same sessionDir as the injected skills, so cleanup
+ * (injector.cleanup() removing sessionDir) takes care of it on exit.
+ *
+ * The command points at the `lictor` binary on PATH plus our cli
+ * subcommand. Matcher is a regex covering the tools we care to gate
+ * (Bash/Edit/Write — write paths) plus MCP tools whose name starts with
+ * `mcp__`. Read-only tools (Read/Glob/Grep) are intentionally NOT gated
+ * — they would explode the modal count and add no value.
+ */
+function writePermissionHookSettings(sessionDir: string): string {
+  const path = `${sessionDir}/lictor-hook-settings.json`;
+  const content = JSON.stringify({
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__.*",
+          hooks: [
+            {
+              type: "command",
+              command: "lictor cli permission-hook",
+              timeout: 65,
+            },
+          ],
+        },
+      ],
+    },
+  }, null, 2);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require("node:fs").writeFileSync(path, content, "utf8");
+  return path;
 }
 
 function currentSize(): { cols: number; rows: number } {
