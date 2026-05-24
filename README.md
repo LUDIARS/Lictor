@@ -69,6 +69,9 @@ lictor cli conflicts                  # other sessions on the same repo
 | POST   | `/v1/title`                | `{"text":"<title>"}`                   | Emit OSC 0 + set manual override |
 | POST   | `/v1/title/auto`           | —                                      | Drop manual override + reset title (auto resumes next stat cycle) |
 | POST   | `/v1/rename`               | `{"text":"<title>"}`                   | Inject `/rename <text>\r` into claude's TUI stdin (503 if not wrapping a real session) |
+| POST   | `/v1/slash`                | `{cmd, args?}`                         | Generalized slash injection — sends `/<cmd> <args>\r`. `cmd` regex: `^[a-z][a-z0-9-]{0,40}$`. |
+| POST   | `/v1/keys`                 | `{data}`                               | Raw keystroke injection (C0 controls stripped except `\t \n \r \b ESC`; Ctrl-C dropped to prevent accidental session kill) |
+| POST   | `/v1/answer`               | `{choice, escape_first?}`              | Send `(choice-1)` Down-Arrow + Enter to answer an `AskUserQuestion` picker. `choice` 1-based, 1–50. |
 | POST   | `/v1/chat`                 | `{channel, text, author_label?, scope?}` | Proxy to Concordia /v1/chat; auto-fills `author_label` |
 | POST   | `/v1/event`                | `{kind, payload?, ts?}`                | Proxy to Concordia /v1/sessions/:id/event |
 | GET    | `/v1/conflicts`            | `?repo=<path>&branch=<name>`           | Proxy to Concordia /v1/monitor/conflicts (excludes self) |
