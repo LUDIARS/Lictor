@@ -63,6 +63,21 @@ export async function runWrapped(args: string[]): Promise<void> {
 
   const sidecar = await startSidecar(ctx);
 
+  // Publish our sidecar port to Concordia so per-session HTTP proxies
+  // (filesystem RPC, permission checks, etc.) can reach this Lictor. The
+  // initial register fired BEFORE startSidecar (we needed the persona for
+  // skill seeding), so the port wasn't known then. Best-effort — failure
+  // only breaks the proxy features, not the wrapped claude.
+  if (concordia) {
+    concordia.client
+      .patchSession(concordia.id, { metadata: { lictor_port: sidecar.port } })
+      .catch((err) => {
+        process.stderr.write(
+          `lictor: failed to publish lictor_port to Concordia (${(err as Error).message})\n`,
+        );
+      });
+  }
+
   // Initial auto title (composed with conflict/notify marks once they exist).
   applyAutoTitle(ctx, gatherRepoStat(meta.cwd));
 
