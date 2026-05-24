@@ -139,12 +139,15 @@ export function lineToFrame(line: string): Frame | null {
   //   {type: "summary"|"system"|"tool_use_result"|...}
   const type = typeof msg.type === "string" ? msg.type : "unknown";
 
+  // Claude's per-message uuid — used by PR-F as a fork anchor.
+  const claudeUuid = typeof msg.uuid === "string" ? msg.uuid : null;
+
   if (type === "user" || type === "assistant") {
     const content = msg.message?.content;
     if (Array.isArray(content)) {
       for (const part of content) {
         if (part?.type === "text" && typeof part.text === "string") {
-          return { kind: "text", payload: { role: type, text: part.text } };
+          return { kind: "text", payload: { role: type, text: part.text, claude_uuid: claudeUuid } };
         }
         if (part?.type === "tool_use") {
           return {
