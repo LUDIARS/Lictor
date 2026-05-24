@@ -1,5 +1,6 @@
 import { runWrapped } from "./wrap.js";
 import { runClient } from "./client.js";
+import { runControl } from "./control/cli.js";
 
 const HELP = `lictor — per-session sidecar for Claude Code (LUDIARS / Li)
 
@@ -81,6 +82,11 @@ async function main() {
 
   if (cmd === "cli") {
     await runClient(rest);
+    return;
+  }
+
+  if (cmd === "control") {
+    await runControl(rest);
     return;
   }
 

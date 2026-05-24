@@ -6,8 +6,13 @@ inject keystrokes into the wrapped TUI (`/rename` to set the session name
 visible on claude.ai/code), query session meta, and talk to [Concordia](https://github.com/LUDIARS/Concordia)
 (the LUDIARS multi-agent session coordinator).
 
-LUDIARS short code: **Li**. Default loopback port: ephemeral (registered in
-`LICTOR_PORT` env var that `lictor claude ...` injects into the child).
+Plus a **control daemon** (`lictor control start`, v0.5+) that other processes —
+the CLI, an existing session, Concordia, dashboards — can call to spawn brand-new
+lictor-wrapped sessions on demand (`POST /v1/spawn` opens a new Windows Terminal
+tab or window running `lictor claude` / `lictor codex`).
+
+LUDIARS short code: **Li**. Per-session sidecar port: ephemeral (in
+`$LICTOR_PORT`). Control daemon port: **17340** (loopback, token-authed).
 
 ## Why
 
@@ -58,6 +63,38 @@ lictor cli chat team "デプロイ前確認" # author_label auto-filled from per
 lictor cli event branch.created '{"branch":"feat/x"}'
 lictor cli conflicts                  # other sessions on the same repo
 ```
+
+## Control daemon (v0.5+)
+
+A long-lived orchestrator that spawns new wrapped sessions on demand. One
+daemon per machine.
+
+```sh
+# In a dedicated terminal tab — keep it open
+lictor control start
+# → "listening on 127.0.0.1:17340"
+# → token generated at ~/.claude/lictor/control.token
+
+# From any other process (with read access to the token file):
+lictor control spawn                                       # claude in a new tab
+lictor control spawn --mode window                          # claude in a new window
+lictor control spawn --provider codex --cwd E:\proj\X       # codex, cwd override
+lictor control spawn --title "[Cr] auth fix" -- --continue  # extra args after `--`
+lictor control sessions                                     # last 50 spawn records
+lictor control health                                       # liveness (no auth needed)
+```
+
+### Control daemon endpoints (loopback only, Bearer token required)
+
+| Method | Path           | Body / params                                        | Effect |
+|--------|----------------|------------------------------------------------------|--------|
+| GET    | `/v1/health`   | — (no auth)                                          | `{ok:true, role:"control-lictor"}` |
+| POST   | `/v1/spawn`    | `{provider?, mode?, cwd?, title?, args?, env?}`      | Open a new WT tab/window running `lictor <provider> [args]` |
+| GET    | `/v1/sessions` | —                                                    | Last 50 spawn records |
+
+Token is generated on first `lictor control start` and stored at
+`~/.claude/lictor/control.token` (0600 on POSIX). Callers send it as
+`Authorization: Bearer <hex>` or `X-Lictor-Token: <hex>`.
 
 ## Sidecar API (loopback only)
 
