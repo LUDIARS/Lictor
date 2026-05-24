@@ -45,13 +45,124 @@ export async function runClient(args: string[]): Promise<void> {
     case "skill":
       await cmdSkill(port, rest);
       return;
+    case "task":
+      await cmdTask(port, rest);
+      return;
+    case "state":
+      process.stdout.write((await getText(port, "/v1/lictor/state")) + "\n");
+      return;
+    case "slash":
+      await cmdSlash(port, rest);
+      return;
+    case "keys":
+      await cmdKeys(port, rest);
+      return;
+    case "answer":
+      await cmdAnswer(port, rest);
+      return;
+    case "enter":
+      await cmdKeys(port, ["\r"]);
+      return;
+    case "down":
+      await cmdKeys(port, ["\x1b[B"]);
+      return;
+    case "up":
+      await cmdKeys(port, ["\x1b[A"]);
+      return;
+    case "esc":
+      await cmdKeys(port, ["\x1b"]);
+      return;
+    // Convenience shortcuts that map 1:1 onto common Claude Code slash commands.
+    // Anything not covered here can be invoked as `lictor cli slash <cmd> [args]`.
+    case "clear":
+    case "compact":
+    case "help":
+    case "cost":
+    case "export":
+    case "init":
+    case "model":
+      await cmdSlash(port, [sub, ...rest]);
+      return;
     default:
       process.stderr.write(
         `lictor cli: unknown subcommand '${sub ?? "(none)"}'.\n` +
-          `Available: title, title-auto, rename, meta, health, session, chat, event, conflicts, skill.\n`,
+          `Available: title, title-auto, rename, meta, health, session, chat, event, conflicts, skill, task, state.\n`,
       );
       process.exit(2);
   }
+}
+
+async function cmdKeys(port: string, rest: string[]): Promise<void> {
+  const data = rest.join(" ");
+  if (!data) {
+    process.stderr.write("usage: lictor cli keys <data>\n");
+    process.exit(2);
+  }
+  const reply = await postJsonText(port, "/v1/keys", { data });
+  process.stdout.write(reply + "\n");
+}
+
+async function cmdAnswer(port: string, rest: string[]): Promise<void> {
+  const n = Number(rest[0]);
+  if (!Number.isInteger(n) || n < 1) {
+    process.stderr.write("usage: lictor cli answer <choice-index (1-based)>\n");
+    process.exit(2);
+  }
+  const escapeFirst = rest.includes("--escape");
+  const payload: { choice: number; escape_first?: boolean } = { choice: n };
+  if (escapeFirst) payload.escape_first = true;
+  const reply = await postJsonText(port, "/v1/answer", payload);
+  process.stdout.write(reply + "\n");
+}
+
+async function cmdSlash(port: string, rest: string[]): Promise<void> {
+  const cmd = rest[0];
+  if (!cmd) {
+    process.stderr.write("usage: lictor cli slash <cmd> [args...]\n");
+    process.exit(2);
+  }
+  const args = rest.slice(1).join(" ");
+  const payload: { cmd: string; args?: string } = { cmd };
+  if (args) payload.args = args;
+  const reply = await postJsonText(port, "/v1/slash", payload);
+  process.stdout.write(reply + "\n");
+}
+
+async function cmdTask(port: string, rest: string[]): Promise<void> {
+  const [op, ...more] = rest;
+  if (op === "get" || op === undefined) {
+    process.stdout.write((await getText(port, "/v1/lictor/task")) + "\n");
+    return;
+  }
+  if (op !== "set") {
+    process.stderr.write(`lictor cli task: unknown op '${op}'. Use get | set [--branch <b>] [--desc <text>].\n`);
+    process.exit(2);
+  }
+  // Parse --branch / --desc. Keep it minimal — no full getopts dep.
+  let branch: string | undefined;
+  let desc: string | undefined;
+  for (let i = 0; i < more.length; i++) {
+    const tok = more[i];
+    if (tok === "--branch" && i + 1 < more.length) {
+      branch = more[++i];
+    } else if (tok === "--desc" && i + 1 < more.length) {
+      // Allow trailing tokens to form the description if not quoted in shell.
+      desc = more.slice(i + 1).join(" ");
+      break;
+    } else {
+      process.stderr.write(`lictor cli task set: unexpected arg '${tok}'\n`);
+      process.exit(2);
+    }
+  }
+  if (branch === undefined && desc === undefined) {
+    process.stderr.write("usage: lictor cli task set [--branch <b>] [--desc <text>]\n");
+    process.exit(2);
+  }
+  const payload: { branch?: string; desc?: string } = {};
+  if (branch !== undefined) payload.branch = branch;
+  if (desc !== undefined) payload.desc = desc;
+  const reply = await postJsonText(port, "/v1/lictor/task", payload);
+  process.stdout.write(reply + "\n");
 }
 
 async function cmdSkill(port: string, rest: string[]): Promise<void> {

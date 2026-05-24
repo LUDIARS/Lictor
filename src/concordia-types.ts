@@ -53,3 +53,26 @@ export interface ConcordiaConflictsResponse {
   branches?: Array<{ branch: string; count: number }>;
   [k: string]: unknown;
 }
+
+export interface PendingTask {
+  id: string;
+  kind: string;
+  payload?: unknown;
+  created_at?: string;
+  [k: string]: unknown;
+}
+
+export interface PendingTasksResponse {
+  tasks: PendingTask[];
+}
+
+export interface SessionPatch {
+  current_task?: string;
+  branch?: string;
+  repo_path?: string;
+}
+
+export interface DeleteSessionResponse {
+  report?: unknown;
+  [k: string]: unknown;
+}

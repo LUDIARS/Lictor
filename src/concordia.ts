@@ -5,6 +5,9 @@ import type {
   ConcordiaPersona,
   ConcordiaSessionRegister,
   ConcordiaSessionResponse,
+  DeleteSessionResponse,
+  PendingTasksResponse,
+  SessionPatch,
 } from "./concordia-types.js";
 
 const DEFAULT_HOST = "127.0.0.1";
@@ -48,13 +51,27 @@ export class ConcordiaClient {
     return { id: payload.id, persona, roleLabel };
   }
 
-  async unregister(id: string): Promise<void> {
+  async unregister(id: string): Promise<DeleteSessionResponse | null> {
     // Best-effort — server may already have GC'd if WS connection dropped.
     try {
-      await this.fetchJson<unknown>("DELETE", `/v1/sessions/${encodeURIComponent(id)}`);
+      return await this.fetchJson<DeleteSessionResponse>(
+        "DELETE",
+        `/v1/sessions/${encodeURIComponent(id)}`,
+      );
     } catch {
-      // ignore
+      return null;
     }
+  }
+
+  async patchSession(id: string, patch: SessionPatch): Promise<void> {
+    await this.fetchJson("PATCH", `/v1/sessions/${encodeURIComponent(id)}`, patch);
+  }
+
+  async pendingTasks(id: string): Promise<PendingTasksResponse> {
+    return this.fetchJson<PendingTasksResponse>(
+      "GET",
+      `/v1/sessions/${encodeURIComponent(id)}/pending-tasks`,
+    );
   }
 
   async stat(id: string, payload: unknown): Promise<void> {
@@ -92,11 +109,15 @@ export class ConcordiaClient {
    * Open a WebSocket to /ws?session=<id> for liveness. Concordia treats an
    * active WS as a heartbeat substitute (no need to POST /v1/sessions/:id/heartbeat).
    *
+   * If `onMessage` is supplied, broadcast JSON events from Concordia's
+   * eventBus are decoded and dispatched. Otherwise messages are ignored
+   * (pre-v0.3 behavior).
+   *
    * Returns an object with close() and an isOpen indicator. Reconnects on
    * unexpected close with exponential backoff capped at 30s.
    */
-  openLiveness(id: string): LivenessHandle {
-    return new LivenessHandle(this.cfg, id);
+  openLiveness(id: string, onMessage?: WsMessageHandler): LivenessHandle {
+    return new LivenessHandle(this.cfg, id, onMessage);
   }
 
   private async fetchJson<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -120,6 +141,8 @@ export class ConcordiaClient {
   }
 }
 
+export type WsMessageHandler = (msg: unknown) => void;
+
 export class LivenessHandle {
   private ws: WebSocket | null = null;
   private closed = false;
@@ -129,6 +152,7 @@ export class LivenessHandle {
   constructor(
     private readonly cfg: ConcordiaConfig,
     private readonly sessionId: string,
+    private readonly onMessage?: WsMessageHandler,
   ) {
     this.connect();
   }
@@ -170,6 +194,18 @@ export class LivenessHandle {
       ws.addEventListener("error", () => {
         // Will also fire close — let close handle reconnect.
       });
+      if (this.onMessage) {
+        ws.addEventListener("message", (ev) => {
+          if (!this.onMessage) return;
+          try {
+            const raw = typeof ev.data === "string" ? ev.data : String(ev.data);
+            this.onMessage(JSON.parse(raw));
+          } catch {
+            // Malformed messages are dropped silently — Concordia sends well-
+            // formed JSON in practice.
+          }
+        });
+      }
     } catch {
       this.scheduleReconnect();
     }
@@ -186,4 +222,12 @@ export class LivenessHandle {
     // Don't keep the event loop alive for retries alone.
     this.timer.unref?.();
   }
+}
+
+export function openLiveness(
+  cfg: ConcordiaConfig,
+  id: string,
+  onMessage?: WsMessageHandler,
+): LivenessHandle {
+  return new LivenessHandle(cfg, id, onMessage);
 }

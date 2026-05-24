@@ -19,6 +19,9 @@ const ctx = {
   roleLabel: null,
   injector,
   ptyWriter: (data) => ptyLog.push(data),
+  notifyState: { mark: null, expiresAt: null },
+  conflictState: { count: 0, titleMark: null },
+  taskState: { branch: null, desc: null, updatedAt: null },
 };
 const sidecar = await startSidecar(ctx);
 const base = `http://127.0.0.1:${sidecar.port}`;
@@ -62,6 +65,20 @@ const out = {
   skillList: await get("/v1/skill"),
   skillBadName: await post("/v1/skill", { name: "Bad Name", content: "x" }),
   skillDelete: await del("/v1/skill/smoke-test"),
+  taskInitial: await get("/v1/lictor/task"),
+  taskSetBranch: await post("/v1/lictor/task", { branch: "feat/smoke" }),
+  taskSetDesc: await post("/v1/lictor/task", { desc: "smoke smoke" }),
+  taskAfter: await get("/v1/lictor/task"),
+  taskEmpty: await post("/v1/lictor/task", {}),
+  state: await get("/v1/lictor/state"),
+  slashClear: await post("/v1/slash", { cmd: "clear" }),
+  slashRename: await post("/v1/slash", { cmd: "rename", args: "[Li] via slash" }),
+  slashBad: await post("/v1/slash", { cmd: "Bad Cmd" }),
+  keys: await post("/v1/keys", { data: "hello\r" }),
+  keysStripCtrlC: await post("/v1/keys", { data: "abc\x03def\r" }),
+  keysEmpty: await post("/v1/keys", { data: "\x00\x01" }),
+  answer3: await post("/v1/answer", { choice: 3 }),
+  answerBad: await post("/v1/answer", { choice: 0 }),
   notFound: await get("/v1/nope"),
 };
 console.log(JSON.stringify(out, null, 2));

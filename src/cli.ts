@@ -26,6 +26,30 @@ Usage:
                                        claude; brand-new names need a restart.
   lictor cli skill delete <name>       Remove an injected skill.
 
+  lictor cli task get                  Print this session's relayed task state.
+  lictor cli task set [--branch <b>] [--desc <text>]
+                                       Declare working branch/task to Concordia
+                                       (PATCH session + emit event + refresh
+                                       lictor-current-task skill). Branch is
+                                       auto-detected if omitted.
+  lictor cli state                     Print live notify/conflict/task state.
+
+  lictor cli slash <cmd> [args...]     Inject \`/<cmd> <args>CR\` into the wrapped
+                                       claude's TUI stdin. cmd must match
+                                       ^[a-z][a-z0-9-]{0,40}\$ (Claude Code's
+                                       slash-command grammar).
+  lictor cli {clear|compact|help|cost|export|init|model} [args...]
+                                       Shortcuts for the above (just calls
+                                       \`lictor cli slash <name> ...\`).
+
+  lictor cli keys <data>               Inject raw keystrokes into claude's TUI
+                                       stdin (C0 controls stripped except
+                                       Enter, Tab, Backspace, ESC).
+  lictor cli answer <N> [--escape]     Answer an AskUserQuestion picker by
+                                       sending (N-1) Down-Arrow + Enter.
+                                       --escape sends ESC first.
+  lictor cli {enter|down|up|esc}       One-key shortcuts (Enter, Down, Up, ESC).
+
   lictor --help                        Show this help.
 
 Notes:
