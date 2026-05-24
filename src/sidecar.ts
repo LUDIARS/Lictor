@@ -49,6 +49,22 @@ export interface SidecarContext {
    * fires (default-allow).
    */
   pendingPermissions: Map<string, (decision: PermissionDecision) => void>;
+  /**
+   * v0.8 active-repo relay — ホスト PostToolUse hook が `<state-dir>/active-
+   * repos-<claude-sid>.txt` に書き込んだ repo root を読み取って Concordia に
+   * 反映する. `lastActive` は前回 push 済の repo path、 `lastList` は前回観測
+   * された全 repo. 60s ループの pollLiveState で diff 比較に使う.
+   */
+  activeRepoState: {
+    lastActive: string | null;
+    lastList: string[];
+  };
+  /**
+   * Claude session UUID resolver. transcript-tail が JSONL を発見した時点で
+   * 真値を返す. それ以前 (or transcript-tail 未起動 / failed) は null.
+   * active-repos-watcher が state file を引くのに使う.
+   */
+  getClaudeSessionId: (() => string | null) | null;
 }
 
 export interface Sidecar {

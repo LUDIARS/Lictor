@@ -20,6 +20,12 @@ import { newTaskState, relayTask, seedTaskProtocolSkill } from "./task-relay.js"
 import { writeSessionStateSkill } from "./session-state-skill.js";
 import { type ProviderConfig, PROVIDERS } from "./provider.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
+import {
+  activeReposPath,
+  pickActiveRepo,
+  readActiveRepos,
+  resolveActiveReposDir,
+} from "./active-repos.js";
 
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
@@ -72,6 +78,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     conflictState: { count: 0, titleMark: null },
     taskState: newTaskState(),
     pendingPermissions: new Map(),
+    activeRepoState: { lastActive: null, lastList: [] },
+    getClaudeSessionId: null,
   };
 
   const sidecar = await startSidecar(ctx);
@@ -218,6 +226,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       sessionId: concordia.id,
       concordiaBaseUrl: `http://${process.env.CONCORDIA_HOST ?? "127.0.0.1"}:${process.env.CONCORDIA_PORT ?? "17330"}`,
     });
+    // active-repos watcher が transcript-tail 経由で Claude UUID を引けるよう
+    // ctx に getter を差す. transcript-tail が JSONL を発見するまで null を返す.
+    const tail = transcriptTail;
+    ctx.getClaudeSessionId = () => tail.getClaudeSessionId();
   }
 
   // pty → real terminal stdout.
@@ -511,7 +523,10 @@ function seedSkills(injector: SkillInjector, meta: Meta): void {
 
 async function pushStat(ctx: SidecarContext): Promise<void> {
   if (!ctx.concordia || !ctx.sessionId) return;
-  const stat = gatherRepoStat(ctx.meta.cwd);
+  // active-repo が判明していればそれを基準に stat を採取. 未判明 (Claude 未起動、
+  // hook 未発火、 transcript-tail 未 discover) なら wrap-start cwd フォールバック.
+  const cwd = ctx.activeRepoState.lastActive ?? ctx.meta.cwd;
+  const stat = gatherRepoStat(cwd);
   applyAutoTitle(ctx, stat); // auto-refresh title each cycle in case branch changed
   // v0.4: also refresh the live-state skill so claude sees the snapshot.
   if (ctx.injector) writeSessionStateSkill(ctx.injector, stat);
@@ -519,12 +534,53 @@ async function pushStat(ctx: SidecarContext): Promise<void> {
 }
 
 /**
- * 60-second background loop: branch-change relay, pending-tasks refresh,
- * conflicts probe. Each step is best-effort and isolated from the others.
+ * 60-second background loop: active-repo relay, branch-change relay,
+ * pending-tasks refresh, conflicts probe. Each step is best-effort and
+ * isolated from the others.
  */
 async function pollLiveState(ctx: SidecarContext): Promise<void> {
   if (!ctx.concordia || !ctx.sessionId) return;
-  const stat = gatherRepoStat(ctx.meta.cwd);
+
+  // ─── active-repo relay (v0.8) ──────────────────────────────────────────
+  // ホスト Claude Code の PostToolUse hook (track-active-repo.sh) が
+  // `<state-dir>/active-repos-<claude-sid>.txt` に append している repo root
+  // 群を読み取り、 末尾エントリ (= 直近に触れたリポ) を Concordia の
+  // session.repo_path に反映する.  meta.cwd は wrap-start cwd で固定なので、
+  // 親ディレクトリで wrap している多リポ運用では実際の作業箇所を反映できない.
+  // この watcher で statusline と同精度に上書きする.
+  const claudeSid = ctx.getClaudeSessionId?.() ?? null;
+  let activeCwd = ctx.meta.cwd;
+  let activeRepos: string[] = [];
+  if (claudeSid) {
+    const stateDir = resolveActiveReposDir();
+    activeRepos = readActiveRepos(activeReposPath(stateDir, claudeSid));
+    activeCwd = pickActiveRepo(activeRepos, ctx.meta.cwd);
+  }
+  const activeChanged = activeCwd !== ctx.activeRepoState.lastActive;
+  const listChanged = !sameStringList(activeRepos, ctx.activeRepoState.lastList);
+  if (activeChanged) {
+    try {
+      await ctx.concordia.patchSession(ctx.sessionId, { repo_path: activeCwd });
+      await ctx.concordia.event(ctx.sessionId, {
+        kind: "lictor.active_repo.changed",
+        payload: {
+          active: activeCwd,
+          previous: ctx.activeRepoState.lastActive,
+          repos: activeRepos,
+        },
+      });
+    } catch {
+      // best-effort
+    }
+  }
+  if (activeChanged || listChanged) {
+    ctx.activeRepoState.lastActive = activeCwd;
+    ctx.activeRepoState.lastList = activeRepos.slice();
+  }
+
+  // 残り branch / conflicts / 標題は active repo を基準に計算する
+  const stat = gatherRepoStat(activeCwd);
+  if (activeChanged) applyAutoTitle(ctx, stat);
 
   // Branch relay — if the working branch changed since last seen, PATCH
   // Concordia and emit an event so other sessions/dashboards stay synced.
@@ -556,7 +612,7 @@ async function pollLiveState(ctx: SidecarContext): Promise<void> {
   if (ctx.injector) {
     try {
       const cs = await refreshConflictState(ctx.concordia, ctx.sessionId, ctx.injector, {
-        repo: ctx.meta.cwd,
+        repo: activeCwd,
         branch: stat.branch,
       });
       const changed = cs.titleMark !== ctx.conflictState.titleMark;
@@ -566,4 +622,10 @@ async function pollLiveState(ctx: SidecarContext): Promise<void> {
       // ignore
     }
   }
+}
+
+function sameStringList(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }

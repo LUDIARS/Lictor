@@ -31,6 +31,13 @@ const POST_TIMEOUT_MS = 2000;
 
 export interface TranscriptTailHandle {
   stop: () => void;
+  /**
+   * Claude が JSONL を書き始めた後 (= 初回 discover 成功後) に Claude 自身の
+   * session UUID を返す. ファイル名 `<uuid>.jsonl` から抽出. 未発見なら null.
+   * active-repos watcher 等、 Claude の hook が SID 単位で書き出すファイルを
+   * 読みたいモジュールが参照する.
+   */
+  getClaudeSessionId: () => string | null;
 }
 
 export interface TranscriptTailOptions {
@@ -112,6 +119,14 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     stop: () => {
       stopped = true;
       clearInterval(timer);
+    },
+    getClaudeSessionId: () => {
+      if (!jsonlPath) return null;
+      // jsonlPath は ".../<uuid>.jsonl" 形式. basename + 拡張子削除で UUID.
+      const slash = jsonlPath.lastIndexOf("/");
+      const back = jsonlPath.lastIndexOf("\\");
+      const base = jsonlPath.slice(Math.max(slash, back) + 1);
+      return base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
     },
   };
 }
