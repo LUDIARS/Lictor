@@ -26,6 +26,14 @@ Usage:
                                        claude; brand-new names need a restart.
   lictor cli skill delete <name>       Remove an injected skill.
 
+  lictor cli task get                  Print this session's relayed task state.
+  lictor cli task set [--branch <b>] [--desc <text>]
+                                       Declare working branch/task to Concordia
+                                       (PATCH session + emit event + refresh
+                                       lictor-current-task skill). Branch is
+                                       auto-detected if omitted.
+  lictor cli state                     Print live notify/conflict/task state.
+
   lictor --help                        Show this help.
 
 Notes:

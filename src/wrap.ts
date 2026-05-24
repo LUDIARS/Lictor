@@ -2,14 +2,24 @@ import { randomUUID } from "node:crypto";
 import * as pty from "node-pty";
 import { startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
 import { gatherBaseMeta, type Meta } from "./meta.js";
-import { resetTitle, setTitle } from "./osc.js";
+import { resetTitle } from "./osc.js";
 import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./concordia.js";
 import { gatherRepoStat } from "./stat.js";
-import { buildAutoTitle } from "./auto-title.js";
 import { renderSkillMd, SkillInjector } from "./skill-injector.js";
 import { findRepoMemories, memoryDirForCwd, renderMemoryDigest, repoLeafFromCwd } from "./memory-loader.js";
+import {
+  applyTitleWithMarks,
+  isNotifyStale,
+  newNotifyState,
+  reactToEvent,
+} from "./event-reactor.js";
+import { refreshConflictState } from "./conflict-watcher.js";
+import { refreshPendingTasksSkill } from "./pending-tasks.js";
+import { newTaskState, relayTask, seedTaskProtocolSkill } from "./task-relay.js";
+import { writeSessionStateSkill } from "./session-state-skill.js";
 
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
+const POLL_INTERVAL_MS = 60 * 1000;
 
 export async function runWrapped(args: string[]): Promise<void> {
   const meta = gatherBaseMeta();
@@ -33,6 +43,7 @@ export async function runWrapped(args: string[]): Promise<void> {
   const sessionIdForSkills = concordia?.id ?? `lictor-${randomUUID()}`;
   const injector = new SkillInjector(sessionIdForSkills);
   seedSkills(injector, meta);
+  seedTaskProtocolSkill(injector);
 
   // ptyWriter is wired into ctx so sidecar endpoints (e.g. /v1/rename) can
   // inject keystrokes into claude's TUI input stream. Assigned after the pty
@@ -45,12 +56,35 @@ export async function runWrapped(args: string[]): Promise<void> {
     roleLabel: meta.role_label,
     injector,
     ptyWriter: null,
+    notifyState: newNotifyState(),
+    conflictState: { count: 0, titleMark: null },
+    taskState: newTaskState(),
   };
 
   const sidecar = await startSidecar(ctx);
 
-  // Initial auto title — only if not manually set later via /v1/title.
+  // Initial auto title (composed with conflict/notify marks once they exist).
   applyAutoTitle(ctx, gatherRepoStat(meta.cwd));
+
+  // WS reactor — attach AFTER ctx so the dispatcher can read live state.
+  if (concordia) {
+    concordia.liveness.close(); // close the pre-ctx liveness opened by tryRegisterConcordia
+    concordia.liveness = concordia.client.openLiveness(concordia.id, (msg) =>
+      reactToEvent(msg, {
+        meta: ctx.meta,
+        titleState: ctx.titleState,
+        notifyState: ctx.notifyState,
+        conflictMark: () => ctx.conflictState.titleMark,
+        refreshAutoTitle: () => applyAutoTitle(ctx, gatherRepoStat(ctx.meta.cwd)),
+        ownSessionId: ctx.sessionId,
+        onPendingTaskHint: () => {
+          if (ctx.concordia && ctx.sessionId && ctx.injector) {
+            void refreshPendingTasksSkill(ctx.concordia, ctx.sessionId, ctx.injector);
+          }
+        },
+      }),
+    );
+  }
 
   // Periodic stat polling — only when Concordia is reachable.
   const statTimer = concordia
@@ -59,6 +93,13 @@ export async function runWrapped(args: string[]): Promise<void> {
   statTimer?.unref?.();
   // Send first stat immediately so dashboards aren't blank for 10 minutes.
   if (concordia) pushStat(ctx).catch(() => {});
+
+  // v0.4 — 60s cron for branch relay + pending-tasks + conflict watch.
+  const pollTimer = concordia
+    ? setInterval(() => pollLiveState(ctx).catch(() => {}), POLL_INTERVAL_MS)
+    : null;
+  pollTimer?.unref?.();
+  if (concordia) pollLiveState(ctx).catch(() => {});
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -143,6 +184,7 @@ export async function runWrapped(args: string[]): Promise<void> {
   let childExited = false;
   const cleanup = async () => {
     if (statTimer) clearInterval(statTimer);
+    if (pollTimer) clearInterval(pollTimer);
     concordia?.liveness.close();
     sidecar.close();
     resetTitle();
@@ -159,7 +201,16 @@ export async function runWrapped(args: string[]): Promise<void> {
     stdin.pause();
     if (concordia) {
       try {
-        await concordia.client.unregister(concordia.id);
+        const reply = await concordia.client.unregister(concordia.id);
+        if (reply && reply.report) {
+          // Print Concordia's session-end report so the user sees a summary
+          // of what their session did. JSON if structured, otherwise raw.
+          const text =
+            typeof reply.report === "string"
+              ? reply.report
+              : JSON.stringify(reply.report, null, 2);
+          process.stderr.write(`\nlictor: Concordia session report —\n${text}\n`);
+        }
       } catch {
         // best-effort
       }
@@ -223,6 +274,7 @@ interface ConcordiaSlot {
   id: string;
   persona: Meta["persona"];
   roleLabel: string | null;
+  /** Mutable — wrap.ts swaps this out after ctx is built to attach the reactor. */
   liveness: LivenessHandle;
 }
 
@@ -266,14 +318,25 @@ async function tryRegisterConcordia(meta: Meta): Promise<ConcordiaSlot | null> {
 }
 
 export function applyAutoTitle(ctx: SidecarContext, stat: ReturnType<typeof gatherRepoStat>): void {
-  if (ctx.titleState.manualOverride !== null) return;
-  const title = buildAutoTitle({
-    persona: ctx.meta.persona,
-    roleLabel: ctx.roleLabel,
-    stat,
-    cwd: ctx.meta.cwd,
-  });
-  if (title) setTitle(title);
+  // Drop stale notify marks before composing so old "[!]" doesn't linger
+  // past its TTL across stat refreshes.
+  if (isNotifyStale(ctx.notifyState)) {
+    ctx.notifyState.mark = null;
+    ctx.notifyState.expiresAt = null;
+  }
+  applyTitleWithMarks(
+    ctx.titleState,
+    {
+      persona: ctx.meta.persona,
+      roleLabel: ctx.roleLabel,
+      stat,
+      cwd: ctx.meta.cwd,
+    },
+    {
+      conflict: ctx.conflictState.titleMark,
+      notify: ctx.notifyState.mark,
+    },
+  );
 }
 
 /**
@@ -331,5 +394,57 @@ async function pushStat(ctx: SidecarContext): Promise<void> {
   if (!ctx.concordia || !ctx.sessionId) return;
   const stat = gatherRepoStat(ctx.meta.cwd);
   applyAutoTitle(ctx, stat); // auto-refresh title each cycle in case branch changed
+  // v0.4: also refresh the live-state skill so claude sees the snapshot.
+  if (ctx.injector) writeSessionStateSkill(ctx.injector, stat);
   await ctx.concordia.stat(ctx.sessionId, stat);
+}
+
+/**
+ * 60-second background loop: branch-change relay, pending-tasks refresh,
+ * conflicts probe. Each step is best-effort and isolated from the others.
+ */
+async function pollLiveState(ctx: SidecarContext): Promise<void> {
+  if (!ctx.concordia || !ctx.sessionId) return;
+  const stat = gatherRepoStat(ctx.meta.cwd);
+
+  // Branch relay — if the working branch changed since last seen, PATCH
+  // Concordia and emit an event so other sessions/dashboards stay synced.
+  if (stat.branch && stat.branch !== ctx.taskState.branch) {
+    const next = await relayTask({
+      client: ctx.concordia,
+      sessionId: ctx.sessionId,
+      injector: ctx.injector,
+      state: ctx.taskState,
+      branch: stat.branch,
+      // Don't auto-fill desc — that's the user/claude's job via lictor cli task set.
+      source: "auto",
+    });
+    ctx.taskState = next;
+    // Conflict mark may shift on branch change; refresh title.
+    applyAutoTitle(ctx, stat);
+  }
+
+  // Pending tasks → lictor-pending-tasks skill
+  if (ctx.injector) {
+    try {
+      await refreshPendingTasksSkill(ctx.concordia, ctx.sessionId, ctx.injector);
+    } catch {
+      // ignore
+    }
+  }
+
+  // Conflicts → lictor-conflicts skill + title mark
+  if (ctx.injector) {
+    try {
+      const cs = await refreshConflictState(ctx.concordia, ctx.sessionId, ctx.injector, {
+        repo: ctx.meta.cwd,
+        branch: stat.branch,
+      });
+      const changed = cs.titleMark !== ctx.conflictState.titleMark;
+      ctx.conflictState = cs;
+      if (changed) applyAutoTitle(ctx, stat);
+    } catch {
+      // ignore
+    }
+  }
 }

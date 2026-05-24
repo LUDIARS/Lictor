@@ -4,6 +4,10 @@ import { resetTitle, setTitle } from "./osc.js";
 import type { Meta } from "./meta.js";
 import type { ConcordiaClient } from "./concordia.js";
 import type { SkillInjector } from "./skill-injector.js";
+import type { NotifyState } from "./event-reactor.js";
+import type { ConflictState } from "./conflict-watcher.js";
+import type { TaskState } from "./task-relay.js";
+import { relayTask } from "./task-relay.js";
 
 export interface TitleState {
   manualOverride: string | null;
@@ -24,6 +28,13 @@ export interface SidecarContext {
    * when this is null.
    */
   ptyWriter: ((data: string) => void) | null;
+  /**
+   * v0.4 live state mutated by background cron + WS event reactor. Always
+   * provided (default zero values) so handlers don't have to null-check.
+   */
+  notifyState: NotifyState;
+  conflictState: ConflictState;
+  taskState: TaskState;
 }
 
 export interface Sidecar {
@@ -219,6 +230,53 @@ async function handle(
     const name = decodeURIComponent(url.slice("/v1/skill/".length));
     const ok = ctx.injector.deleteSkill(name);
     writeJson(res, ok ? 200 : 404, { ok });
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/lictor/task") {
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { branch?: unknown; desc?: unknown };
+    const branch =
+      payload.branch === undefined || payload.branch === null
+        ? undefined
+        : typeof payload.branch === "string"
+          ? payload.branch
+          : undefined;
+    const desc =
+      payload.desc === undefined || payload.desc === null
+        ? undefined
+        : typeof payload.desc === "string"
+          ? payload.desc
+          : undefined;
+    if (branch === undefined && desc === undefined) {
+      return writeJson(res, 400, { error: "at least one of branch or desc must be a string" });
+    }
+    const next = await relayTask({
+      client: ctx.concordia,
+      sessionId: ctx.sessionId,
+      injector: ctx.injector,
+      state: ctx.taskState,
+      branch,
+      desc,
+      source: "explicit",
+    });
+    ctx.taskState = next;
+    writeJson(res, 200, { ok: true, task: next });
+    return;
+  }
+
+  if (method === "GET" && url === "/v1/lictor/task") {
+    writeJson(res, 200, ctx.taskState);
+    return;
+  }
+
+  if (method === "GET" && url === "/v1/lictor/state") {
+    writeJson(res, 200, {
+      notify: ctx.notifyState,
+      conflict: ctx.conflictState,
+      task: ctx.taskState,
+    });
     return;
   }
 

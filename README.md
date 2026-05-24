@@ -75,6 +75,9 @@ lictor cli conflicts                  # other sessions on the same repo
 | GET    | `/v1/skill`                | —                                      | List injected skill names + the dir claude scans |
 | POST   | `/v1/skill`                | `{name, content}`                      | Write/overwrite a SKILL.md (live-reloaded by claude) |
 | DELETE | `/v1/skill/<name>`         | —                                      | Remove an injected skill |
+| GET    | `/v1/lictor/task`          | —                                      | Current task state `{branch, desc, updatedAt}` |
+| POST   | `/v1/lictor/task`          | `{branch?, desc?}`                     | PATCH Concordia session + emit event + refresh `lictor-current-task` skill |
+| GET    | `/v1/lictor/state`         | —                                      | `{notify, conflict, task}` snapshot for dashboards |
 
 All requests must originate from `127.0.0.1` / `::1`. The port is bound on
 `127.0.0.1:0` (ephemeral) and exported as `$LICTOR_PORT` to the wrapped
@@ -190,8 +193,30 @@ Brings up the sidecar with `ptyWriter` replaced by a stdout logger, so
 `POST /v1/rename` prints what bytes _would have_ hit claude's TUI. Useful
 for HTTP-layer iteration and curl-driven smoke checks.
 
+## v0.4 — bidirectional Concordia loop
+
+v0.1 was outbound only (register / chat / stat). v0.4 closes the loop by
+reacting to Concordia state and relaying changes back automatically:
+
+- **WS event reactor** — incoming WS broadcasts drive short-lived title
+  marks (`[!]` for chat from another session) and force-refresh the
+  title on `conflict_detected`.
+- **60s poll loop** — when Concordia is reachable:
+  - `lictor-pending-tasks` skill is rewritten from `/v1/sessions/<id>/pending-tasks`
+  - `lictor-conflicts` skill + title `⚠N` prefix from `/v1/monitor/conflicts`
+  - branch poll detects `git checkout -b`, PATCHes Concordia + emits
+    `lictor.task.changed` event + refreshes `lictor-current-task` skill
+- **Live session-state skill** — every 10-min stat cycle also overwrites
+  `lictor-session-state` (current branch / dirty / unpushed snapshot).
+- **Task declaration** — `lictor cli task set --branch <b> --desc <text>`
+  for explicit task description (auto branch detection covers the rest).
+  Seeded `lictor-task-protocol` skill tells the wrapped claude to call it.
+- **Session-end report** — `DELETE /v1/sessions/<id>`'s `report` field is
+  now printed to stderr on exit.
+
 ## Status
 
+- v0.4 — Bidirectional Concordia loop (WS reactor + 60s poll for tasks/conflicts/branch + session-state skill + end report).
 - v0.3 — pty-wrapped claude (node-pty) + `/v1/rename` keystroke injection + `lictor cli rename`.
 - v0.2 — Skill injection (persona + repo-relevant memories) via `--add-dir`.
 - v0.1 — Concordia integration + auto title + stat cron + chat/event/conflicts proxies.
