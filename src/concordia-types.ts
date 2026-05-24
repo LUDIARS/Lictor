@@ -70,6 +70,13 @@ export interface SessionPatch {
   current_task?: string;
   branch?: string;
   repo_path?: string;
+  repo_origin?: string | null;
+  /**
+   * Shallow merge into Concordia's session.metadata. `null` value deletes
+   * a key. Lictor uses this to publish `lictor_port` post-spawn — see
+   * wrap.ts where the PATCH fires after startSidecar resolves.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 export interface DeleteSessionResponse {
