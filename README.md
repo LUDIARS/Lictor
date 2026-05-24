@@ -1,13 +1,27 @@
 # Lictor (Li)
 
-Per-session sidecar that wraps `claude` so hooks running inside a Claude Code
-session can drive the host terminal — primarily the **window/tab title** —
-inject keystrokes into the wrapped TUI (`/rename` to set the session name
-visible on claude.ai/code), query session meta, and talk to [Concordia](https://github.com/LUDIARS/Concordia)
-(the LUDIARS multi-agent session coordinator).
+Per-session sidecar that wraps **agent TUI CLIs** (Claude Code or OpenAI Codex)
+so hooks running inside the session can drive the host terminal — primarily
+the **window/tab title** — inject keystrokes into the wrapped TUI (`/rename`
+to set the session name visible on claude.ai/code, generalized `/slash` /
+`/keys` / `/answer` for any TUI), query session meta, and talk to
+[Concordia](https://github.com/LUDIARS/Concordia) (the LUDIARS multi-agent
+session coordinator).
 
 LUDIARS short code: **Li**. Default loopback port: ephemeral (registered in
-`LICTOR_PORT` env var that `lictor claude ...` injects into the child).
+`LICTOR_PORT` env var that `lictor <provider> ...` injects into the child).
+
+## Providers
+
+| Provider              | Command               | Skill injection | Slash/keys/answer | Concordia |
+|----------------------|-----------------------|-----------------|--------------------|-----------|
+| Claude Code          | `lictor claude [args]`| ✅ (`--add-dir`) | ✅                  | ✅         |
+| OpenAI Codex CLI     | `lictor codex [args]` | ❌ (no SKILL.md disco) | ✅                  | ✅         |
+
+Both providers share the title/Concordia/session-meta/pty surface; only the
+skill-injection paths differ. Codex's own `--add-dir` widens the writable
+sandbox but doesn't trigger skill scanning, so `/v1/skill` returns 503 for
+Codex sessions.
 
 ## Why
 
@@ -219,7 +233,8 @@ reacting to Concordia state and relaying changes back automatically:
 
 ## Status
 
-- v0.4 — Bidirectional Concordia loop (WS reactor + 60s poll for tasks/conflicts/branch + session-state skill + end report).
+- v0.5 — Provider abstraction; `lictor codex [args]` added. Skill injection cleanly disabled for Codex (no SKILL.md discovery upstream).
+- v0.4 — Bidirectional Concordia loop (WS reactor + 60s poll for tasks/conflicts/branch + session-state skill + end report) + generalized slash/keys/answer pty injection.
 - v0.3 — pty-wrapped claude (node-pty) + `/v1/rename` keystroke injection + `lictor cli rename`.
 - v0.2 — Skill injection (persona + repo-relevant memories) via `--add-dir`.
 - v0.1 — Concordia integration + auto title + stat cron + chat/event/conflicts proxies.

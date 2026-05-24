@@ -1,7 +1,7 @@
 {
   "name": "@ludiars/lictor",
-  "version": "0.4.0",
-  "description": "Per-session sidecar that wraps `claude` so hooks inside a Claude Code session can drive the host terminal (OSC title), inject keystrokes into the wrapped TUI (e.g. /rename), integrate with Concordia (session register / persona / chat / stat / conflicts / WS event reactor / pending-tasks / branch relay), and inject scoped skills (persona + repo-relevant memories + live session state) via --add-dir.",
+  "version": "0.5.0",
+  "description": "Per-session sidecar for agent TUI CLIs (Claude Code, OpenAI Codex). Wraps the CLI so hooks inside the session can drive the host terminal (OSC title), inject keystrokes (slash commands, raw keys, AskUserQuestion answers), integrate with Concordia (register / persona / chat / stat / conflicts / WS event reactor / pending-tasks / branch relay), and (Claude Code only) inject scoped skills via --add-dir.",
   "type": "module",
   "bin": {
     "lictor": "./bin/lictor.mjs"

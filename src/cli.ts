@@ -1,11 +1,15 @@
 import { runWrapped } from "./wrap.js";
 import { runClient } from "./client.js";
+import { getProvider } from "./provider.js";
 
-const HELP = `lictor — per-session sidecar for Claude Code (LUDIARS / Li)
+const HELP = `lictor — per-session sidecar for agent TUI CLIs (LUDIARS / Li)
 
 Usage:
-  lictor claude [args...]              Wrap \`claude\` so hooks inside can drive
-                                       the host terminal and talk to Concordia.
+  lictor claude [args...]              Wrap Claude Code. Skill injection + auto
+                                       title + Concordia full integration.
+  lictor codex [args...]               Wrap OpenAI Codex CLI. pty + title +
+                                       Concordia (no skill injection — Codex
+                                       lacks a SKILL.md discovery mechanism).
 
   lictor cli title <text>              Set the host terminal title (manual override).
   lictor cli title-auto                Drop the manual override; resume auto title.
@@ -74,8 +78,10 @@ async function main() {
 
   const [cmd, ...rest] = argv;
 
-  if (cmd === "claude") {
-    await runWrapped(rest);
+  // Provider commands: `lictor claude [args]`, `lictor codex [args]`, etc.
+  const provider = getProvider(cmd);
+  if (provider) {
+    await runWrapped(rest, provider);
     return;
   }
 

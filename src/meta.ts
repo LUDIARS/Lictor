@@ -12,6 +12,9 @@ export interface Meta {
   term_program: string | null;
   term: string | null;
 
+  /** Wrapped provider name (`claude` / `codex`). null until runWrapped sets it. */
+  provider: string | null;
+
   // Populated after Concordia registration. Null until then (and stays null
   // when Concordia is disabled or unreachable).
   session_id: string | null;
@@ -30,6 +33,7 @@ export function gatherBaseMeta(): Meta {
     wt_session: process.env.WT_SESSION ?? null,
     term_program: process.env.TERM_PROGRAM ?? null,
     term: process.env.TERM ?? null,
+    provider: null,
     session_id: null,
     persona: null,
     role_label: null,
