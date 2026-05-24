@@ -33,6 +33,13 @@ export interface ReactorContext {
   refreshAutoTitle: () => void;
   ownSessionId: string | null;
   onPendingTaskHint: () => void;
+  /**
+   * Called when a Concordia `session.inject` event arrives with a matching
+   * `target_session_id`. wrap.ts wires this to sanitize the text and write
+   * it (plus \r) to the pty so it lands in the wrapped claude as user
+   * input. Null when ptyWriter isn't available (smoke harness, pre-spawn).
+   */
+  onInject?: (text: string, source: string | null) => void;
 }
 
 /**
@@ -42,6 +49,20 @@ export interface ReactorContext {
  */
 export function reactToEvent(ev: unknown, ctx: ReactorContext): void {
   if (!isObject(ev)) return;
+
+  // Concordia events carry their dispatch tag in `type` (modern schema).
+  // session.inject is a session-scoped command — match target_session_id
+  // against our own id; the WS broadcaster also filters by session, but
+  // the local check is belt-and-braces against any future broadcast change.
+  if (ev.type === "session.inject") {
+    if (typeof ev.target_session_id !== "string") return;
+    if (ev.target_session_id !== ctx.ownSessionId) return;
+    if (typeof ev.text !== "string" || ev.text.length === 0) return;
+    const source = typeof ev.source === "string" ? ev.source : null;
+    ctx.onInject?.(ev.text, source);
+    return;
+  }
+
   const kind = typeof ev.kind === "string" ? ev.kind : null;
   if (!kind) return;
   const payload = isObject(ev.payload) ? ev.payload : {};
