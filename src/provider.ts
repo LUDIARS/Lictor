@@ -73,6 +73,17 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     concordiaProvider: "codex-cli",
     displayName: "OpenAI Codex",
   },
+  gemini: {
+    name: "gemini",
+    binary: "gemini",
+    // Gemini CLI には現在 SKILL.md 相当の discovery 機構が無いので skill 注入は no-op.
+    // pty / 端末タイトル / Concordia register / chat 経路 / transcript-tail などの
+    // provider-agnostic 機能はそのまま動く.
+    skillStrategy: "none",
+    supportsSkills: false,
+    concordiaProvider: "gemini-cli",
+    displayName: "Gemini CLI",
+  },
 };
 
 export function getProvider(name: string): ProviderConfig | null {

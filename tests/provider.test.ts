@@ -20,9 +20,19 @@ test("PROVIDERS registers codex with codex-user-agents skill strategy", () => {
   assert.equal(p.concordiaProvider, "codex-cli");
 });
 
+test("PROVIDERS registers gemini with no skill discovery (none strategy)", () => {
+  const p = PROVIDERS.gemini;
+  assert.equal(p.name, "gemini");
+  assert.equal(p.binary, "gemini");
+  assert.equal(p.skillStrategy, "none");
+  assert.equal(p.supportsSkills, false);
+  assert.equal(p.concordiaProvider, "gemini-cli");
+});
+
 test("getProvider: known names resolve", () => {
   assert.equal(getProvider("claude")?.binary, "claude");
   assert.equal(getProvider("codex")?.binary, "codex");
+  assert.equal(getProvider("gemini")?.binary, "gemini");
 });
 
 test("getProvider: unknown returns null", () => {
