@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as pty from "node-pty";
-import { startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
+import { sanitizeKeySeq, startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
 import { gatherBaseMeta, type Meta } from "./meta.js";
 import { resetTitle } from "./osc.js";
 import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./concordia.js";
@@ -81,6 +81,20 @@ export async function runWrapped(args: string[]): Promise<void> {
           if (ctx.concordia && ctx.sessionId && ctx.injector) {
             void refreshPendingTasksSkill(ctx.concordia, ctx.sessionId, ctx.injector);
           }
+        },
+        onInject: (text, source) => {
+          if (!ctx.ptyWriter) return;
+          // Reuse the same sanitizer as /v1/keys — TUI-safe controls only.
+          // Append \r so the line submits as a single user input rather than
+          // sitting in the prompt buffer waiting for Enter.
+          const safe = sanitizeKeySeq(text);
+          if (!safe) return;
+          ctx.ptyWriter(safe + "\r");
+          // Telemetry breadcrumb — surface that the inject landed so the
+          // user can see who pushed what without trawling Concordia logs.
+          process.stderr.write(
+            `lictor: injected ${safe.length} bytes from Concordia (source=${source ?? "?"})\n`,
+          );
         },
       }),
     );

@@ -89,6 +89,42 @@ test("reactToEvent: malformed event is dropped silently", () => {
   assert.equal(ctx.notifyState.mark, null);
 });
 
+test("reactToEvent: session.inject with matching id calls onInject", () => {
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    { type: "session.inject", target_session_id: "me", text: "do the thing", source: "web-ui", ts: 1 },
+    ctx,
+  );
+  assert.deepEqual(ctx.injectCalls, [{ text: "do the thing", source: "web-ui" }]);
+});
+
+test("reactToEvent: session.inject for a different session is ignored", () => {
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    { type: "session.inject", target_session_id: "someone-else", text: "ignored", source: null, ts: 1 },
+    ctx,
+  );
+  assert.equal(ctx.injectCalls.length, 0);
+});
+
+test("reactToEvent: session.inject with empty text is dropped", () => {
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    { type: "session.inject", target_session_id: "me", text: "", source: null, ts: 1 },
+    ctx,
+  );
+  assert.equal(ctx.injectCalls.length, 0);
+});
+
+test("reactToEvent: session.inject defaults source to null when missing", () => {
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    { type: "session.inject", target_session_id: "me", text: "hi", ts: 1 },
+    ctx,
+  );
+  assert.deepEqual(ctx.injectCalls, [{ text: "hi", source: null }]);
+});
+
 test("applyTitleWithMarks: respects manual override", () => {
   const titleState = { manualOverride: "[manual]" };
   // applyTitleWithMarks is a no-op when there's a manual override; we
@@ -112,6 +148,8 @@ interface FakeReactorCtx {
   ownSessionId: string | null;
   onPendingTaskHint: () => void;
   onPendingTaskHintCalled: number;
+  onInject: (text: string, source: string | null) => void;
+  injectCalls: Array<{ text: string; source: string | null }>;
 }
 
 function makeReactorCtx(opts: { ownSessionId?: string | null }): FakeReactorCtx {
@@ -129,6 +167,10 @@ function makeReactorCtx(opts: { ownSessionId?: string | null }): FakeReactorCtx 
       ctx.onPendingTaskHintCalled++;
     },
     onPendingTaskHintCalled: 0,
+    onInject: (text, source) => {
+      ctx.injectCalls.push({ text, source });
+    },
+    injectCalls: [],
   };
   return ctx;
 }
