@@ -1,0 +1,29 @@
+{
+  "name": "@ludiars/lictor",
+  "version": "0.0.1",
+  "description": "Per-session sidecar that wraps `claude` so hooks inside a Claude Code session can manipulate the host terminal (window title, OSC, ...) and query session meta.",
+  "type": "module",
+  "bin": {
+    "lictor": "./bin/lictor.mjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "lictor": "tsx src/cli.ts",
+    "test": "node --test --import tsx tests/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.3"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LUDIARS/Lictor.git"
+  }
+}
