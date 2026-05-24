@@ -1,4 +1,5 @@
 import { hostname } from "node:os";
+import type { ConcordiaPersona } from "./concordia-types.js";
 
 export interface Meta {
   lictor_pid: number;
@@ -10,9 +11,15 @@ export interface Meta {
   wt_session: string | null;
   term_program: string | null;
   term: string | null;
+
+  // Populated after Concordia registration. Null until then (and stays null
+  // when Concordia is disabled or unreachable).
+  session_id: string | null;
+  persona: ConcordiaPersona | null;
+  role_label: string | null;
 }
 
-export function gatherMeta(): Meta {
+export function gatherBaseMeta(): Meta {
   return {
     lictor_pid: process.pid,
     parent_pid: process.ppid,
@@ -23,5 +30,11 @@ export function gatherMeta(): Meta {
     wt_session: process.env.WT_SESSION ?? null,
     term_program: process.env.TERM_PROGRAM ?? null,
     term: process.env.TERM ?? null,
+    session_id: null,
+    persona: null,
+    role_label: null,
   };
 }
+
+// Re-export for callers that just want the bare base.
+export { gatherBaseMeta as gatherMeta };
