@@ -5,17 +5,27 @@ import { lineToFrame } from "../src/transcript-tail.js";
 test("lineToFrame: assistant text → text frame", () => {
   const f = lineToFrame(JSON.stringify({
     type: "assistant",
+    uuid: "msg-1",
     message: { role: "assistant", content: [{ type: "text", text: "hello world" }] },
   }));
-  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "hello world" } });
+  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "hello world", claude_uuid: "msg-1" } });
 });
 
 test("lineToFrame: user text → text frame", () => {
   const f = lineToFrame(JSON.stringify({
     type: "user",
+    uuid: "msg-2",
     message: { role: "user", content: [{ type: "text", text: "do the thing" }] },
   }));
-  assert.deepEqual(f, { kind: "text", payload: { role: "user", text: "do the thing" } });
+  assert.deepEqual(f, { kind: "text", payload: { role: "user", text: "do the thing", claude_uuid: "msg-2" } });
+});
+
+test("lineToFrame: text frame includes null claude_uuid when missing", () => {
+  const f = lineToFrame(JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "no-uuid" }] },
+  }));
+  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "no-uuid", claude_uuid: null } });
 });
 
 test("lineToFrame: tool_use → tool-use frame with input preview", () => {
