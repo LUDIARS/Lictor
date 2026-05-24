@@ -12,13 +12,18 @@ into that detached pty.
 Concrete consequence: multiple concurrent Claude Code sessions in Windows
 Terminal tabs are indistinguishable in the taskbar / Alt-Tab. Operators
 mis-edit `main` in the wrong repo because the tab title is just "✻ Claude
-Code" everywhere. (LUDIARS memory: [[feedback_concurrent_session_branch]],
-[[feedback_window_title_work_ja]].)
+Code" everywhere.
 
 Anthropic tracks this as a feature request (#15802, #18326, #20441,
 #25789, #14343 ...). No native solution shipped as of 2026-05.
 
-## Architecture
+A secondary problem (v0.1): every Claude session needs to register with
+Concordia and run periodic /stat polling. Doing this via per-session
+PostToolUse / Stop hooks is fragile — the registration races the Bash
+tool's first command, and the polling is just a glorified setInterval the
+hook can't actually run between Claude turns.
+
+## Architecture (v0.1)
 
 ```
 ┌────────────────────┐
@@ -27,29 +32,38 @@ Anthropic tracks this as a feature request (#15802, #18326, #20441,
 └──────────┬─────────┘
            │ pty (real stdin/stdout/stderr)
            ▼
-┌────────────────────────────────────────────┐
-│  lictor wrapper (Node process, this repo)  │
-│  ├─ process.stdout → the real pty          │
-│  ├─ child = spawn('claude', { inherit })   │
-│  └─ HTTP sidecar on 127.0.0.1:<ephemeral>  │
-└──────────┬─────────────────────────────────┘
-           │ stdio: inherit + env injection
-           ▼
-┌─────────────────────────────────────────┐
-│  claude (Claude Code TUI)               │
-│   $LICTOR_PORT, $LICTOR_PID in env      │
-└──────────┬──────────────────────────────┘
-           │ Bash tool / hook / MCP spawns
-           ▼
-┌─────────────────────────────────────────┐
-│  hook subprocess                        │
-│   curl http://127.0.0.1:$LICTOR_PORT/   │
-│        v1/title  -d '{"text":"..."}'    │
+┌──────────────────────────────────────────────────────────┐
+│  lictor wrapper (Node 22+, this repo)                    │
+│  ├─ process.stdout → the real pty                        │
+│  ├─ child = spawn('claude', { inherit })                 │
+│  ├─ HTTP sidecar on 127.0.0.1:<ephemeral>                │
+│  ├─ Concordia session registered + WS liveness           │
+│  ├─ 10-min stat cron → POST /v1/stat/<id>                │
+│  └─ auto-title cycle (persona + repo + branch + marks)   │
+└──────────┬───────────────────────────────────────────────┘
+           │ stdio: inherit + env injection                          ┌──────────────────────────────────┐
+           ▼                                                          │ Concordia (127.0.0.1:17330)      │
+┌─────────────────────────────────────────┐                          │ ┌──────────────────────────────┐ │
+│  claude (Claude Code TUI)               │                          │ │ /v1/sessions  (register)     │ │
+│   $LICTOR_PORT, $LICTOR_SESSION_ID,     │                          │ │ /ws?session=  (liveness)     │ │
+│   $LICTOR_PERSONA_NAME, etc. in env     │                          │ │ /v1/stat/:id   (10-min cron) │ │
+└──────────┬──────────────────────────────┘                          │ │ /v1/chat       (proxied)     │ │
+           │ Bash tool / hook / MCP spawns                            │ │ /v1/sessions/:id/event       │ │
+           ▼                                                          │ │ /v1/monitor/conflicts        │ │
+┌─────────────────────────────────────────┐                          │ └──────────────────────────────┘ │
+│  hook subprocess                        │                          └────────────▲─────────────────────┘
+│  curl http://127.0.0.1:$LICTOR_PORT/    │                                       │
+│       v1/title  -d ...                  │                                       │
+│       v1/chat   -d ...                  │ ─── proxied by lictor sidecar ────────┘
+│       v1/event  -d ...                  │
+│  GET  /v1/conflicts                     │
 └─────────────────────────────────────────┘
                 │
                 ▼  (HTTP loopback, NOT through claude's stdout)
-        lictor receives POST → process.stdout.write(OSC) →
-        real pty → Windows Terminal → title changes.
+        lictor sidecar handles:
+          /v1/title         → process.stdout.write(OSC) → real pty → terminal
+          /v1/chat,/event,
+          /v1/conflicts     → forwarded to Concordia, response relayed back
 ```
 
 Key invariant: `lictor`'s own `process.stdout` is connected to the real
@@ -58,21 +72,21 @@ Hooks reach it out-of-band over loopback, not through claude.
 
 ## Why HTTP loopback (not named pipes, not signals, not stdin injection)
 
-- **Named pipes / Unix sockets**: portable HTTP-over-TCP loopback works
-  identically on Windows / macOS / Linux without platform-specific socket
-  paths. Cost is minimal (single Node `http.createServer`).
-- **Signals**: too coarse — can't carry the new title text.
-- **Writing to claude's stdin**: would inject characters into Claude's TUI
-  input, not a sidecar protocol.
+- **Portability** — HTTP-over-TCP loopback works identically on
+  Windows / macOS / Linux without platform-specific socket paths.
+- **Symmetry with Concordia** — Concordia is already HTTP, so the proxy
+  path is trivial (`fetch` in, `fetch` out).
+- **Hook ergonomics** — `curl` is everywhere; named pipes need different
+  tools per OS.
+- **Cost** — single Node `http.createServer`, no native dep.
 
-The sidecar binds `127.0.0.1:0` (ephemeral) so concurrent lictor instances
-in sibling Windows Terminal tabs never collide. Each session gets its own
-port and exports it as `$LICTOR_PORT`.
+Sidecar binds `127.0.0.1:0` (ephemeral). Concurrent lictor instances in
+sibling Windows Terminal tabs never collide; each session gets its own port
+and exports it as `$LICTOR_PORT`.
 
-Loopback hardening: an in-handler check rejects any request whose
-`remoteAddress` isn't `127.0.0.1` / `::1` / `::ffff:127.0.0.1`. With the
-explicit `listen(0, '127.0.0.1', ...)` bind this is belt-and-braces, but it
-matters if the bind ever changes.
+Loopback hardening: per-handler check rejects any request whose
+`remoteAddress` isn't `127.0.0.1` / `::1` / `::ffff:127.0.0.1`. Belt-and-
+braces alongside the explicit `listen(0, '127.0.0.1', ...)` bind.
 
 ## Why stdio: inherit (not node-pty)
 
@@ -85,47 +99,83 @@ don't need to — we only need to inject our own OSC writes alongside, and
 OSC sequences are out-of-band as far as the terminal renderer is concerned
 (they don't display as visible text and don't disrupt cursor position).
 
-If a future feature needs to intercept output (e.g. detect when claude
-prints a `/clear` or session-end marker), we can revisit and either layer
-a pty over stdin/stdout (still without node-pty, via `tty.ReadStream`) or
-add `node-pty` then.
+## Concordia integration details
 
-## Title sanitization
+### Registration
 
-`sanitizeTitle` strips all C0 controls (`\x00-\x1f`) and DEL (`\x7f`) so a
-malicious or malformed payload can't:
+`POST /v1/sessions` with a Lictor-generated `lictor-<uuid>` id. Payload
+captures repo_path / branch / host / pid / wt_session. Response includes
+`persona` (assigned by Concordia) and `session.metadata.role_label`.
+
+### Liveness via WebSocket
+
+Concordia's `/ws?session=<id>` increments `ws_clients` on connect; a
+session with an active WS is exempt from the lost-detection scan. Lictor
+holds the WS open for the lifetime of the wrapped claude, reconnecting
+with exponential backoff (1s → 30s cap) if the connection drops.
+
+Lictor does **not** post explicit heartbeats — the WS already serves that
+role. This halves the chatter compared with the old hook-based heartbeat.
+
+### Stat polling (10 minutes)
+
+`gatherRepoStat(cwd)` runs:
+- `git rev-parse --abbrev-ref HEAD` → branch
+- `git rev-parse --abbrev-ref @{u}` → upstream (if any)
+- `git status --porcelain=v1` → staged / unstaged / untracked counts
+- `git rev-list --count <upstream>..HEAD` → unpushed
+- `git log -1 --format=%H%x09%cI%x09%s` → last commit metadata
+
+Wrapped in `try`/`catch` and a 5s timeout each — if the repo isn't a git
+repo, all fields default to null/0/false.
+
+First stat fires immediately on registration so dashboards aren't blank
+for 10 minutes. Subsequent stats every 10 min (timer is `unref`'d so it
+doesn't keep the process alive past claude's exit).
+
+### Auto title
+
+`buildAutoTitle({ persona, roleLabel, stat, cwd })` produces:
+
+```
+[<role>] <repo-leaf> · <branch> ●↑N
+```
+
+Pieces are omitted when missing. `roleLabel` is clipped at 24 chars
+(prevents a chatty persona name from blowing the title). Manual overrides
+via `POST /v1/title` win until cleared with `POST /v1/title/auto`.
+
+### Default `author_label` for chat proxy
+
+Follows the LUDIARS convention of `<role> / <name>` (e.g.
+`深掘り型 / 淵渡 一`). Falls back to role-only / name-only / `lictor`
+when half the data is missing — never refuses the call purely for label
+reasons.
+
+## Trust boundary
+
+`sanitizeTitle` (src/osc.ts) is the **only** function that hands user-
+supplied text to `process.stdout.write`. It strips all C0 controls
+(`\x00-\x1f`) and DEL (`\x7f`) so a malformed payload can't:
 - terminate the OSC string early and inject a new escape,
 - send a different OSC,
 - inject a BEL outside the sequence.
 
-It also caps length at 200 characters. Window managers truncate titles
-visually anyway, and a huge title is more likely to be a bug than a feature.
+Also caps length at 200 characters.
 
-## Non-goals (v0)
+## Non-goals
 
 - Not a process supervisor: lictor exits with claude, doesn't restart it.
 - Not a logger: claude's output passes through unchanged.
-- Not a hook framework: v0 has one POST endpoint. The skeleton supports
-  adding more, but v0 ships only title + meta + health.
-- Not multi-session: one lictor wraps one claude. Sibling lictor instances
-  are independent.
+- Not a full hook framework (yet): v0.1 proxies a fixed surface; users
+  can't register dynamic handlers. v0.4 may add that.
 
 ## Roadmap
 
 | Version | Adds |
 |---------|------|
-| v0.0    | Title set/reset, meta GET, health, loopback hardening, tests for sanitizer |
-| v0.1    | Title history under `~/.claude/lictor/sessions/<pid>.jsonl`; `lictor cli title --auto` driven by hook events |
-| v0.2    | `POST /v1/event` for Concordia integration — lictor forwards relevant events (cwd switch, prolonged silence) up to a coordinator; `POST /v1/clear-title` |
+| v0.0    | Title set/reset, meta GET, health |
+| **v0.1**| **Concordia integration: register / WS / persona / 10-min stat / chat-event-conflicts proxies / auto title** |
+| v0.2    | Title history under `~/.claude/lictor/sessions/<pid>.jsonl`; PostToolUse and Stop hook bodies served centrally so user `settings.json` only needs to point at `lictor cli hook ...` |
 | v0.3    | Windows Terminal pane discovery via `WT_SESSION` + `wt.exe focus-tab`; cross-tab "focus this session" command |
-| v0.4    | Generic hook host: lictor sidecar runs lightweight PostToolUse / Stop hooks centrally so Memoria / Concordia / etc. can register handlers instead of each shipping their own settings.json hook entry |
-
-## Cross-cutting LUDIARS notes
-
-- Port registry: register in `infra/PORT-MAP.md` as "Lictor (per-session,
-  ephemeral)". No fixed port — discovery is via `$LICTOR_PORT`.
-- Memory: this design supersedes [[feedback_window_title_work_ja]] for
-  in-session title changes; that memory should be updated to point at
-  Lictor.
-- Skill: `window-title-ja` should be updated to use `lictor cli title ...`
-  when lictor is detected, falling back to "manual rename" when not.
+| v0.4    | Generic hook host — users register handler scripts under `~/.claude/lictor/hooks/`, lictor dispatches based on Claude Code hook events relayed by the wrapped claude |
