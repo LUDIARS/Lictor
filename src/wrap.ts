@@ -17,18 +17,20 @@ import { refreshConflictState } from "./conflict-watcher.js";
 import { refreshPendingTasksSkill } from "./pending-tasks.js";
 import { newTaskState, relayTask, seedTaskProtocolSkill } from "./task-relay.js";
 import { writeSessionStateSkill } from "./session-state-skill.js";
+import { type ProviderConfig, PROVIDERS } from "./provider.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
 
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
 
-export async function runWrapped(args: string[]): Promise<void> {
+export async function runWrapped(args: string[], provider: ProviderConfig = PROVIDERS.claude): Promise<void> {
   const meta = gatherBaseMeta();
+  meta.provider = provider.name;
 
   // Concordia registration — best-effort. A failure here downgrades to v0.0
   // behavior (no persona, no auto-stat, no liveness) but does NOT block the
-  // wrapped claude from starting.
-  const concordia = await tryRegisterConcordia(meta);
+  // wrapped session from starting.
+  const concordia = await tryRegisterConcordia(meta, provider);
 
   if (concordia) {
     meta.session_id = concordia.id;
@@ -41,10 +43,18 @@ export async function runWrapped(args: string[]): Promise<void> {
   // Skill injection — pre-spawn writes go to <root>/.claude/skills/, and we
   // pass <root> to claude via --add-dir so it's scanned at boot. Mid-session
   // overwrites of existing SKILL.md files reload live via claude's watcher.
-  const sessionIdForSkills = concordia?.id ?? `lictor-${randomUUID()}`;
-  const injector = new SkillInjector(sessionIdForSkills);
-  seedSkills(injector, meta);
-  seedTaskProtocolSkill(injector);
+  // Skill injection: layout/scope depends on provider.skillStrategy.
+  //   - claude-add-dir: session-scoped dir, passed via --add-dir
+  //   - codex-user-agents: ~/.agents/skills/lictor-<sessionId>-<name>/, no spawn arg
+  //   - none: no injector
+  const sessionIdForSkills = (concordia?.id ?? `lictor-${randomUUID()}`).replace(/[^a-zA-Z0-9-]/g, "-");
+  const injector = provider.supportsSkills
+    ? new SkillInjector(sessionIdForSkills, provider.skillStrategy)
+    : null;
+  if (injector) {
+    seedSkills(injector, meta);
+    seedTaskProtocolSkill(injector);
+  }
 
   // ptyWriter is wired into ctx so sidecar endpoints (e.g. /v1/rename) can
   // inject keystrokes into claude's TUI input stream. Assigned after the pty
@@ -132,11 +142,18 @@ export async function runWrapped(args: string[]): Promise<void> {
   pollTimer?.unref?.();
   if (concordia) pollLiveState(ctx).catch(() => {});
 
+  process.stderr.write(
+    `lictor: wrapping ${provider.displayName} (${provider.binary})${
+      concordia ? `, Concordia session ${concordia.id}` : ""
+    }\n`,
+  );
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     LICTOR_PORT: String(sidecar.port),
     LICTOR_PID: String(process.pid),
     LICTOR_SESSION_START: meta.start_iso,
+    LICTOR_PROVIDER: provider.name,
   };
   if (concordia) {
     env.LICTOR_SESSION_ID = concordia.id;
@@ -145,31 +162,36 @@ export async function runWrapped(args: string[]): Promise<void> {
     if (meta.role_label) env.LICTOR_ROLE_LABEL = meta.role_label;
   }
 
-  // Write a per-session settings.json that wires PreToolUse to our
-  // permission-hook bridge. Only do this when Concordia is up — without it
-  // the hook would always fall through, so there's no point asking claude
-  // to call it. Failure to write the file is non-fatal (we just skip the
-  // --settings flag).
+  // Spawn-arg injection. Two pieces compose here:
+  //   1. --add-dir <sessionDir> for the claude-add-dir strategy (Codex
+  //      auto-walks ~/.agents/skills/ so the flag is omitted there).
+  //   2. --settings <path> wiring claude's PreToolUse to our permission-hook
+  //      bridge. Only applies when Concordia is up AND we have an injector
+  //      (i.e. a real session dir to write the settings file into). For
+  //      Codex we skip — claude's --settings flag is not portable.
+  const providerArgs =
+    provider.skillStrategy === "claude-add-dir" && injector
+      ? ["--add-dir", injector.sessionDir, ...args]
+      : [...args];
+
   let extraSettingsPath: string | null = null;
-  if (concordia) {
+  if (concordia && injector && provider.name === "claude") {
     try {
       extraSettingsPath = writePermissionHookSettings(injector.sessionDir);
     } catch (err) {
-      process.stderr.write(`lictor: permission-hook settings write failed: ${(err as Error).message}\n`);
+      process.stderr.write(
+        `lictor: permission-hook settings write failed: ${(err as Error).message}\n`,
+      );
     }
   }
-
-  // Prepend --add-dir <sessionDir> so claude scans our injected skill dir.
-  // Append --settings <path> when we wrote a hook-config file.
-  const claudeArgs = ["--add-dir", injector.sessionDir, ...args];
-  if (extraSettingsPath) claudeArgs.push("--settings", extraSettingsPath);
+  if (extraSettingsPath) providerArgs.push("--settings", extraSettingsPath);
 
   // node-pty on Windows uses CreateProcessW which does not auto-resolve .cmd
-  // extensions. `claude` ships as `claude.cmd` in npm global bin, so wrap via
-  // cmd.exe; on POSIX, spawn claude directly.
+  // extensions. CLI bins ship as `<name>.cmd` in npm global bin, so wrap via
+  // cmd.exe; on POSIX, spawn the binary directly.
   const isWindows = process.platform === "win32";
-  const ptyFile = isWindows ? process.env.ComSpec ?? "cmd.exe" : "claude";
-  const ptyArgs = isWindows ? ["/d", "/s", "/c", "claude", ...claudeArgs] : claudeArgs;
+  const ptyFile = isWindows ? process.env.ComSpec ?? "cmd.exe" : provider.binary;
+  const ptyArgs = isWindows ? ["/d", "/s", "/c", provider.binary, ...providerArgs] : providerArgs;
 
   const { cols, rows } = currentSize();
   const child = pty.spawn(ptyFile, ptyArgs, {
@@ -249,7 +271,7 @@ export async function runWrapped(args: string[]): Promise<void> {
     concordia?.liveness.close();
     sidecar.close();
     resetTitle();
-    injector.cleanup();
+    injector?.cleanup();
     stdin.off("data", onStdin);
     process.stdout.off("resize", onResize);
     if (stdin.isTTY) {
@@ -375,7 +397,7 @@ interface ConcordiaSlot {
   liveness: LivenessHandle;
 }
 
-async function tryRegisterConcordia(meta: Meta): Promise<ConcordiaSlot | null> {
+async function tryRegisterConcordia(meta: Meta, provider: ProviderConfig): Promise<ConcordiaSlot | null> {
   const cfg = loadConcordiaConfig();
   if (!cfg.enabled) return null;
   const client = new ConcordiaClient(cfg);
@@ -384,7 +406,7 @@ async function tryRegisterConcordia(meta: Meta): Promise<ConcordiaSlot | null> {
     const stat0 = gatherRepoStat(meta.cwd);
     const registered = await client.register({
       id,
-      provider: "claude-code",
+      provider: provider.concordiaProvider,
       repo_path: meta.cwd,
       host: meta.hostname,
       branch: stat0.branch ?? undefined,
