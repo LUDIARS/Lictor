@@ -50,6 +50,42 @@ export interface ProviderConfig {
   concordiaProvider: string;
   /** Human-readable, used in startup banners + auto-title fallback. */
   displayName: string;
+  /**
+   * Concordia の session.inject 受信時に wrapped CLI へ「テキスト + submit キー」
+   * をどう pty に書くかを provider 別に切り替えるための関数.
+   *
+   *  - claude: text と \r をまとめて 1 write — pty 上で 1 行の入力 + Enter として
+   *    認識される (現行動作).
+   *  - codex:  text と \r を分けて、 さらに微小 delay を挟む. codex CLI
+   *    (crossterm + ratatui) は 1 chunk に text + \r があると \r を「入力 buffer
+   *    への改行」として食ってしまい submit されないため.
+   *
+   * 引数の `write` は ptyWriter (= node-pty IPty.write). 戻り値は async でも
+   * sync でもよい (呼び出し側は await しない fire-and-forget).
+   */
+  submitInject: (write: (data: string) => void, text: string) => void;
+}
+
+/**
+ * 既定の単発書き戦略. text + \r を 1 chunk で pty に流す.
+ * Claude Code / Gemini CLI 等、 「最終文字が \r なら Enter として認識する」 系の
+ * TUI 向け.
+ */
+function submitInjectSingleWrite(write: (data: string) => void, text: string): void {
+  write(text + "\r");
+}
+
+/**
+ * Codex CLI 向け 2 段書き. text を流し → CODEX_INJECT_DELAY_MS だけ待ち →
+ * \r だけを流す. crossterm の event loop が text 入力イベントと Enter キー
+ * イベントを別物として認識してくれるよう間を空ける. delay は env override 可
+ * (LICTOR_CODEX_INJECT_DELAY_MS, default 30).
+ */
+function submitInjectTwoStep(write: (data: string) => void, text: string): void {
+  write(text);
+  const delay = Number(process.env.LICTOR_CODEX_INJECT_DELAY_MS ?? "30");
+  const ms = Number.isFinite(delay) && delay >= 0 ? delay : 30;
+  setTimeout(() => write("\r"), ms);
 }
 
 export const PROVIDERS: Record<string, ProviderConfig> = {
@@ -60,6 +96,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     supportsSkills: true,
     concordiaProvider: "claude-code",
     displayName: "Claude Code",
+    submitInject: submitInjectSingleWrite,
   },
   codex: {
     name: "codex",
@@ -72,6 +109,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     supportsSkills: true,
     concordiaProvider: "codex-cli",
     displayName: "OpenAI Codex",
+    submitInject: submitInjectTwoStep,
   },
   gemini: {
     name: "gemini",
@@ -83,6 +121,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     supportsSkills: false,
     concordiaProvider: "gemini-cli",
     displayName: "Gemini CLI",
+    submitInject: submitInjectSingleWrite,
   },
 };
 

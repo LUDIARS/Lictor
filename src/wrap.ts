@@ -121,15 +121,19 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         onInject: (text, source) => {
           if (!ctx.ptyWriter) return;
           // Reuse the same sanitizer as /v1/keys — TUI-safe controls only.
-          // Append \r so the line submits as a single user input rather than
-          // sitting in the prompt buffer waiting for Enter.
+          // 「テキスト本文 + submit キー」 の組み立て方は provider に委譲する.
+          //   claude / gemini : text + \r を 1 chunk write (現行動作)
+          //   codex           : text → 30ms 遅延 → \r の 2 段書き. crossterm
+          //                     event loop が 「入力」 と 「Enter キーイベント」
+          //                     を別個と認識するよう間を空ける.
           const safe = sanitizeKeySeq(text);
           if (!safe) return;
-          ctx.ptyWriter(safe + "\r");
+          const writer = ctx.ptyWriter;
+          provider.submitInject(writer, safe);
           // Telemetry breadcrumb — surface that the inject landed so the
           // user can see who pushed what without trawling Concordia logs.
           process.stderr.write(
-            `lictor: injected ${safe.length} bytes from Concordia (source=${source ?? "?"})\n`,
+            `lictor: injected ${safe.length} bytes from Concordia (source=${source ?? "?"}, provider=${provider.name})\n`,
           );
         },
       }),
