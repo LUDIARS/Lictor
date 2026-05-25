@@ -39,3 +39,30 @@ test("getProvider: unknown returns null", () => {
   assert.equal(getProvider("gpt-cli"), null);
   assert.equal(getProvider(""), null);
 });
+
+test("submitInject(claude): 1 chunk で text + \\r を書く", () => {
+  const writes: string[] = [];
+  PROVIDERS.claude.submitInject((d) => writes.push(d), "hello");
+  assert.deepEqual(writes, ["hello\r"]);
+});
+
+test("submitInject(gemini): claude と同じ単発書き", () => {
+  const writes: string[] = [];
+  PROVIDERS.gemini.submitInject((d) => writes.push(d), "hi");
+  assert.deepEqual(writes, ["hi\r"]);
+});
+
+test("submitInject(codex): text 即時 + \\r が delay 後 (2 段)", async () => {
+  process.env.LICTOR_CODEX_INJECT_DELAY_MS = "5";
+  try {
+    const writes: string[] = [];
+    PROVIDERS.codex.submitInject((d) => writes.push(d), "hello");
+    // 即時にテキストだけが入っている
+    assert.deepEqual(writes, ["hello"]);
+    // delay 経過後に \r が単体で追加される
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(writes, ["hello", "\r"]);
+  } finally {
+    delete process.env.LICTOR_CODEX_INJECT_DELAY_MS;
+  }
+});
