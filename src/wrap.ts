@@ -229,11 +229,14 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       cwd: meta.cwd,
       sessionId: concordia.id,
       concordiaBaseUrl: `http://${process.env.CONCORDIA_HOST ?? "127.0.0.1"}:${process.env.CONCORDIA_PORT ?? "17330"}`,
+      provider,
     });
-    // active-repos watcher が transcript-tail 経由で Claude UUID を引けるよう
+    // active-repos watcher が transcript-tail 経由で session UUID を引けるよう
     // ctx に getter を差す. transcript-tail が JSONL を発見するまで null を返す.
+    // claude / codex 両 provider の filename 規約は provider.extractSessionId
+    // が抽象化する.
     const tail = transcriptTail;
-    ctx.getClaudeSessionId = () => tail.getClaudeSessionId();
+    ctx.getClaudeSessionId = () => tail.getSessionUuid();
   }
 
   // pty → real terminal stdout.

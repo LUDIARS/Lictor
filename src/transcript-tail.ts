@@ -1,14 +1,15 @@
 /**
- * Tail Claude Code's session JSONL and relay each line to Concordia as a
- * `transcript-frame`. Lets a remote viewer (Concordia Web UI) see what the
- * wrapped session is doing without parsing the TUI output.
+ * Tail the wrapped agent's session JSONL and relay each line to Concordia
+ * as a `transcript-frame`. Lets a remote viewer (Concordia Web UI) see what
+ * the wrapped session is doing without parsing the TUI output.
  *
- * Discovery: Claude writes its session to
- *   ~/.claude/projects/<cwdEncoded>/<claude-session-uuid>.jsonl
- * The UUID isn't exposed to the parent process, so we discover the file by
- * watching the projects/<cwdEncoded>/ directory after spawn and picking
- * the .jsonl that is created or modified within a short grace window. This
- * is the same trick HAPPY uses for its local-mode transcript ingest.
+ * Provider 別の discovery / parser:
+ *
+ *  - Claude Code: `~/.claude/projects/<cwdEncoded>/<uuid>.jsonl`
+ *  - OpenAI Codex CLI: `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ISO>-<uuid>.jsonl`
+ *
+ * Provider config が `transcriptDir` を `null` で返す場合 (e.g. Gemini) は
+ * transcript-tail は no-op で起動する (frame は流れない).
  *
  * Polling vs fs.watch: Windows fs.watch fires inconsistently on append-only
  * files (sometimes only on rename / close), so we use a 500ms poll loop to
@@ -20,23 +21,25 @@
  * Web UI re-reads the JSONL via session detail GETs if it wants history.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, type Stats } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
-import { cwdToProjectKey } from "./memory-loader.js";
+import type { ProviderConfig } from "./provider.js";
 
 const DISCOVERY_WINDOW_MS = 30_000; // pick a .jsonl created/modified within 30s of start
 const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
+const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
 
 export interface TranscriptTailHandle {
   stop: () => void;
   /**
-   * Claude が JSONL を書き始めた後 (= 初回 discover 成功後) に Claude 自身の
-   * session UUID を返す. ファイル名 `<uuid>.jsonl` から抽出. 未発見なら null.
-   * active-repos watcher 等、 Claude の hook が SID 単位で書き出すファイルを
-   * 読みたいモジュールが参照する.
+   * Session JSONL を discover 済の場合に session UUID を返す.
+   * provider.extractSessionId に従って filename から抽出.
+   * 未発見なら null. active-repos watcher 等、 SID 単位で書き出される
+   * 補助ファイルを引きたいモジュールが参照する.
    */
+  getSessionUuid: () => string | null;
+  /** Backward-compat alias for getSessionUuid (sidecar context が古い名前で参照する). */
   getClaudeSessionId: () => string | null;
 }
 
@@ -44,10 +47,11 @@ export interface TranscriptTailOptions {
   cwd: string;
   sessionId: string;
   concordiaBaseUrl: string;
+  provider: ProviderConfig;
 }
 
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
-  const dir = join(homedir(), ".claude", "projects", cwdToProjectKey(opts.cwd));
+  const dir = opts.provider.transcriptDir(opts.cwd);
   let jsonlPath: string | null = null;
   let offset = 0;
   let seq = 0;
@@ -55,25 +59,30 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   let stopped = false;
   const startedAt = Date.now();
 
+  // provider.transcriptDir が null を返す provider (Gemini 等) は no-op handle.
+  if (!dir) {
+    return {
+      stop: () => {
+        stopped = true;
+      },
+      getSessionUuid: () => null,
+      getClaudeSessionId: () => null,
+    };
+  }
+
   const discover = (): string | null => {
     if (!existsSync(dir)) return null;
-    let best: { path: string; mtime: number } | null = null;
-    for (const name of readdirSync(dir)) {
-      if (!name.endsWith(".jsonl")) continue;
-      const p = join(dir, name);
-      try {
-        const st = statSync(p);
-        const mtimeMs = st.mtimeMs;
-        // Only consider files touched after lictor started (avoids resuming
-        // old sessions that happen to live in the same project dir).
-        if (mtimeMs < startedAt - 5_000) continue;
-        if (Date.now() - mtimeMs > DISCOVERY_WINDOW_MS) continue;
-        if (!best || mtimeMs > best.mtime) best = { path: p, mtime: mtimeMs };
-      } catch {
-        // file vanished between readdir + stat — ignore
-      }
-    }
-    return best?.path ?? null;
+    type Best = { path: string; mtime: number };
+    let best: Best | null = null;
+    walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => {
+      const mtimeMs = st.mtimeMs;
+      // Only consider files touched after lictor started (avoids resuming
+      // old sessions that happen to live in the same project dir).
+      if (mtimeMs < startedAt - 5_000) return;
+      if (Date.now() - mtimeMs > DISCOVERY_WINDOW_MS) return;
+      if (!best || mtimeMs > best.mtime) best = { path: p, mtime: mtimeMs };
+    });
+    return best ? (best as Best).path : null;
   };
 
   const pollOnce = async (): Promise<void> => {
@@ -115,29 +124,69 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   }, POLL_INTERVAL_MS);
   timer.unref?.();
 
+  const getSessionUuid = (): string | null => {
+    if (!jsonlPath) return null;
+    const slash = jsonlPath.lastIndexOf("/");
+    const back = jsonlPath.lastIndexOf("\\");
+    let base = jsonlPath.slice(Math.max(slash, back) + 1);
+    if (base.endsWith(".jsonl")) base = base.slice(0, -".jsonl".length);
+    return opts.provider.extractSessionId(base);
+  };
+
   return {
     stop: () => {
       stopped = true;
       clearInterval(timer);
     },
-    getClaudeSessionId: () => {
-      if (!jsonlPath) return null;
-      // jsonlPath は ".../<uuid>.jsonl" 形式. basename + 拡張子削除で UUID.
-      const slash = jsonlPath.lastIndexOf("/");
-      const back = jsonlPath.lastIndexOf("\\");
-      const base = jsonlPath.slice(Math.max(slash, back) + 1);
-      return base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
-    },
+    getSessionUuid,
+    getClaudeSessionId: getSessionUuid,
   };
+}
+
+/**
+ * 再帰的に .jsonl を探す helper. depth で打ち止め (無限再帰防止).
+ * mtime コールバックでフィルタ + 候補ピック.
+ */
+function walkJsonl(
+  root: string,
+  depth: number,
+  visit: (path: string, st: Stats) => void,
+): void {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (depth > 0) walkJsonl(full, depth - 1, visit);
+      continue;
+    }
+    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+    try {
+      const st: Stats = statSync(full);
+      visit(full, st);
+    } catch {
+      // file vanished between readdir + stat — ignore
+    }
+  }
 }
 
 interface Frame { kind: string; payload: unknown }
 
 /**
- * Convert one JSONL line (a SDKMessage from claude-agent-sdk) into the
- * slim envelope Concordia broadcasts. The full SDK message is heavy and
- * not currently rendered by the Web UI; we extract the most relevant
- * fields per common type. Unknown types fall through to `raw`.
+ * Convert one JSONL line into the slim envelope Concordia broadcasts.
+ *
+ * Claude Code 形式と OpenAI Codex CLI 形式を両方サポート:
+ *  - Claude : `{type:"user"|"assistant", message:{role,content:[...]}, uuid}`
+ *           : `{type:"summary"|"system"|...}`
+ *  - Codex  : `{timestamp, type:"response_item", payload:{type:"message", role, content:[{type:"input_text"|"output_text", text}]}}`
+ *           : `{timestamp, type:"event_msg", payload:{type:"user_message"|"agent_message", message}}`
+ *           : `{timestamp, type:"session_meta"|"turn_context", payload:{...}}`
+ *
+ * 未知の type は最後に `raw` frame として落とす.
  */
 export function lineToFrame(line: string): Frame | null {
   let msg: any;
@@ -148,15 +197,12 @@ export function lineToFrame(line: string): Frame | null {
   }
   if (!msg || typeof msg !== "object") return null;
 
-  // Claude Code session JSONL stores conversation messages with shapes like:
-  //   {type: "user",      message: {role, content: [{type, text|...}]}}
-  //   {type: "assistant", message: {role, content: [...]}}
-  //   {type: "summary"|"system"|"tool_use_result"|...}
   const type = typeof msg.type === "string" ? msg.type : "unknown";
 
-  // Claude's per-message uuid — used by PR-F as a fork anchor.
+  // Claude per-message uuid — used by PR-F as a fork anchor.
   const claudeUuid = typeof msg.uuid === "string" ? msg.uuid : null;
 
+  // ─── Claude Code 形式 ────────────────────────────────────────────────
   if (type === "user" || type === "assistant") {
     const content = msg.message?.content;
     if (Array.isArray(content)) {
@@ -198,49 +244,88 @@ export function lineToFrame(line: string): Frame | null {
     return { kind: "system", payload: { text: String(msg.text ?? msg.content ?? "").slice(0, 400) } };
   }
 
-  // Provider-agnostic fallback (Codex など).
-  // Claude 形式以外でも `role=user|assistant` + text が取れる形なら text frame 化する.
-  const role = inferRole(msg);
-  if (role === "user" || role === "assistant") {
-    const text = extractText(msg);
-    if (text) {
-      return { kind: "text", payload: { role, text: text.slice(0, 4000) } };
+  // ─── Codex CLI 形式 ─────────────────────────────────────────────────
+  // event_msg.user_message / agent_message は agent 内部処理を経た「ユーザ
+  // 視点のメッセージ」 なので、 これを優先的に text frame 化する.
+  if (type === "event_msg" && msg.payload && typeof msg.payload === "object") {
+    const p: any = msg.payload;
+    const pType = typeof p.type === "string" ? p.type : "";
+    if (pType === "user_message" && typeof p.message === "string") {
+      return { kind: "text", payload: { role: "user", text: p.message.slice(0, 4000) } };
+    }
+    if (pType === "agent_message" && typeof p.message === "string") {
+      return { kind: "text", payload: { role: "assistant", text: p.message.slice(0, 4000) } };
+    }
+    // task_started, tool_call, etc. は raw 扱い (将来必要なら拡張).
+  }
+
+  // response_item は SDK レベルの 生 message. event_msg と二重に流すと
+  // Web UI で重複するが、 system/developer メッセージ等は event_msg に乗らない
+  // ので、 重複は許容して両方流す方が情報量が多い.
+  if (type === "response_item" && msg.payload && typeof msg.payload === "object") {
+    const p: any = msg.payload;
+    const pType = typeof p.type === "string" ? p.type : "";
+    if (pType === "message") {
+      const role = normalizeCodexRole(p.role);
+      if (role) {
+        const text = extractCodexMessageText(p.content);
+        if (text) return { kind: "text", payload: { role, text: text.slice(0, 4000) } };
+      }
+    }
+    if (pType === "reasoning") {
+      // reasoning は encrypted_content しか持たない場合がある.
+      // summary 配列に preview があれば優先、 無ければ「reasoning」 のみ.
+      const summary = Array.isArray(p.summary) ? p.summary : [];
+      const previewParts: string[] = [];
+      for (const s of summary) {
+        if (typeof s === "string") previewParts.push(s);
+        else if (typeof s?.text === "string") previewParts.push(s.text);
+      }
+      const preview = previewParts.join(" ").slice(0, 400);
+      return { kind: "thinking", payload: { role: "assistant", preview: preview || "(encrypted)" } };
     }
   }
 
   return { kind: "raw", payload: { type, keys: Object.keys(msg).slice(0, 8) } };
 }
 
-function inferRole(msg: any): "user" | "assistant" | null {
-  const r1 = typeof msg?.role === "string" ? msg.role : null;
-  const r2 = typeof msg?.message?.role === "string" ? msg.message.role : null;
-  const r3 = typeof msg?.author?.role === "string" ? msg.author.role : null;
-  const r = (r1 ?? r2 ?? r3 ?? "").toLowerCase();
+/**
+ * Codex の `payload.role` を Concordia の text frame role に正規化.
+ * `developer` / `system` は assistant 扱いから外して raw に落とすため null を返す.
+ */
+function normalizeCodexRole(role: unknown): "user" | "assistant" | null {
+  if (typeof role !== "string") return null;
+  const r = role.toLowerCase();
   if (r === "user") return "user";
   if (r === "assistant") return "assistant";
   return null;
 }
 
-function extractText(msg: any): string | null {
-  // Most common: direct string content.
-  if (typeof msg?.text === "string" && msg.text.trim()) return msg.text;
-  if (typeof msg?.content === "string" && msg.content.trim()) return msg.content;
-  if (typeof msg?.message?.content === "string" && msg.message.content.trim()) return msg.message.content;
-
-  // Array content variants: ["..."] or [{text:"..."}, {type:"text",text:"..."}]
-  const candidates = [msg?.content, msg?.message?.content];
-  for (const c of candidates) {
-    if (!Array.isArray(c)) continue;
-    const out: string[] = [];
-    for (const part of c) {
-      if (typeof part === "string" && part.trim()) out.push(part);
-      else if (typeof part?.text === "string" && part.text.trim()) out.push(part.text);
-      else if (part?.type === "text" && typeof part?.text === "string" && part.text.trim()) out.push(part.text);
-      else if (typeof part?.content === "string" && part.content.trim()) out.push(part.content);
+/**
+ * Codex message の content 配列から表示用テキストを抽出.
+ *
+ *  - `[{type:"input_text",  text}]` — user message
+ *  - `[{type:"output_text", text}]` — assistant message
+ *  - `[{type:"text",        text}]` — provider 共通保険
+ *  - `["..."]` — 文字列直挿し (まずあり得ないが念のため)
+ */
+function extractCodexMessageText(content: unknown): string | null {
+  if (typeof content === "string" && content.trim()) return content;
+  if (!Array.isArray(content)) return null;
+  const out: string[] = [];
+  for (const part of content) {
+    if (typeof part === "string" && part.trim()) {
+      out.push(part);
+      continue;
     }
-    if (out.length > 0) return out.join("\n");
+    if (part && typeof part === "object") {
+      const t = (part as any).type;
+      const text = (part as any).text;
+      if (typeof text !== "string" || !text.trim()) continue;
+      if (t === "input_text" || t === "output_text" || t === "text") out.push(text);
+    }
   }
-  return null;
+  return out.length > 0 ? out.join("\n") : null;
 }
 
 function previewJson(v: unknown): string {
