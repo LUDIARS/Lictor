@@ -80,9 +80,16 @@ function submitInjectSingleWrite(write: (data: string) => void, text: string): v
  * \r だけを流す. crossterm の event loop が text 入力イベントと Enter キー
  * イベントを別物として認識してくれるよう間を空ける. delay は env override 可
  * (LICTOR_CODEX_INJECT_DELAY_MS, default 30).
+ *
+ * 末尾の \r/\n は本文から剥がしてから書く. text 部に trailing newline が
+ * 残っていると codex 側の input buffer が「リテラル改行」 として吸収し、
+ * 続く \r を新規 Enter キーではなく改行の継続として扱って submit され
+ * ない事例があったため (2026-05-26 報告). 単独の \r を Enter として
+ * 明示するのがこの分割の主目的.
  */
 function submitInjectTwoStep(write: (data: string) => void, text: string): void {
-  write(text);
+  const body = text.replace(/[\r\n]+$/, "");
+  if (body) write(body);
   const delay = Number(process.env.LICTOR_CODEX_INJECT_DELAY_MS ?? "30");
   const ms = Number.isFinite(delay) && delay >= 0 ? delay : 30;
   setTimeout(() => write("\r"), ms);
