@@ -198,7 +198,49 @@ export function lineToFrame(line: string): Frame | null {
     return { kind: "system", payload: { text: String(msg.text ?? msg.content ?? "").slice(0, 400) } };
   }
 
+  // Provider-agnostic fallback (Codex など).
+  // Claude 形式以外でも `role=user|assistant` + text が取れる形なら text frame 化する.
+  const role = inferRole(msg);
+  if (role === "user" || role === "assistant") {
+    const text = extractText(msg);
+    if (text) {
+      return { kind: "text", payload: { role, text: text.slice(0, 4000) } };
+    }
+  }
+
   return { kind: "raw", payload: { type, keys: Object.keys(msg).slice(0, 8) } };
+}
+
+function inferRole(msg: any): "user" | "assistant" | null {
+  const r1 = typeof msg?.role === "string" ? msg.role : null;
+  const r2 = typeof msg?.message?.role === "string" ? msg.message.role : null;
+  const r3 = typeof msg?.author?.role === "string" ? msg.author.role : null;
+  const r = (r1 ?? r2 ?? r3 ?? "").toLowerCase();
+  if (r === "user") return "user";
+  if (r === "assistant") return "assistant";
+  return null;
+}
+
+function extractText(msg: any): string | null {
+  // Most common: direct string content.
+  if (typeof msg?.text === "string" && msg.text.trim()) return msg.text;
+  if (typeof msg?.content === "string" && msg.content.trim()) return msg.content;
+  if (typeof msg?.message?.content === "string" && msg.message.content.trim()) return msg.message.content;
+
+  // Array content variants: ["..."] or [{text:"..."}, {type:"text",text:"..."}]
+  const candidates = [msg?.content, msg?.message?.content];
+  for (const c of candidates) {
+    if (!Array.isArray(c)) continue;
+    const out: string[] = [];
+    for (const part of c) {
+      if (typeof part === "string" && part.trim()) out.push(part);
+      else if (typeof part?.text === "string" && part.text.trim()) out.push(part.text);
+      else if (part?.type === "text" && typeof part?.text === "string" && part.text.trim()) out.push(part.text);
+      else if (typeof part?.content === "string" && part.content.trim()) out.push(part.content);
+    }
+    if (out.length > 0) return out.join("\n");
+  }
+  return null;
 }
 
 function previewJson(v: unknown): string {
