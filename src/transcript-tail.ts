@@ -33,6 +33,11 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { ProviderConfig } from "./provider.js";
+import {
+  detectAskUserQuestion,
+  postPendingQuestion,
+  providerSupportsAskUserQuestion,
+} from "./ask-question-relay.js";
 
 const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
@@ -68,6 +73,9 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   let pending = "";
   let stopped = false;
   const startedAt = Date.now();
+  // AskUserQuestion tool は Claude Code 専用. Codex / Gemini provider のときは
+  // 検知を回避して JSON.parse の二度手間を避ける (= lineToFrame だけ走らせる).
+  const askUserQuestionEnabled = providerSupportsAskUserQuestion(opts.provider);
 
   // provider.transcriptDir が null を返す provider (Gemini 等) は no-op handle.
   if (!dir) {
@@ -143,6 +151,15 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     pending = lines.pop() ?? "";
     for (const line of lines) {
       if (!line.trim()) continue;
+      // AskUserQuestion tool_use を見つけたら、 transcript.frame の正規ルートとは別に
+      // Concordia の pending-question API に直接通知する. これで Discord 側 (bot.routeEvent)
+      // の question.posted listener が embed + button を session channel に出せるようになる.
+      if (askUserQuestionEnabled) {
+        const pq = detectAskUserQuestion(line);
+        if (pq) {
+          void postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, pq);
+        }
+      }
       const frame = lineToFrame(line);
       if (!frame) continue;
       const seqNum = seq++;
