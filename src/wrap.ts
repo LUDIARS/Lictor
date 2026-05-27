@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import * as pty from "node-pty";
-import { sanitizeKeySeq, startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
+import { buildAnswerSequence, sanitizeKeySeq, startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
 import { gatherBaseMeta, type Meta } from "./meta.js";
 import { resetTitle } from "./osc.js";
 import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./concordia.js";
@@ -139,6 +139,24 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           // user can see who pushed what without trawling Concordia logs.
           process.stderr.write(
             `lictor: injected ${safe.length} bytes from Concordia (source=${source ?? "?"}, provider=${provider.name})\n`,
+          );
+        },
+        onAnswerQuestion: (answerIndex) => {
+          if (!ctx.ptyWriter) return;
+          // Concordia carries 0-based answer_index; buildAnswerSequence is
+          // 1-based ([1, 50]). Clamp the upper bound here so a malformed
+          // event can't push the picker past option 50.
+          const choice = answerIndex + 1;
+          if (choice < 1 || choice > 50) return;
+          let seq: string;
+          try {
+            seq = buildAnswerSequence(choice);
+          } catch {
+            return;
+          }
+          ctx.ptyWriter(seq);
+          process.stderr.write(
+            `lictor: confirmed AskUserQuestion picker via Concordia (answer_index=${answerIndex}, provider=${provider.name})\n`,
           );
         },
       }),

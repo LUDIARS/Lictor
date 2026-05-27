@@ -125,6 +125,59 @@ test("reactToEvent: session.inject defaults source to null when missing", () => 
   assert.deepEqual(ctx.injectCalls, [{ text: "hi", source: null }]);
 });
 
+test("reactToEvent: question.answered with matching id calls onAnswerQuestion", () => {
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    {
+      type: "question.answered",
+      target_session_id: "me",
+      question_id: 7,
+      answer_index: 2,
+      answer_text: "third option",
+      ts: 1,
+    },
+    ctx,
+  );
+  assert.deepEqual(ctx.answerQuestionCalls, [2]);
+});
+
+test("reactToEvent: question.answered for a different session is ignored", () => {
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    { type: "question.answered", target_session_id: "someone-else", answer_index: 0, ts: 1 },
+    ctx,
+  );
+  assert.equal(ctx.answerQuestionCalls.length, 0);
+});
+
+test("reactToEvent: question.answered with non-integer answer_index is dropped", () => {
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    { type: "question.answered", target_session_id: "me", answer_index: 1.5, ts: 1 },
+    ctx,
+  );
+  reactToEvent(
+    { type: "question.answered", target_session_id: "me", answer_index: "0", ts: 1 },
+    ctx,
+  );
+  reactToEvent(
+    { type: "question.answered", target_session_id: "me", answer_index: -1, ts: 1 },
+    ctx,
+  );
+  assert.equal(ctx.answerQuestionCalls.length, 0);
+});
+
+test("reactToEvent: question.answered with index 0 (first option) still fires", () => {
+  // Edge case: 0-based first option must produce a call so the picker
+  // confirms the default selection (translates to plain Enter downstream).
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    { type: "question.answered", target_session_id: "me", answer_index: 0, ts: 1 },
+    ctx,
+  );
+  assert.deepEqual(ctx.answerQuestionCalls, [0]);
+});
+
 test("applyTitleWithMarks: respects manual override", () => {
   const titleState = { manualOverride: "[manual]" };
   // applyTitleWithMarks is a no-op when there's a manual override; we
@@ -150,6 +203,8 @@ interface FakeReactorCtx {
   onPendingTaskHintCalled: number;
   onInject: (text: string, source: string | null) => void;
   injectCalls: Array<{ text: string; source: string | null }>;
+  onAnswerQuestion: (answerIndex: number) => void;
+  answerQuestionCalls: number[];
 }
 
 function makeReactorCtx(opts: { ownSessionId?: string | null }): FakeReactorCtx {
@@ -171,6 +226,10 @@ function makeReactorCtx(opts: { ownSessionId?: string | null }): FakeReactorCtx 
       ctx.injectCalls.push({ text, source });
     },
     injectCalls: [],
+    onAnswerQuestion: (answerIndex) => {
+      ctx.answerQuestionCalls.push(answerIndex);
+    },
+    answerQuestionCalls: [],
   };
   return ctx;
 }

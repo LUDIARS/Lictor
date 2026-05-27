@@ -40,6 +40,14 @@ export interface ReactorContext {
    * input. Null when ptyWriter isn't available (smoke harness, pre-spawn).
    */
   onInject?: (text: string, source: string | null) => void;
+  /**
+   * Called when a Concordia `question.answered` event arrives with a
+   * matching `target_session_id`. `answerIndex` is 0-based (matching the
+   * options[] order in the original AskUserQuestion). wrap.ts wires this
+   * to feed `(answerIndex × Down-Arrow) + Enter` into the pty so the
+   * picker confirms the same choice the user made in Discord.
+   */
+  onAnswerQuestion?: (answerIndex: number) => void;
 }
 
 /**
@@ -60,6 +68,22 @@ export function reactToEvent(ev: unknown, ctx: ReactorContext): void {
     if (typeof ev.text !== "string" || ev.text.length === 0) return;
     const source = typeof ev.source === "string" ? ev.source : null;
     ctx.onInject?.(ev.text, source);
+    return;
+  }
+
+  // question.answered — fired when an AskUserQuestion picker is answered
+  // remotely (Discord button / Web UI). Concordia carries the 0-based
+  // `answer_index` matching the original options[] order. Lictor feeds
+  // the same number of Down-Arrows + Enter into the pty so the picker
+  // resolves to the same choice locally. Without this branch the picker
+  // would just sit there and Claude's tool would never get a result —
+  // the user would have to navigate the picker by hand.
+  if (ev.type === "question.answered") {
+    if (typeof ev.target_session_id !== "string") return;
+    if (ev.target_session_id !== ctx.ownSessionId) return;
+    if (typeof ev.answer_index !== "number" || !Number.isInteger(ev.answer_index)) return;
+    if (ev.answer_index < 0) return;
+    ctx.onAnswerQuestion?.(ev.answer_index);
     return;
   }
 
