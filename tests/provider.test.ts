@@ -109,3 +109,83 @@ test("submitInject(codex): text が改行だけなら本文 write を skip し�
     delete process.env.LICTOR_CODEX_INJECT_DELAY_MS;
   }
 });
+
+test("submitInject(codex): write throw を握って Enter は投機的に続行する", async () => {
+  process.env.LICTOR_CODEX_INJECT_DELAY_MS = "5";
+  try {
+    const writes: string[] = [];
+    let bodyThrew = false;
+    PROVIDERS.codex.submitInject((d) => {
+      if (!bodyThrew) {
+        bodyThrew = true;
+        throw new Error("pty closed");
+      }
+      writes.push(d);
+    }, "hello");
+    // 本文 write は throw したが、 Enter scheduling は止まらない
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.deepEqual(writes, ["\r"]);
+  } finally {
+    delete process.env.LICTOR_CODEX_INJECT_DELAY_MS;
+  }
+});
+
+test("submitInject(codex): Enter write throw も swallow して未捕捉例外を出さない", async () => {
+  process.env.LICTOR_CODEX_INJECT_DELAY_MS = "5";
+  try {
+    // 全 write を throw させる. setTimeout 内で握り潰されること、
+    // 呼び出し側に例外伝播しないことを assert.
+    let caught: unknown = null;
+    const orig = process.listeners("uncaughtException");
+    process.removeAllListeners("uncaughtException");
+    process.once("uncaughtException", (e) => { caught = e; });
+    PROVIDERS.codex.submitInject(() => {
+      throw new Error("pty closed");
+    }, "hello");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(caught, null);
+    process.removeAllListeners("uncaughtException");
+    for (const l of orig) process.on("uncaughtException", l);
+  } finally {
+    delete process.env.LICTOR_CODEX_INJECT_DELAY_MS;
+  }
+});
+
+// ─── transcriptDir / extractSessionId resolvers ───────────────────────
+
+test("PROVIDERS.claude.transcriptDir resolves under ~/.claude/projects/", () => {
+  const dir = PROVIDERS.claude.transcriptDir("/tmp/some-repo");
+  assert.ok(dir !== null);
+  assert.match(dir!, /[\\/]\.claude[\\/]projects[\\/]/);
+});
+
+test("PROVIDERS.codex.transcriptDir resolves under ~/.codex/sessions/", () => {
+  const dir = PROVIDERS.codex.transcriptDir("/tmp/whatever");
+  assert.ok(dir !== null);
+  assert.match(dir!, /[\\/]\.codex[\\/]sessions$/);
+});
+
+test("PROVIDERS.gemini.transcriptDir returns null (no transcript support)", () => {
+  assert.equal(PROVIDERS.gemini.transcriptDir("/tmp/x"), null);
+});
+
+test("PROVIDERS.claude.extractSessionId pulls UUID from <uuid>.jsonl basename", () => {
+  // basename は jsonl 拡張子を除いたもの
+  assert.equal(
+    PROVIDERS.claude.extractSessionId("5d8f3a65-6129-4227-9bca-0b99db2742f2"),
+    "5d8f3a65-6129-4227-9bca-0b99db2742f2",
+  );
+});
+
+test("PROVIDERS.codex.extractSessionId pulls trailing UUID from rollout filename", () => {
+  assert.equal(
+    PROVIDERS.codex.extractSessionId("rollout-2026-05-27T06-43-18-019e663d-fb9a-7cd3-84fa-bc6648387ae9"),
+    "019e663d-fb9a-7cd3-84fa-bc6648387ae9",
+  );
+});
+
+test("PROVIDERS.*.extractSessionId returns null for non-matching names", () => {
+  assert.equal(PROVIDERS.claude.extractSessionId("not-a-uuid"), null);
+  assert.equal(PROVIDERS.codex.extractSessionId("rollout-without-uuid"), null);
+  assert.equal(PROVIDERS.gemini.extractSessionId("anything"), null);
+});
