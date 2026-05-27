@@ -1,6 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { resetTitle, setTitle } from "./osc.js";
+import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 import type { Meta } from "./meta.js";
 import type { ConcordiaClient } from "./concordia.js";
 import type { SkillInjector } from "./skill-injector.js";
@@ -118,6 +119,11 @@ async function handle(
 
   if (method === "GET" && url === "/v1/health") {
     writeJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (method === "GET" && url === "/v1/version") {
+    writeJson(res, 200, { name: LICTOR_NAME, version: LICTOR_VERSION });
     return;
   }
 

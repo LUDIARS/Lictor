@@ -2,6 +2,7 @@ import { runWrapped } from "./wrap.js";
 import { runClient } from "./client.js";
 import { getProvider } from "./provider.js";
 import { runPermissionHook } from "./permission-hook.js";
+import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 
 const HELP = `lictor — per-session sidecar for agent TUI CLIs (LUDIARS / Li)
 
@@ -22,6 +23,7 @@ Usage:
                                        claude.ai/code and the TUI prompt.
   lictor cli meta                      Print this session's meta as JSON.
   lictor cli health                    Ping the sidecar.
+  lictor cli version                   Print the running sidecar's lictor version (falls back to the local CLI version when not wrapped).
   lictor cli session                   Print Concordia session id / persona.
   lictor cli chat <channel> <text...>  Post to Concordia chat (author_label
                                        auto-filled from persona).
@@ -59,6 +61,7 @@ Usage:
   lictor cli {enter|down|up|esc}       One-key shortcuts (Enter, Down, Up, ESC).
 
   lictor --help                        Show this help.
+  lictor --version | -v                Print lictor version and exit.
 
 Notes:
   - \`lictor claude ...\` exports LICTOR_PORT, LICTOR_PID, LICTOR_SESSION_ID,
@@ -77,6 +80,11 @@ async function main() {
   const argv = process.argv.slice(2);
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     process.stdout.write(HELP);
+    process.exit(0);
+  }
+
+  if (argv[0] === "--version" || argv[0] === "-v") {
+    process.stdout.write(`${LICTOR_NAME} ${LICTOR_VERSION}\n`);
     process.exit(0);
   }
 

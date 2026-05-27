@@ -49,6 +49,7 @@ async function del(p) {
 
 const out = {
   health: await get("/v1/health"),
+  version: await get("/v1/version"),
   meta: await get("/v1/meta"),
   sessionInfo: await get("/v1/concordia/session"),
   titleOk: await post("/v1/title", { text: "[Li] smoke v0.2" }),
