@@ -1,8 +1,17 @@
 import http from "node:http";
 import { readFileSync } from "node:fs";
+import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 
 export async function runClient(args: string[]): Promise<void> {
   const [sub, ...rest] = args;
+
+  // `lictor cli version` must work without a sidecar — it's the same kind of
+  // CLI-introspection command as `--version`, and a hook that wants to log
+  // the version shouldn't fail just because no session is wrapped.
+  if (sub === "version") {
+    await cmdVersion(process.env.LICTOR_PORT);
+    return;
+  }
 
   const port = process.env.LICTOR_PORT;
   if (!port) {
@@ -86,10 +95,30 @@ export async function runClient(args: string[]): Promise<void> {
     default:
       process.stderr.write(
         `lictor cli: unknown subcommand '${sub ?? "(none)"}'.\n` +
-          `Available: title, title-auto, rename, meta, health, session, chat, event, conflicts, skill, task, state.\n`,
+          `Available: title, title-auto, rename, meta, health, session, chat, event, conflicts, skill, task, state, version.\n`,
       );
       process.exit(2);
   }
+}
+
+async function cmdVersion(port: string | undefined): Promise<void> {
+  // 1) Wrapped session: ask the sidecar for the running version. Useful when
+  //    the user has multiple lictor installs (npm link / global vs dev) and
+  //    wants to verify which one this session is actually running.
+  // 2) Standalone: fall back to the local CLI's version so this command never
+  //    fails — `lictor cli version` should behave like `--version` from any
+  //    context, including hooks that just want to log the version string.
+  if (port) {
+    try {
+      const reply = await getText(port, "/v1/version");
+      process.stdout.write(reply + "\n");
+      return;
+    } catch {
+      // Sidecar exists but version endpoint failed (old sidecar / network).
+      // Fall through to local version rather than crashing.
+    }
+  }
+  process.stdout.write(JSON.stringify({ name: LICTOR_NAME, version: LICTOR_VERSION }) + "\n");
 }
 
 async function cmdKeys(port: string, rest: string[]): Promise<void> {

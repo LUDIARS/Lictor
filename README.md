@@ -57,6 +57,10 @@ without the user touching the keyboard.
 # Wrap claude. Everything else (TTY, args, exit code, signals) is passed through.
 lictor claude
 
+# Print the lictor version (works from any context, no wrapped session needed).
+lictor --version
+lictor -v
+
 # From inside the resulting Claude Code session, in a Bash tool / hook:
 curl -s -X POST -H 'content-type: application/json' \
   -d '{"text":"[Cr] 認証 502 デバッグ"}' \
@@ -78,6 +82,7 @@ lictor cli conflicts                  # other sessions on the same repo
 | Method | Path                       | Body / params                          | Effect |
 |--------|----------------------------|----------------------------------------|--------|
 | GET    | `/v1/health`               | —                                      | `{"ok":true}` |
+| GET    | `/v1/version`              | —                                      | `{"name":"lictor","version":"<semver>"}` — version of the lictor binary running this sidecar (which can differ from a globally-installed `lictor` if you `npm link` from a checkout) |
 | GET    | `/v1/meta`                 | —                                      | Session meta + persona JSON |
 | GET    | `/v1/concordia/session`    | —                                      | `{session_id, persona, role_label, concordia_enabled}` |
 | POST   | `/v1/title`                | `{"text":"<title>"}`                   | Emit OSC 0 + set manual override |
