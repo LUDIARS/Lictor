@@ -34,7 +34,6 @@ import {
 import { join } from "node:path";
 import type { ProviderConfig } from "./provider.js";
 
-const DISCOVERY_WINDOW_MS = 30_000; // pick a .jsonl created/modified within 30s of start
 const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
 const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
@@ -96,8 +95,14 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       const mtimeMs = st.mtimeMs;
       // Only consider files touched after lictor started (avoids resuming
       // old sessions that happen to live in the same project dir).
+      //
+      // 旧実装は `Date.now() - mtimeMs > 30s` で「最近 30 秒以内に touch された
+      // ものに限る」 上限フィルタも持っていたが、 wrapped CLI がユーザ操作待ちで
+      // 何分も idle した後に初発話するケース (claude のセッション開始直後 +
+      // 数分黙考、 等) でも jsonl が生成された瞬間に拾えるよう撤廃した.
+      // 下限 (startedAt - 5s) だけで「過去のセッションの jsonl を誤って継承
+      // しない」 という本来の目的は満たせる。
       if (mtimeMs < startedAt - 5_000) return;
-      if (Date.now() - mtimeMs > DISCOVERY_WINDOW_MS) return;
       candidates.push({ path: p, mtime: mtimeMs });
     });
     candidates.sort((a, b) => b.mtime - a.mtime);
