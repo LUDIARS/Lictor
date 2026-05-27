@@ -84,3 +84,120 @@ test("lineToFrame: non-object JSON returns null", () => {
   assert.equal(lineToFrame("42"), null);
   assert.equal(lineToFrame("null"), null);
 });
+
+// ─── Codex CLI 形式 (rollout-*.jsonl) ──────────────────────────────────
+//
+// Codex は `{timestamp, type, payload}` の三段構成で、 user 発言は
+// event_msg.user_message / response_item.message+role=user の両方に出る.
+// 重複は許容して両方流す方針.
+
+test("lineToFrame: codex event_msg.user_message → text frame (user)", () => {
+  const f = lineToFrame(JSON.stringify({
+    timestamp: "2026-05-26T21:44:35.329Z",
+    type: "event_msg",
+    payload: { type: "user_message", message: "こんにちは", images: [] },
+  }));
+  assert.deepEqual(f, { kind: "text", payload: { role: "user", text: "こんにちは" } });
+});
+
+test("lineToFrame: codex event_msg.agent_message → text frame (assistant)", () => {
+  const f = lineToFrame(JSON.stringify({
+    timestamp: "2026-05-26T21:44:40.325Z",
+    type: "event_msg",
+    payload: { type: "agent_message", message: "了解しました", phase: "commentary" },
+  }));
+  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "了解しました" } });
+});
+
+test("lineToFrame: codex response_item.message(role=user,input_text) → text frame", () => {
+  const f = lineToFrame(JSON.stringify({
+    timestamp: "2026-05-26T21:44:35.329Z",
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "ユーザの入力" }],
+    },
+  }));
+  assert.deepEqual(f, { kind: "text", payload: { role: "user", text: "ユーザの入力" } });
+});
+
+test("lineToFrame: codex response_item.message(role=assistant,output_text) → text frame", () => {
+  const f = lineToFrame(JSON.stringify({
+    timestamp: "2026-05-26T21:44:40.325Z",
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "AIの出力" }],
+      phase: "commentary",
+    },
+  }));
+  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "AIの出力" } });
+});
+
+test("lineToFrame: codex response_item.reasoning → thinking frame", () => {
+  const f = lineToFrame(JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "reasoning",
+      summary: [],
+      content: null,
+      encrypted_content: "gAAAA...",
+    },
+  }));
+  assert.equal(f?.kind, "thinking");
+  const p = f?.payload as { role: string; preview: string };
+  assert.equal(p.role, "assistant");
+  assert.equal(p.preview, "(encrypted)");
+});
+
+test("lineToFrame: codex response_item.reasoning with summary preview", () => {
+  const f = lineToFrame(JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "reasoning",
+      summary: ["仕様を確認した", { text: "次にビルドを試す" }],
+    },
+  }));
+  assert.equal(f?.kind, "thinking");
+  const p = f?.payload as { preview: string };
+  assert.equal(p.preview, "仕様を確認した 次にビルドを試す");
+});
+
+test("lineToFrame: codex response_item.message with developer role falls through to raw", () => {
+  // role=developer/system は user/assistant ではないので text 化せず raw に落とす.
+  const f = lineToFrame(JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "<permissions instructions>..." }],
+    },
+  }));
+  assert.equal(f?.kind, "raw");
+});
+
+test("lineToFrame: codex session_meta is raw", () => {
+  const f = lineToFrame(JSON.stringify({
+    timestamp: "2026-05-26T21:44:34.646Z",
+    type: "session_meta",
+    payload: { id: "019e663d-...", cwd: "E:\\Document\\Ars" },
+  }));
+  assert.equal(f?.kind, "raw");
+});
+
+test("lineToFrame: codex multi-part content joins with newline", () => {
+  const f = lineToFrame(JSON.stringify({
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "first" },
+        { type: "input_text", text: "second" },
+      ],
+    },
+  }));
+  assert.deepEqual(f, { kind: "text", payload: { role: "user", text: "first\nsecond" } });
+});
