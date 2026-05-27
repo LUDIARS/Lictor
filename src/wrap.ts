@@ -18,6 +18,11 @@ import { refreshConflictState } from "./conflict-watcher.js";
 import { refreshPendingTasksSkill } from "./pending-tasks.js";
 import { newTaskState, relayTask, seedTaskProtocolSkill } from "./task-relay.js";
 import { writeSessionStateSkill } from "./session-state-skill.js";
+import {
+  SESSION_END_SKILL_BODY,
+  SESSION_END_SKILL_DESCRIPTION,
+  SESSION_END_SKILL_NAME,
+} from "./session-end-skill.js";
 import { type ProviderConfig, PROVIDERS } from "./provider.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
 import {
@@ -525,6 +530,23 @@ function seedSkills(injector: SkillInjector, meta: Meta): void {
     }
   } catch (err) {
     process.stderr.write(`lictor: skill seed (memory) failed: ${(err as Error).message}\n`);
+  }
+
+  // session-end skill: provider 横断で「終了処理」 フローを inject.
+  // Claude には slash command (`.claude/commands/session-end.md`) があるが、
+  // Codex には slash command 機構が無いため、 同等のフローを skill として配布.
+  // 冒頭の ack 出力 + 独白生成を provider 不問で AI 自身に回させる.
+  try {
+    injector.writeSkill(
+      SESSION_END_SKILL_NAME,
+      renderSkillMd({
+        name: SESSION_END_SKILL_NAME,
+        description: SESSION_END_SKILL_DESCRIPTION,
+        body: SESSION_END_SKILL_BODY,
+      }),
+    );
+  } catch (err) {
+    process.stderr.write(`lictor: skill seed (session-end) failed: ${(err as Error).message}\n`);
   }
 }
 

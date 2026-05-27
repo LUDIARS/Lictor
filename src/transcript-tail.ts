@@ -21,7 +21,16 @@
  * Web UI re-reads the JSONL via session detail GETs if it wants history.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync, type Stats } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  type Stats,
+} from "node:fs";
 import { join } from "node:path";
 import type { ProviderConfig } from "./provider.js";
 
@@ -29,6 +38,7 @@ const DISCOVERY_WINDOW_MS = 30_000; // pick a .jsonl created/modified within 30s
 const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
 const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
+const STALE_CLAIM_MS = 60 * 60 * 1000; // 1h 経った claim は wrapper クラッシュ残骸とみなす
 
 export interface TranscriptTailHandle {
   stop: () => void;
@@ -53,6 +63,7 @@ export interface TranscriptTailOptions {
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
   const dir = opts.provider.transcriptDir(opts.cwd);
   let jsonlPath: string | null = null;
+  let claimPath: string | null = null;
   let offset = 0;
   let seq = 0;
   let pending = "";
@@ -70,19 +81,34 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     };
   }
 
+  // 同 cwd で複数 lictor wrapper が並走するとき、 mtime 最新だけで pick すると
+  // 全 wrapper が同じ jsonl を読んで「他セッションの transcript を自分の session_id
+  // で Concordia に送る」 race を起こす. 結果として AI 応答が別 channel に混在する.
+  //
+  // 各 jsonl に sidecar の `<path>.lictor-claim` を atomic create (`wx`) で配置し、
+  // 取れた wrapper だけがその jsonl を tail する. 取れなかった候補は次点を試す.
+  // 自分の jsonl がまだ作成されていない場合は null で抜けて、 次回 poll で再 discover.
   const discover = (): string | null => {
     if (!existsSync(dir)) return null;
-    type Best = { path: string; mtime: number };
-    let best: Best | null = null;
+    type Candidate = { path: string; mtime: number };
+    const candidates: Candidate[] = [];
     walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => {
       const mtimeMs = st.mtimeMs;
       // Only consider files touched after lictor started (avoids resuming
       // old sessions that happen to live in the same project dir).
       if (mtimeMs < startedAt - 5_000) return;
       if (Date.now() - mtimeMs > DISCOVERY_WINDOW_MS) return;
-      if (!best || mtimeMs > best.mtime) best = { path: p, mtime: mtimeMs };
+      candidates.push({ path: p, mtime: mtimeMs });
     });
-    return best ? (best as Best).path : null;
+    candidates.sort((a, b) => b.mtime - a.mtime);
+    for (const c of candidates) {
+      const cp = tryClaimJsonl(c.path);
+      if (cp) {
+        claimPath = cp;
+        return c.path;
+      }
+    }
+    return null;
   };
 
   const pollOnce = async (): Promise<void> => {
@@ -137,10 +163,42 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     stop: () => {
       stopped = true;
       clearInterval(timer);
+      if (claimPath) {
+        try { unlinkSync(claimPath); } catch { /* best-effort */ }
+        claimPath = null;
+      }
     },
     getSessionUuid,
     getClaudeSessionId: getSessionUuid,
   };
+}
+
+/**
+ * 1 つの jsonl について `<path>.lictor-claim` を atomic create で取りに行く.
+ * 取れたら claim path を返す. 既に他 wrapper が claim 済 or race で取れなかった
+ * 場合は null. 1h 以上経った stale claim は wrapper crash 残骸とみなして剥がす.
+ *
+ * 純関数なので unit test で複数 wrapper の race を simulation できる.
+ */
+export function tryClaimJsonl(jsonlPath: string, staleMs: number = STALE_CLAIM_MS): string | null {
+  const cp = `${jsonlPath}.lictor-claim`;
+  try {
+    const cst = statSync(cp);
+    if (Date.now() - cst.mtimeMs > staleMs) {
+      try { unlinkSync(cp); } catch { /* race; 別 wrapper が同時に剥がした */ }
+    } else {
+      return null; // active claim, owned by someone else
+    }
+  } catch {
+    // no claim file
+  }
+  try {
+    const fd = openSync(cp, "wx");
+    closeSync(fd);
+    return cp;
+  } catch {
+    return null;
+  }
 }
 
 /**

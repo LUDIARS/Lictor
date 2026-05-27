@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { lineToFrame } from "../src/transcript-tail.js";
+import { existsSync, mkdtempSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { lineToFrame, tryClaimJsonl } from "../src/transcript-tail.js";
 
 test("lineToFrame: assistant text → text frame", () => {
   const f = lineToFrame(JSON.stringify({
@@ -200,4 +203,89 @@ test("lineToFrame: codex multi-part content joins with newline", () => {
     },
   }));
   assert.deepEqual(f, { kind: "text", payload: { role: "user", text: "first\nsecond" } });
+});
+
+// ─── tryClaimJsonl: 並走 wrapper の jsonl pick 排他 ───────────────────
+//
+// 同 cwd で複数 lictor wrapper が並走するとき、 mtime 最新の jsonl を全 wrapper
+// が pick すると「他セッションの transcript を自分の session_id で Concordia に
+// 送る」 race が発生し、 AI 応答が別 channel に混在する. それを防ぐための
+// `<path>.lictor-claim` の atomic create を unit test で固定する.
+
+test("tryClaimJsonl: 初回は claim 取得、 同 path への 2 回目は null", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-claim-"));
+  try {
+    const jsonl = join(dir, "abc.jsonl");
+    writeFileSync(jsonl, "");
+    const first = tryClaimJsonl(jsonl);
+    assert.ok(first, "first claim should succeed");
+    assert.equal(first, `${jsonl}.lictor-claim`);
+    assert.ok(existsSync(first));
+
+    const second = tryClaimJsonl(jsonl);
+    assert.equal(second, null, "second claim on same path returns null while first holder is alive");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("tryClaimJsonl: claim 解放後は再取得可能", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-claim-"));
+  try {
+    const jsonl = join(dir, "abc.jsonl");
+    writeFileSync(jsonl, "");
+    const first = tryClaimJsonl(jsonl);
+    assert.ok(first);
+    unlinkSync(first); // wrapper 終了相当
+
+    const second = tryClaimJsonl(jsonl);
+    assert.ok(second, "claim is available again after release");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("tryClaimJsonl: stale claim (1h 以上) は剥がして再取得する", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-claim-"));
+  try {
+    const jsonl = join(dir, "abc.jsonl");
+    writeFileSync(jsonl, "");
+    const claim = `${jsonl}.lictor-claim`;
+    writeFileSync(claim, "");
+    // mtime を 2h 前に巻き戻す
+    const old = (Date.now() - 2 * 60 * 60 * 1000) / 1000;
+    utimesSync(claim, old, old);
+
+    const acquired = tryClaimJsonl(jsonl);
+    assert.equal(acquired, claim, "stale claim is reclaimed");
+    // mtime を再確認: 直前に新規 create されているので now 近辺
+    const fresh = statSync(claim).mtimeMs;
+    assert.ok(Date.now() - fresh < 5000, "claim file is freshly recreated");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("tryClaimJsonl: 2 候補 jsonl で並走 wrapper が別 jsonl を pick できる", () => {
+  // 同じ cwd で複数 lictor wrapper が並走するシナリオ. wrapper A が先に
+  // 新しい方の jsonl を claim 済 → wrapper B は次点 (古い方) を pick できる.
+  const dir = mkdtempSync(join(tmpdir(), "lictor-claim-"));
+  try {
+    const jsonlA = join(dir, "a.jsonl");
+    const jsonlB = join(dir, "b.jsonl");
+    writeFileSync(jsonlA, "");
+    writeFileSync(jsonlB, "");
+
+    const claimA = tryClaimJsonl(jsonlA);
+    assert.ok(claimA, "wrapper A claims jsonl A");
+
+    // wrapper B が A は claim 失敗、 B を pick する
+    const failA = tryClaimJsonl(jsonlA);
+    assert.equal(failA, null);
+    const claimB = tryClaimJsonl(jsonlB);
+    assert.ok(claimB, "wrapper B claims jsonl B");
+    assert.notEqual(claimA, claimB);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
