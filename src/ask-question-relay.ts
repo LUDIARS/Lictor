@@ -21,7 +21,7 @@ const POST_TIMEOUT_MS = 2000;
 
 export interface PendingQuestion {
   question: string;
-  options: string[];
+  options: Array<{ label: string; description?: string }>;
 }
 
 /**
@@ -83,7 +83,7 @@ export function detectAskUserQuestion(line: string): PendingQuestion | null {
     const q0 = questions[0];
     if (!q0 || typeof q0.question !== "string" || !q0.question.trim()) continue;
 
-    const options = extractOptionLabels(q0.options);
+    const options = extractOptions(q0.options);
     if (options.length === 0) continue;
 
     return { question: q0.question, options };
@@ -92,26 +92,32 @@ export function detectAskUserQuestion(line: string): PendingQuestion | null {
 }
 
 /**
- * Normalize `questions[i].options` into a string array of labels.
+ * Normalize `questions[i].options` into labeled options.
  *
  * Each option can be `{ label, description }` (the schema Claude documents)
  * or a bare string (some users pass a flat list). Empty / non-string labels
  * are dropped. Order is preserved so the answer-index → label mapping on
  * Concordia's side stays aligned.
  */
-function extractOptionLabels(raw: unknown): string[] {
+function extractOptions(raw: unknown): Array<{ label: string; description?: string }> {
   if (!Array.isArray(raw)) return [];
-  const out: string[] = [];
+  const out: Array<{ label: string; description?: string }> = [];
   for (const opt of raw) {
     if (typeof opt === "string") {
       const s = opt.trim();
-      if (s) out.push(s);
+      if (s) out.push({ label: s });
       continue;
     }
     if (opt && typeof opt === "object") {
       const label = (opt as { label?: unknown }).label;
+      const description = (opt as { description?: unknown }).description;
       if (typeof label === "string" && label.trim()) {
-        out.push(label.trim());
+        const normalized = label.trim();
+        if (typeof description === "string" && description.trim()) {
+          out.push({ label: normalized, description: description.trim() });
+        } else {
+          out.push({ label: normalized });
+        }
       }
     }
   }

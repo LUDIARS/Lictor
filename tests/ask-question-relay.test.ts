@@ -34,7 +34,10 @@ test("detectAskUserQuestion: AskUserQuestion tool_use → question + options", (
   const pq = detectAskUserQuestion(line);
   assert.ok(pq);
   assert.equal(pq.question, "Which option?");
-  assert.deepEqual(pq.options, ["Yes", "No"]);
+  assert.deepEqual(pq.options, [
+    { label: "Yes", description: "Do it" },
+    { label: "No", description: "Skip" },
+  ]);
 });
 
 test("detectAskUserQuestion: 非 AskUserQuestion tool_use は null", () => {
@@ -79,7 +82,7 @@ test("detectAskUserQuestion: 複数 questions[] は先頭だけ", () => {
   const pq = detectAskUserQuestion(line);
   assert.ok(pq);
   assert.equal(pq.question, "Q1");
-  assert.deepEqual(pq.options, ["A", "B"]);
+  assert.deepEqual(pq.options, [{ label: "A" }, { label: "B" }]);
 });
 
 test("detectAskUserQuestion: options の string 直挿しを受け入れる", () => {
@@ -98,7 +101,7 @@ test("detectAskUserQuestion: options の string 直挿しを受け入れる", ()
     },
   });
   const pq = detectAskUserQuestion(line);
-  assert.deepEqual(pq?.options, ["alpha", "beta", "gamma"]);
+  assert.deepEqual(pq?.options, [{ label: "alpha" }, { label: "beta" }, { label: "gamma" }]);
 });
 
 test("detectAskUserQuestion: 空 options / 空 question は null", () => {
