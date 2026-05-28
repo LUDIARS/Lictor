@@ -154,9 +154,10 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       // AskUserQuestion tool_use を見つけたら、 transcript.frame の正規ルートとは別に
       // Concordia の pending-question API に直接通知する. これで Discord 側 (bot.routeEvent)
       // の question.posted listener が embed + button を session channel に出せるようになる.
+      // questions[] が複数ある場合は **全部** 一気に流す (一括投稿).
       if (askUserQuestionEnabled) {
-        const pq = detectAskUserQuestion(line);
-        if (pq) {
+        const pqs = detectAskUserQuestion(line);
+        for (const pq of pqs) {
           void postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, pq);
         }
       }

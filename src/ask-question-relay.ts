@@ -26,7 +26,7 @@ export interface PendingQuestion {
 
 /**
  * Parse a single JSONL line from Claude Code's session log and return
- * the first `AskUserQuestion` invocation found, or `null` if there is none.
+ * **all** `AskUserQuestion` invocations found, as an array.
  *
  * Expected Claude shape:
  *
@@ -47,7 +47,8 @@ export interface PendingQuestion {
  *                 ],
  *                 multiSelect: false,
  *                 ...
- *               }
+ *               },
+ *               ...
  *             ]
  *           }
  *         }
@@ -55,23 +56,23 @@ export interface PendingQuestion {
  *     }
  *   }
  *
- * If the tool was invoked with multiple `questions[]` entries (multi-prompt),
- * only the first one is relayed for v0. Concordia / Discord can later add
- * batched picker UIs.
+ * Returns an empty array when nothing matches. AskUserQuestion で渡された
+ * `questions[]` 配列全部を返すので、 caller が一気に Discord に流せる.
  */
-export function detectAskUserQuestion(line: string): PendingQuestion | null {
+export function detectAskUserQuestion(line: string): PendingQuestion[] {
   let msg: any;
   try {
     msg = JSON.parse(line);
   } catch {
-    return null;
+    return [];
   }
-  if (!msg || typeof msg !== "object") return null;
-  if (msg.type !== "assistant") return null;
+  if (!msg || typeof msg !== "object") return [];
+  if (msg.type !== "assistant") return [];
 
   const content = msg.message?.content;
-  if (!Array.isArray(content)) return null;
+  if (!Array.isArray(content)) return [];
 
+  const out: PendingQuestion[] = [];
   for (const part of content) {
     if (!part || typeof part !== "object") continue;
     if (part.type !== "tool_use") continue;
@@ -80,15 +81,14 @@ export function detectAskUserQuestion(line: string): PendingQuestion | null {
     const questions = part.input?.questions;
     if (!Array.isArray(questions) || questions.length === 0) continue;
 
-    const q0 = questions[0];
-    if (!q0 || typeof q0.question !== "string" || !q0.question.trim()) continue;
-
-    const options = extractOptions(q0.options);
-    if (options.length === 0) continue;
-
-    return { question: q0.question, options };
+    for (const q of questions) {
+      if (!q || typeof q.question !== "string" || !q.question.trim()) continue;
+      const options = extractOptions(q.options);
+      if (options.length === 0) continue;
+      out.push({ question: q.question, options });
+    }
   }
-  return null;
+  return out;
 }
 
 /**
