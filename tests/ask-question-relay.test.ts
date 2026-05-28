@@ -6,7 +6,7 @@ import {
 } from "../src/ask-question-relay.js";
 import { PROVIDERS } from "../src/provider.js";
 
-test("detectAskUserQuestion: AskUserQuestion tool_use → question + options", () => {
+test("detectAskUserQuestion: AskUserQuestion tool_use → 単一 question 配列", () => {
   const line = JSON.stringify({
     type: "assistant",
     message: {
@@ -31,37 +31,37 @@ test("detectAskUserQuestion: AskUserQuestion tool_use → question + options", (
       ],
     },
   });
-  const pq = detectAskUserQuestion(line);
-  assert.ok(pq);
-  assert.equal(pq.question, "Which option?");
-  assert.deepEqual(pq.options, [
+  const pqs = detectAskUserQuestion(line);
+  assert.equal(pqs.length, 1);
+  assert.equal(pqs[0].question, "Which option?");
+  assert.deepEqual(pqs[0].options, [
     { label: "Yes", description: "Do it" },
     { label: "No", description: "Skip" },
   ]);
 });
 
-test("detectAskUserQuestion: 非 AskUserQuestion tool_use は null", () => {
+test("detectAskUserQuestion: 非 AskUserQuestion tool_use は空配列", () => {
   const line = JSON.stringify({
     type: "assistant",
     message: { content: [{ type: "tool_use", name: "Bash", input: { command: "ls" } }] },
   });
-  assert.equal(detectAskUserQuestion(line), null);
+  assert.deepEqual(detectAskUserQuestion(line), []);
 });
 
-test("detectAskUserQuestion: text frame は null", () => {
+test("detectAskUserQuestion: text frame は空配列", () => {
   const line = JSON.stringify({
     type: "assistant",
     message: { content: [{ type: "text", text: "hello" }] },
   });
-  assert.equal(detectAskUserQuestion(line), null);
+  assert.deepEqual(detectAskUserQuestion(line), []);
 });
 
-test("detectAskUserQuestion: user message は null", () => {
+test("detectAskUserQuestion: user message は空配列", () => {
   const line = JSON.stringify({ type: "user", message: { content: [{ type: "text", text: "hi" }] } });
-  assert.equal(detectAskUserQuestion(line), null);
+  assert.deepEqual(detectAskUserQuestion(line), []);
 });
 
-test("detectAskUserQuestion: 複数 questions[] は先頭だけ", () => {
+test("detectAskUserQuestion: 複数 questions[] は全部返す", () => {
   const line = JSON.stringify({
     type: "assistant",
     message: {
@@ -79,10 +79,12 @@ test("detectAskUserQuestion: 複数 questions[] は先頭だけ", () => {
       ],
     },
   });
-  const pq = detectAskUserQuestion(line);
-  assert.ok(pq);
-  assert.equal(pq.question, "Q1");
-  assert.deepEqual(pq.options, [{ label: "A" }, { label: "B" }]);
+  const pqs = detectAskUserQuestion(line);
+  assert.equal(pqs.length, 2);
+  assert.equal(pqs[0].question, "Q1");
+  assert.deepEqual(pqs[0].options, [{ label: "A" }, { label: "B" }]);
+  assert.equal(pqs[1].question, "Q2");
+  assert.deepEqual(pqs[1].options, [{ label: "C" }, { label: "D" }]);
 });
 
 test("detectAskUserQuestion: options の string 直挿しを受け入れる", () => {
@@ -100,28 +102,55 @@ test("detectAskUserQuestion: options の string 直挿しを受け入れる", ()
       ],
     },
   });
-  const pq = detectAskUserQuestion(line);
-  assert.deepEqual(pq?.options, [{ label: "alpha" }, { label: "beta" }, { label: "gamma" }]);
+  const pqs = detectAskUserQuestion(line);
+  assert.equal(pqs.length, 1);
+  assert.deepEqual(pqs[0].options, [{ label: "alpha" }, { label: "beta" }, { label: "gamma" }]);
 });
 
-test("detectAskUserQuestion: 空 options / 空 question は null", () => {
+test("detectAskUserQuestion: 空 options / 空 question は除外 (両方空なら空配列)", () => {
   const emptyOpts = JSON.stringify({
     type: "assistant",
     message: { content: [{ type: "tool_use", name: "AskUserQuestion", input: { questions: [{ question: "Q", options: [] }] } }] },
   });
-  assert.equal(detectAskUserQuestion(emptyOpts), null);
+  assert.deepEqual(detectAskUserQuestion(emptyOpts), []);
 
   const emptyQ = JSON.stringify({
     type: "assistant",
     message: { content: [{ type: "tool_use", name: "AskUserQuestion", input: { questions: [{ question: "", options: [{ label: "A" }] }] } }] },
   });
-  assert.equal(detectAskUserQuestion(emptyQ), null);
+  assert.deepEqual(detectAskUserQuestion(emptyQ), []);
 });
 
-test("detectAskUserQuestion: malformed JSON は null", () => {
-  assert.equal(detectAskUserQuestion("not-json"), null);
-  assert.equal(detectAskUserQuestion(""), null);
-  assert.equal(detectAskUserQuestion("42"), null);
+test("detectAskUserQuestion: 有効 + 無効 が混在しても 有効分だけ拾う", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          name: "AskUserQuestion",
+          input: {
+            questions: [
+              { question: "OK", options: [{ label: "x" }] },
+              { question: "", options: [{ label: "y" }] },
+              { question: "OK2", options: [] },
+              { question: "OK3", options: [{ label: "z" }] },
+            ],
+          },
+        },
+      ],
+    },
+  });
+  const pqs = detectAskUserQuestion(line);
+  assert.equal(pqs.length, 2);
+  assert.equal(pqs[0].question, "OK");
+  assert.equal(pqs[1].question, "OK3");
+});
+
+test("detectAskUserQuestion: malformed JSON は空配列", () => {
+  assert.deepEqual(detectAskUserQuestion("not-json"), []);
+  assert.deepEqual(detectAskUserQuestion(""), []);
+  assert.deepEqual(detectAskUserQuestion("42"), []);
 });
 
 test("providerSupportsAskUserQuestion: claude のみ true", () => {
