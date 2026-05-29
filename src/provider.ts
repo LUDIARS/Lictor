@@ -98,11 +98,53 @@ export interface ProviderConfig {
 }
 
 /**
+ * 複数行 inject 時の Enter 遅延 (ms). 既定 500.
+ *
+ * Web/Discord から複数行の会話を inject すると、 TUI が複数行ペーストを処理し
+ * きる前に Enter (\r) が届き、 submit されない (or 途中で確定する) ことがある.
+ * 本文を書いてから少し待って \r を送ることで「ペースト完了 → 改めて Enter」 を
+ * 確実にする. env override 可 (LICTOR_INJECT_ENTER_DELAY_MS).
+ */
+function multilineEnterDelayMs(): number {
+  const v = Number(process.env.LICTOR_INJECT_ENTER_DELAY_MS ?? "500");
+  return Number.isFinite(v) && v >= 0 ? v : 500;
+}
+
+function isMultiline(text: string): boolean {
+  // 末尾の改行だけ (= 単行 + trailing newline) は単行扱い. 本文中に改行があるか.
+  return /[\r\n]/.test(text.replace(/[\r\n]+$/, ""));
+}
+
+/**
+ * 本文を書いてから delayMs 後に \r (Enter) を送る 2 段書き.
+ * 末尾の \r/\n は本文から剥がしてから書く (trailing newline が input buffer に
+ * リテラル改行として残り、 続く \r を改行継続として食われるのを防ぐ).
+ */
+function submitDelayedEnter(write: (data: string) => void, text: string, delayMs: number): void {
+  const body = text.replace(/[\r\n]+$/, "");
+  if (body) {
+    try { write(body); } catch { /* pty may be closing; Enter は投機的に続行する */ }
+  }
+  const timer = setTimeout(() => {
+    try { write("\r"); } catch { /* swallow: pty closed before timer fired */ }
+  }, delayMs);
+  timer.unref?.();
+}
+
+/**
  * 既定の単発書き戦略. text + \r を 1 chunk で pty に流す.
  * Claude Code / Gemini CLI 等、 「最終文字が \r なら Enter として認識する」 系の
  * TUI 向け.
+ *
+ * ただし本文が複数行の場合は submitDelayedEnter にフォールバックし、 本文 →
+ * (既定 500ms) → \r の 2 段で送る. 複数行ペーストが確定しきる前に Enter が
+ * 届いて submit されない事象を防ぐ.
  */
 function submitInjectSingleWrite(write: (data: string) => void, text: string): void {
+  if (isMultiline(text)) {
+    submitDelayedEnter(write, text, multilineEnterDelayMs());
+    return;
+  }
   write(text + "\r");
 }
 
@@ -119,19 +161,12 @@ function submitInjectSingleWrite(write: (data: string) => void, text: string): v
  * 明示するのがこの分割の主目的.
  */
 function submitInjectTwoStep(write: (data: string) => void, text: string): void {
-  const body = text.replace(/[\r\n]+$/, "");
-  if (body) {
-    try { write(body); } catch { /* pty may be closing; Enter は投機的に続行する */ }
-  }
   const delay = Number(process.env.LICTOR_CODEX_INJECT_DELAY_MS ?? "30");
-  const ms = Number.isFinite(delay) && delay >= 0 ? delay : 30;
-  // pty 終了直後に Enter が遅延発火しても落ちないよう try-catch で握り潰す.
-  // 「Enter は投機的に何度か投げても良い」 という運用方針 (2026-05-27) に従い、
-  // 連続 inject の \r 重複は許容する.
-  const timer = setTimeout(() => {
-    try { write("\r"); } catch { /* swallow: pty closed before timer fired */ }
-  }, ms);
-  timer.unref?.();
+  const base = Number.isFinite(delay) && delay >= 0 ? delay : 30;
+  // 複数行 inject は単行用 codex delay (30ms) では足りず submit されないことが
+  // あるため、 multilineEnterDelayMs (既定 500ms) と比べて大きい方を使う.
+  const ms = isMultiline(text) ? Math.max(base, multilineEnterDelayMs()) : base;
+  submitDelayedEnter(write, text, ms);
 }
 
 // Claude / Codex の transcript dir resolver.
