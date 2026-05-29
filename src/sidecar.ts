@@ -10,6 +10,7 @@ import type { ConflictState } from "./conflict-watcher.js";
 import type { TaskState } from "./task-relay.js";
 import { relayTask } from "./task-relay.js";
 import { fsRead, fsList, fsGrep } from "./fs-rpc.js";
+import type { TranscriptReadResult } from "./transcript-tail.js";
 
 export interface TitleState {
   manualOverride: string | null;
@@ -66,6 +67,12 @@ export interface SidecarContext {
    * active-repos-watcher が state file を引くのに使う.
    */
   getClaudeSessionId: (() => string | null) | null;
+  /**
+   * 直近 transcript を引く reader. wrap.ts が transcript-tail handle の
+   * `readRecent` を束ねて差す. transcript-tail 未起動 (concordia null /
+   * pty 無し harness) のときは null で、 `GET /v1/transcript` は 503 を返す.
+   */
+  getTranscript: ((limit: number, raw: boolean) => TranscriptReadResult) | null;
 }
 
 export interface Sidecar {
@@ -384,6 +391,29 @@ async function handle(
       conflict: ctx.conflictState,
       task: ctx.taskState,
     });
+    return;
+  }
+
+  // Pull the wrapped agent's recent transcript. transcript-tail normally only
+  // *pushes* frames to Concordia; this lets a local caller (e.g. a delegation
+  // monitor) ask "what is this session doing right now?" without parsing the
+  // TUI or hunting for the provider's JSONL on disk.
+  //   ?limit=N   how many trailing lines to read (1..500, default 50)
+  //   ?raw=1     return parsed raw JSONL objects instead of slim frames
+  if (method === "GET" && url.startsWith("/v1/transcript")) {
+    if (!ctx.getTranscript) {
+      return writeJson(res, 503, {
+        error: "transcript tail not available (no Concordia / no pty for this session)",
+      });
+    }
+    const u = new URL(url, "http://localhost");
+    const limitRaw = Number(u.searchParams.get("limit") ?? "50");
+    const limit = Number.isFinite(limitRaw)
+      ? Math.max(1, Math.min(500, Math.floor(limitRaw)))
+      : 50;
+    const rawParam = u.searchParams.get("raw");
+    const raw = rawParam === "1" || rawParam === "true";
+    writeJson(res, 200, ctx.getTranscript(limit, raw));
     return;
   }
 
