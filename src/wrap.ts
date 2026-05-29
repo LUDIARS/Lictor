@@ -85,6 +85,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     pendingPermissions: new Map(),
     activeRepoState: { lastActive: null, lastList: [] },
     getClaudeSessionId: null,
+    getTranscript: null,
   };
 
   const sidecar = await startSidecar(ctx);
@@ -260,6 +261,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     // が抽象化する.
     const tail = transcriptTail;
     ctx.getClaudeSessionId = () => tail.getSessionUuid();
+    // `GET /v1/transcript` の読み出し口. transcript-tail handle に委譲.
+    ctx.getTranscript = (limit, raw) => tail.readRecent(limit, { raw });
   }
 
   // pty → real terminal stdout.

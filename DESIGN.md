@@ -281,6 +281,31 @@ by default.
 - The skill dir is under `~/.claude/lictor/sessions/<sessionId>/` —
   always inside the user's own home, never world-writable.
 
+## Transcript relay + pull
+
+The wrapped agent writes a session JSONL the moment it starts a turn:
+
+- Claude Code: `~/.claude/projects/<cwdEncoded>/<uuid>.jsonl`
+- OpenAI Codex CLI: `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ISO>-<uuid>.jsonl`
+
+`src/transcript-tail.ts` discovers that file (claiming it via a
+`<path>.lictor-claim` atomic-create so parallel wrappers in the same cwd
+don't double-read), tails it with a 500 ms poll, converts each line to a
+slim frame (`lineToFrame`, both provider formats), and **pushes** the
+frames to Concordia (`POST /v1/sessions/:id/transcript-frame`) for the Web
+UI. The push is fire-and-forget; there is no local history.
+
+`GET /v1/transcript` is the **pull** counterpart: a loopback caller (a
+delegation monitor, a sibling session, a smoke check) can ask "what is
+this wrapped agent doing right now?" without parsing the TUI or hunting
+for the provider's JSONL on disk. It re-reads the already-discovered
+JSONL, returns the trailing `limit` lines (1–500, default 50) either as
+slim frames or — with `raw=1` — as parsed JSONL objects. The reader
+(`readRecentFromFile`) is a pure function over a path so the line-slicing
+and frame/raw shaping are unit-tested without spinning up a poll loop.
+Returns 503 when transcript-tail never started (no Concordia, or no pty —
+e.g. the smoke harness).
+
 ## Roadmap
 
 | Version | Adds |
