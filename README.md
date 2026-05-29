@@ -100,6 +100,7 @@ lictor cli conflicts                  # other sessions on the same repo
 | GET    | `/v1/lictor/task`          | —                                      | Current task state `{branch, desc, updatedAt}` |
 | POST   | `/v1/lictor/task`          | `{branch?, desc?}`                     | PATCH Concordia session + emit event + refresh `lictor-current-task` skill |
 | GET    | `/v1/lictor/state`         | —                                      | `{notify, conflict, task}` snapshot for dashboards |
+| GET    | `/v1/transcript`           | `?limit=N&raw=0\|1`                     | Read the wrapped agent's recent transcript (Claude / Codex JSONL). `limit` 1–500 (default 50). `raw=1` returns parsed JSONL objects, else slim `lineToFrame` frames. Returns `{path, available, total_lines, returned, frames\|lines}`. 503 when transcript-tail is inactive (no Concordia / no pty). |
 
 All requests must originate from `127.0.0.1` / `::1`. The port is bound on
 `127.0.0.1:0` (ephemeral) and exported as `$LICTOR_PORT` to the wrapped

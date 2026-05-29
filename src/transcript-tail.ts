@@ -55,6 +55,32 @@ export interface TranscriptTailHandle {
   getSessionUuid: () => string | null;
   /** Backward-compat alias for getSessionUuid (sidecar context が古い名前で参照する). */
   getClaudeSessionId: () => string | null;
+  /** discover + claim 済の transcript JSONL の絶対パス. 未発見なら null. */
+  getTranscriptPath: () => string | null;
+  /**
+   * 直近 `limit` 行を読み出して返す pull API (`GET /v1/transcript` の実体).
+   * transcript-tail は通常 Concordia へ frame を push するだけなので、 ローカルから
+   * 「今このセッションは何をしているか」 を引きたい呼び出し元 (delegation 監視等) の
+   * ための読み出し口. raw=false なら lineToFrame 済の slim frame、 raw=true なら
+   * パース済の生 JSONL オブジェクトを返す.
+   */
+  readRecent: (limit: number, opts?: { raw?: boolean }) => TranscriptReadResult;
+}
+
+/** `readRecent` / `readRecentFromFile` の戻り値. */
+export interface TranscriptReadResult {
+  /** 読み出した JSONL の絶対パス. transcript 未発見なら null. */
+  path: string | null;
+  /** transcript が discover 済で読めたか. */
+  available: boolean;
+  /** ファイル中の非空行の総数 (tail 前の母数). */
+  total_lines: number;
+  /** 実際に返した要素数 (frames or lines の length). */
+  returned: number;
+  /** raw=false のとき: lineToFrame 済の slim frame 配列 (古い順). */
+  frames?: Frame[];
+  /** raw=true のとき: パース済の生 JSONL オブジェクト配列 (古い順). */
+  lines?: unknown[];
 }
 
 export interface TranscriptTailOptions {
@@ -85,6 +111,8 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       },
       getSessionUuid: () => null,
       getClaudeSessionId: () => null,
+      getTranscriptPath: () => null,
+      readRecent: (limit, opts) => readRecentFromFile(null, limit, opts?.raw ?? false),
     };
   }
 
@@ -193,7 +221,55 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     },
     getSessionUuid,
     getClaudeSessionId: getSessionUuid,
+    getTranscriptPath: () => jsonlPath,
+    readRecent: (limit, opts) => readRecentFromFile(jsonlPath, limit, opts?.raw ?? false),
   };
+}
+
+/**
+ * 指定 JSONL の末尾 `limit` 行を読んで `TranscriptReadResult` を組み立てる純関数.
+ * push 専用だった transcript-tail に「ローカルから直近を引く」 読み出し口を与える.
+ *
+ * - `jsonlPath` が null (transcript 未 discover) なら available:false で即返す.
+ * - 非空行だけを母数にし、 末尾 `limit` 行を古い順で返す.
+ * - raw=false: 各行を `lineToFrame` で slim frame 化 (parse 不能行は捨てる).
+ * - raw=true : 各行を `JSON.parse` した生オブジェクト (parse 不能行は捨てる).
+ *
+ * 副作用は readFileSync 1 回のみ。 sidecar の `GET /v1/transcript` から呼ばれる.
+ */
+export function readRecentFromFile(
+  jsonlPath: string | null,
+  limit: number,
+  raw: boolean,
+): TranscriptReadResult {
+  if (!jsonlPath) {
+    return { path: null, available: false, total_lines: 0, returned: 0 };
+  }
+  let content: string;
+  try {
+    content = readFileSync(jsonlPath, "utf8");
+  } catch {
+    // claim 済だが読めない (削除/権限) — available:false で path だけ返す.
+    return { path: jsonlPath, available: false, total_lines: 0, returned: 0 };
+  }
+  const allLines = content.split("\n").filter((l) => l.trim().length > 0);
+  const want = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
+  const take = Math.min(want, allLines.length);
+  const slice = take > 0 ? allLines.slice(allLines.length - take) : [];
+
+  if (raw) {
+    const lines: unknown[] = [];
+    for (const l of slice) {
+      try { lines.push(JSON.parse(l)); } catch { /* skip malformed */ }
+    }
+    return { path: jsonlPath, available: true, total_lines: allLines.length, returned: lines.length, lines };
+  }
+  const frames: Frame[] = [];
+  for (const l of slice) {
+    const f = lineToFrame(l);
+    if (f) frames.push(f);
+  }
+  return { path: jsonlPath, available: true, total_lines: allLines.length, returned: frames.length, frames };
 }
 
 /**
