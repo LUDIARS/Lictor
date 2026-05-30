@@ -105,6 +105,14 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       });
   }
 
+  // 自分の Discord channel ID 群を取得して保持する (spec/discord-lictor-relay.md)。
+  // channel 作成は Concordia 側で session.started event 経由の非同期なので、
+  // session_channel_id が埋まるまで数回リトライする。best-effort — 失敗しても
+  // chat relay は Concordia 側の従来 routing に degrade する。
+  if (concordia) {
+    void pollDiscordChannels(ctx, concordia.client, concordia.id);
+  }
+
   // Initial auto title (composed with conflict/notify marks once they exist).
   applyAutoTitle(ctx, gatherRepoStat(meta.cwd));
 
@@ -478,6 +486,34 @@ async function tryRegisterConcordia(meta: Meta, provider: ProviderConfig): Promi
         `continuing without coordinator integration.\n`,
     );
     return null;
+  }
+}
+
+/**
+ * 自分の Discord channel ID 群を Concordia から取得して ctx.meta.discord に
+ * 保持する (spec/discord-lictor-relay.md §3)。session channel の作成は
+ * session.started event 経由で非同期なので、session_channel_id が埋まるまで
+ * 指数バックオフでリトライする (上限 ~30s)。meta channel ID だけ先に取れた
+ * 場合もその時点で保持し、chitchat/consultation 等の relay は即 deterministic
+ * になる。best-effort — 失敗は無視 (Concordia 側の従来 routing に degrade)。
+ */
+async function pollDiscordChannels(
+  ctx: SidecarContext,
+  client: ConcordiaClient,
+  sessionId: string,
+): Promise<void> {
+  let delay = 500;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      const channels = await client.discordChannels(sessionId);
+      ctx.meta.discord = channels;
+      if (channels.session_channel_id) return; // 揃ったら終了
+    } catch {
+      // Concordia 無効 / endpoint 未対応 (古い Concordia) — degrade して打ち切る
+      return;
+    }
+    await new Promise((r) => setTimeout(r, delay));
+    delay = Math.min(delay * 2, 5000);
   }
 }
 

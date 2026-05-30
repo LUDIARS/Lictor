@@ -6,6 +6,7 @@ import type {
   ConcordiaSessionRegister,
   ConcordiaSessionResponse,
   DeleteSessionResponse,
+  DiscordChannels,
   PendingTasksResponse,
   SessionPatch,
 } from "./concordia-types.js";
@@ -80,6 +81,30 @@ export class ConcordiaClient {
 
   async chat(payload: ConcordiaChatPayload): Promise<unknown> {
     return this.fetchJson("POST", "/v1/chat", payload);
+  }
+
+  /**
+   * 自分の session に紐づく Discord channel ID 群を取得する
+   * (spec/discord-lictor-relay.md §4.1)。channel 作成は非同期なので
+   * session_channel_id は初回 null になりうる — 呼び出し側がリトライする。
+   */
+  async discordChannels(id: string): Promise<DiscordChannels> {
+    return this.fetchJson<DiscordChannels>(
+      "GET",
+      `/v1/sessions/${encodeURIComponent(id)}/discord-channels`,
+    );
+  }
+
+  /**
+   * daily-report の感想文 (monologue) を session の report に追記する。
+   * session_id は呼び出し側 (sidecar) が authoritative に渡す。
+   */
+  async reportAppend(id: string, payload: { role: string; monologue: string }): Promise<unknown> {
+    return this.fetchJson(
+      "POST",
+      `/v1/reports/${encodeURIComponent(id)}/append`,
+      payload,
+    );
   }
 
   async event(id: string, payload: ConcordiaEventPayload): Promise<unknown> {

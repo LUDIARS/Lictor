@@ -1,5 +1,5 @@
 import { hostname } from "node:os";
-import type { ConcordiaPersona } from "./concordia-types.js";
+import type { ConcordiaPersona, DiscordChannels } from "./concordia-types.js";
 
 export interface Meta {
   lictor_pid: number;
@@ -20,6 +20,13 @@ export interface Meta {
   session_id: string | null;
   persona: ConcordiaPersona | null;
   role_label: string | null;
+
+  /**
+   * 自分の session に紐づく Discord channel ID 群。登録後に Concordia から
+   * 取得して保持する (spec/discord-lictor-relay.md)。null = 未取得 / Concordia
+   * 無効 / channel 未作成。sidecar の /v1/chat がここから送信先を解決する。
+   */
+  discord: DiscordChannels | null;
 }
 
 export function gatherBaseMeta(): Meta {
@@ -37,6 +44,7 @@ export function gatherBaseMeta(): Meta {
     session_id: null,
     persona: null,
     role_label: null,
+    discord: null,
   };
 }
 
