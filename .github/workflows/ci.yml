@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 同一ブランチで CI が走っていたら古い run はキャンセルする
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      # ビルドチェック: tsc で dist/ を生成できること
+      - name: Build (tsc)
+        run: npm run build
+
+      # 型チェック (no-emit)
+      - name: Typecheck
+        run: npm run typecheck
+
+      # 動作テスト: node:test の unit テスト群 (ネットワーク不要)
+      - name: Unit tests
+        run: npm test
+
+      # 動作テスト: Concordia 不在でも sidecar の HTTP エンドポイントが
+      # 期待通り (503/404 含む) に応答することを通しで確認する smoke
+      - name: Smoke (sidecar, no Concordia)
+        run: npx tsx tests/smoke-sidecar.mjs
