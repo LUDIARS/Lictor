@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
 export interface MatchedMemory {
   filename: string;
@@ -91,6 +91,10 @@ export function renderMemoryDigest(matches: MatchedMemory[], maxBytes = 8 * 1024
 }
 
 export function repoLeafFromCwd(cwd: string): string {
-  // basename handles both / and \ on Windows.
-  return basename(cwd) || cwd;
+  // Split on both / and \ regardless of host OS. node:path.basename only
+  // recognizes the host separator (\ on Windows, / on POSIX), so a Windows
+  // cwd fed through a POSIX runner (CI / tests) would not be split. Handle
+  // both explicitly and drop empty segments to tolerate trailing slashes.
+  const parts = cwd.split(/[\\/]+/).filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : cwd;
 }
