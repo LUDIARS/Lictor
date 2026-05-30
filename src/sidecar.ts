@@ -138,6 +138,9 @@ async function handle(
       persona: ctx.meta.persona,
       role_label: ctx.roleLabel,
       concordia_enabled: ctx.concordia !== null,
+      // Lictor が握る Discord channel ID 群 (spec/discord-lictor-relay.md)。
+      // null = 未取得 / Concordia 無効 / channel 未作成。
+      discord: ctx.meta.discord,
     });
     return;
   }
@@ -267,6 +270,7 @@ async function handle(
       text?: unknown;
       author_label?: unknown;
       scope?: unknown;
+      in_reply_to?: unknown;
     };
     if (typeof payload.channel !== "string" || typeof payload.text !== "string") {
       return writeJson(res, 400, { error: "channel and text (string) required" });
@@ -275,12 +279,41 @@ async function handle(
       typeof payload.author_label === "string" && payload.author_label.length > 0
         ? payload.author_label
         : defaultAuthorLabel(ctx);
+    // identity (session_id / author_label) と送信先 channel ID は sidecar が
+    // authoritative に刻印する。AI/skill は channel 名と中身しか渡さないので
+    // 別 session へのなりすまし (返信混線) が原理的に起きない。
     const reply = await ctx.concordia.chat({
       channel: payload.channel,
       text: payload.text,
       author_label: authorLabel,
       session_id: ctx.sessionId,
       scope: typeof payload.scope === "string" ? payload.scope : undefined,
+      in_reply_to: typeof payload.in_reply_to === "number" ? payload.in_reply_to : undefined,
+      discord_channel_id: resolveDiscordChannelId(ctx, payload.channel),
+    });
+    writeJson(res, 200, reply);
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/report") {
+    if (!ctx.concordia || !ctx.sessionId) {
+      return writeJson(res, 503, { error: "Concordia not registered for this session" });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { monologue?: unknown; role?: unknown };
+    if (typeof payload.monologue !== "string" || payload.monologue.length === 0) {
+      return writeJson(res, 400, { error: "monologue (string) required" });
+    }
+    // session_id は sidecar が authoritative に刻印 (AI に session_id を
+    // 名乗らせない = 別 session の report への誤追記を防ぐ)。
+    const role =
+      typeof payload.role === "string" && payload.role.length > 0
+        ? payload.role
+        : (ctx.meta.persona?.name as string | undefined) ?? ctx.roleLabel ?? "lictor";
+    const reply = await ctx.concordia.reportAppend(ctx.sessionId, {
+      role,
+      monologue: payload.monologue,
     });
     writeJson(res, 200, reply);
     return;
@@ -517,6 +550,32 @@ function randomUuid(): string {
  * or persona-name-only when half the data is missing, then to a literal
  * `lictor` so the chat call never fails purely for label reasons.
  */
+/**
+ * チャンネル名 → Lictor が握る Discord channel ID。Concordia egress に明示
+ * 送信先を渡し、 session→channel の DB ルックアップ依存 (混線の温床) を外す
+ * (spec/discord-lictor-relay.md §4.2)。未取得 / 該当なしは undefined を返し、
+ * Concordia 側の従来 routing に委ねる (後方互換)。
+ */
+export function resolveDiscordChannelId(ctx: SidecarContext, channel: string): string | undefined {
+  const d = ctx.meta.discord;
+  if (!d) return undefined;
+  switch (channel) {
+    case "chitchat":
+      return d.meta_channels.chitchat ?? undefined;
+    case "consultation":
+      return d.meta_channels.consultation ?? undefined;
+    case "報告":
+    case "houkoku":
+      return d.meta_channels.houkoku ?? undefined;
+    case "system":
+      return d.meta_channels.system ?? undefined;
+    case "session":
+      return d.session_channel_id ?? undefined;
+    default:
+      return undefined;
+  }
+}
+
 function defaultAuthorLabel(ctx: SidecarContext): string {
   const persona = ctx.meta.persona;
   const role = (persona?.name as string | undefined) ?? ctx.roleLabel ?? null;
