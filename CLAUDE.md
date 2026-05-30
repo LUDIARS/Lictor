@@ -71,9 +71,13 @@ spawning a real claude.
 
 - `LUDIARS/LUDIARS` (`PROJECT-CODES.md`) — Li registered (PR #21 merged).
 - `LUDIARS/Concordia` — Lictor depends on `/v1/sessions`, `/v1/stat/:id`,
-  `/v1/chat`, `/v1/sessions/:id/event`, `/v1/monitor/conflicts`, and
-  `/ws?session=`. Breaking changes there should bump Lictor's compat
-  surface.
+  `/v1/chat`, `/v1/sessions/:id/event`, `/v1/sessions/:id/discord-channels`,
+  `/v1/reports/:id/append`, `/v1/monitor/conflicts`, and `/ws?session=`.
+  Breaking changes there should bump Lictor's compat surface.
+- Discord relay is Lictor-mediated (anti-crosstalk): Lictor holds its
+  session/meta Discord channel ids (fetched via `discord-channels`) and
+  stamps `session_id` + `discord_channel_id` on every chat relay so the AI
+  never names a session. See `Concordia/spec/discord-lictor-relay.md`.
 - Skill `window-title-ja` — should be updated to call `lictor cli title`
   when `$LICTOR_PORT` is set, falling back to "manual rename" when not.
   v0.3 onward, the skill should also call `lictor cli rename "<text>"`

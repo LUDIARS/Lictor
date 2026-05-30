@@ -40,6 +40,30 @@ export interface ConcordiaChatPayload {
   author_label: string;
   session_id?: string;
   scope?: string;
+  in_reply_to?: number;
+  /**
+   * Lictor が握る送信先 Discord channel ID (spec/discord-lictor-relay.md)。
+   * 指定すると Concordia egress はこの channel に直接 webhook 送信する
+   * (session→channel ルックアップを介さない = 返信混線の根治)。
+   */
+  discord_channel_id?: string;
+}
+
+/**
+ * `GET /v1/sessions/:id/discord-channels` のレスポンス。Lictor が起動時に
+ * 取得し、自分の session channel + meta channel ID 群を保持する。
+ * channel 作成は非同期なので session_channel_id は初回 null になりうる。
+ */
+export interface DiscordChannels {
+  ok: boolean;
+  session_channel_id: string | null;
+  session_channel_status?: string | null;
+  meta_channels: {
+    chitchat: string | null;
+    consultation: string | null;
+    houkoku: string | null;
+    system: string | null;
+  };
 }
 
 export interface ConcordiaEventPayload {
