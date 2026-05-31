@@ -26,6 +26,12 @@ import {
 import { type ProviderConfig, PROVIDERS } from "./provider.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
 import {
+  createDelegationInjector,
+  delegationInjectDelayMs,
+  loadDelegationPrompt,
+  type DelegationInjector,
+} from "./delegation-inject.js";
+import {
   activeReposPath,
   pickActiveRepo,
   readActiveRepos,
@@ -251,6 +257,20 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
 
   ctx.ptyWriter = (data: string) => child.write(data);
 
+  // Delegation prompt auto-inject — when Concordia spawned us via
+  // /v1/delegation/invoke, env CONCORDIA_DELEGATION_PROMPT_FILE points at the
+  // rendered prompt. We paste+submit it once, after the TUI has had time to
+  // draw (armed on first pty output). Best-effort; no env → no-op.
+  let delegationInjector: DelegationInjector | null = null;
+  const delegationPrompt = loadDelegationPrompt(env);
+  if (delegationPrompt) {
+    delegationInjector = createDelegationInjector({
+      prompt: delegationPrompt,
+      submit: (text) => provider.submitInject((d) => child.write(d), text),
+      delayMs: delegationInjectDelayMs(env),
+    });
+  }
+
   // Transcript tail — start watching ~/.claude/projects/<cwdKey>/ for the
   // new .jsonl claude will create, then relay each parsed line to
   // Concordia as a transcript-frame. Best-effort; failures don't affect
@@ -275,6 +295,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
 
   // pty → real terminal stdout.
   const onData = (data: string) => {
+    // First output from the wrapped CLI means its TUI is alive; arm the
+    // one-shot delegation inject (fires after delayMs). Harmless when null.
+    delegationInjector?.notifyData();
     try {
       process.stdout.write(data);
     } catch {
