@@ -127,6 +127,8 @@ stripped first).
 | `CONCORDIA_HOST`             | `127.0.0.1` | Where Concordia listens |
 | `CONCORDIA_PORT`             | `17330`     | — |
 | `LICTOR_DISABLE_CONCORDIA`   | (unset)     | Set to `1` to skip Concordia registration entirely (v0.0 behavior) |
+| `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Set by Concordia `/v1/delegation/invoke` to a rendered prompt file. Lictor reads it and pastes+submits it into the wrapped CLI once the TUI is up (delegation auto-inject) |
+| `LICTOR_DELEGATION_INJECT_DELAY_MS` | `2500` | Delay after first pty output before the delegation prompt is injected (lets the TUI finish drawing) |
 
 ## Concordia integration
 
