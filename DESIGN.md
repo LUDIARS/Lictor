@@ -306,6 +306,34 @@ and frame/raw shaping are unit-tested without spinning up a poll loop.
 Returns 503 when transcript-tail never started (no Concordia, or no pty —
 e.g. the smoke harness).
 
+## Delegation prompt auto-inject
+
+When Concordia spawns a lictor-wrapped agent via `POST /v1/delegation/invoke`,
+it renders the task prompt to a file and passes its path in the child env as
+`CONCORDIA_DELEGATION_PROMPT_FILE` (`Concordia/src/delegation/service.ts` →
+`spawner.ts` merges `req.env`). Without Lictor acting on it the spawned agent
+(e.g. Codex) starts with an **empty** prompt and a human has to paste the file
+by hand — which is exactly what was happening before this was wired.
+
+`src/delegation-inject.ts` closes the loop:
+
+- `loadDelegationPrompt(env, readFile)` — pure: resolves the env path, reads the
+  file, and **sanitizes** it for pty injection (strips ANSI CSI sequences and
+  C0/DEL control bytes, normalizes CRLF→LF, keeps tab + internal newlines, caps
+  at 512 KiB). Returns `null` when the env is unset or the file is missing/empty
+  (best-effort — a delegation read failure never blocks the session).
+- `createDelegationInjector({prompt, submit, delayMs})` — a one-shot scheduler.
+  `wrap.ts` calls `notifyData()` from the pty `onData` handler; the **first**
+  output means the TUI is alive, which arms a single `setTimeout(delayMs)` that
+  then calls `submit(text)` exactly once. `submit` routes through
+  `provider.submitInject(ptyWriter, text)`, so the Codex two-step (text → delay →
+  `\r`) vs Claude single-write distinction is reused, not re-implemented.
+
+The readiness heuristic (first-output + delay) is deliberately simple; the delay
+is tunable via `LICTOR_DELEGATION_INJECT_DELAY_MS` (default 2500 ms). Both pure
+helpers and the once-only scheduler are unit-tested (`tests/delegation-inject.test.ts`)
+without a real pty or timer.
+
 ## Roadmap
 
 | Version | Adds |
