@@ -167,25 +167,51 @@ function extractOptions(raw: unknown): Array<{ label: string; description?: stri
 }
 
 /**
- * Fire-and-forget POST to Concordia. Errors are swallowed because this
- * sits inside a tight poll loop and a Concordia outage shouldn't slow
+ * Best-effort POST to Concordia. Returns the Concordia-side `question_id` so the
+ * caller can pair the picker's `tool_use` id with it (for a later local-resolve
+ * notification). Returns null on any failure — a Concordia outage must not slow
  * down or crash the wrapped CLI.
  */
 export async function postPendingQuestion(
   baseUrl: string,
   sessionId: string,
   pq: PendingQuestion,
-): Promise<void> {
+): Promise<number | null> {
   const url = `${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/pending-question`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), POST_TIMEOUT_MS);
   try {
-    await fetch(url, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ question: pq.question, options: pq.options }),
       signal: ctrl.signal,
     });
+    if (!res.ok) return null;
+    const json = (await res.json().catch(() => null)) as { question_id?: unknown } | null;
+    return typeof json?.question_id === "number" ? json.question_id : null;
+  } catch {
+    return null; // best-effort
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Notify Concordia that an AskUserQuestion picker resolved locally (answered at
+ * the keyboard, no remote answer), so its pending-question is marked answered
+ * and any stale Discord/Slack answer buttons stop being actionable. Best-effort.
+ */
+export async function postResolveQuestion(
+  baseUrl: string,
+  sessionId: string,
+  questionId: number,
+): Promise<void> {
+  const url = `${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/pending-question/${questionId}/resolve`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), POST_TIMEOUT_MS);
+  try {
+    await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, signal: ctrl.signal });
   } catch {
     // best-effort
   } finally {

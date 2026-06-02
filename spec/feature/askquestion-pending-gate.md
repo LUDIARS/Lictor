@@ -37,3 +37,16 @@ Claude Code の `AskUserQuestion` picker が開いている間、通常の pty i
   恒久ロックしない。クラッシュ時は wrapper 終了 → `forceClear` で解放。
 - Codex / Gemini provider は `AskUserQuestion` を持たないため gate は常に閉のまま
   （`providerSupportsAskUserQuestion` が false → open 呼び出しが発生しない）。
+
+## ローカル回答時の Concordia 通知（local-resolve）
+picker を端末キーボードで回答した場合、リモート（Discord/Slack）には回答が伝わらず、
+投稿済みの古いボタンが残る。後からそれを押すと `onAnswerQuestion` がキー注入し、
+picker が無い状態に stray 入力する恐れがある。これを防ぐため:
+- `postPendingQuestion` の戻り値で Concordia の `question_id` を受け取り、transcript-tail が
+  `tool_use id → question_id` を保持する。
+- picker 解決（`tool_result` 検知）時、その question_id で
+  `POST /v1/sessions/:id/pending-question/:qid/resolve` を best-effort 送信。
+- Concordia は当該 pending-question を `answered_at` 付きにし（`markResolvedLocally`）、以後の
+  `answer-question` / ボタン押下を弾く（stray 注入防止）。加えて `question.resolved` を emit し、
+  Discord はボタンを除去（Slack は質問メッセージ ts 未保持のため将来対応）。
+- リモート回答済みの場合は Concordia 側が既に answered のため resolve は idempotent な no-op。
