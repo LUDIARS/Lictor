@@ -37,6 +37,7 @@ import {
   detectAnsweredQuestionIds,
   detectAskUserQuestion,
   postPendingQuestion,
+  postResolveQuestion,
   providerSupportsAskUserQuestion,
 } from "./ask-question-relay.js";
 
@@ -112,6 +113,9 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   let pending = "";
   let stopped = false;
   const startedAt = Date.now();
+  // AskUserQuestion の tool_use id → Concordia の question_id。picker がローカル回答で
+  // 解決した（tool_result 検知）とき、Concordia に resolve 通知して古いボタンを失効させる。
+  const questionIdByToolUse = new Map<string, number>();
   // AskUserQuestion tool は Claude Code 専用. Codex / Gemini provider のときは
   // 検知を回避して JSON.parse の二度手間を避ける (= lineToFrame だけ走らせる).
   const askUserQuestionEnabled = providerSupportsAskUserQuestion(opts.provider);
@@ -199,13 +203,21 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       if (askUserQuestionEnabled) {
         const pqs = detectAskUserQuestion(line);
         for (const pq of pqs) {
-          void postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, pq);
+          // question_id を控えて tool_use id と紐付ける（後で local-resolve 通知に使う）。
+          void postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, pq).then((qid) => {
+            if (qid != null && pq.id) questionIdByToolUse.set(pq.id, qid);
+          });
           opts.onQuestionOpen?.(pq.id);
         }
         // A picker resolving (locally OR remotely) writes a tool_result whose
         // tool_use_id matches the question — that is what releases the gate.
         for (const id of detectAnsweredQuestionIds(line)) {
           opts.onQuestionResolved?.(id);
+          const qid = questionIdByToolUse.get(id);
+          if (qid != null) {
+            questionIdByToolUse.delete(id);
+            void postResolveQuestion(opts.concordiaBaseUrl, opts.sessionId, qid);
+          }
         }
       }
       const frame = lineToFrame(line);
