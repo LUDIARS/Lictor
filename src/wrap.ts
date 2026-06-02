@@ -25,6 +25,7 @@ import {
 } from "./session-end-skill.js";
 import { type ProviderConfig, PROVIDERS } from "./provider.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
+import { PendingQuestionGate } from "./pending-question-gate.js";
 import {
   createDelegationInjector,
   delegationInjectDelayMs,
@@ -122,6 +123,18 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // Initial auto title (composed with conflict/notify marks once they exist).
   applyAutoTitle(ctx, gatherRepoStat(meta.cwd));
 
+  // Holds ordinary pty injects while an AskUserQuestion picker is open, so a
+  // stray Discord message / `/enter` / Codex submit-fallback can't commit the
+  // picker's default option before the user actually answers. Opened/closed by
+  // transcript-tail (question tool_use → tool_result); answers bypass it via
+  // onAnswerQuestion. See pending-question-gate.ts.
+  const pendingQuestionGate = new PendingQuestionGate(
+    (text) => {
+      if (ctx.ptyWriter) provider.submitInject(ctx.ptyWriter, text);
+    },
+    (msg) => process.stderr.write(`lictor: ${msg}\n`),
+  );
+
   // WS reactor — attach AFTER ctx so the dispatcher can read live state.
   if (concordia) {
     concordia.liveness.close(); // close the pre-ctx liveness opened by tryRegisterConcordia
@@ -148,6 +161,17 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           //                     を別個と認識するよう間を空ける.
           const safe = sanitizeKeySeq(text);
           if (!safe) return;
+          // While an AskUserQuestion picker is open, hold this inject instead
+          // of letting "text + Enter" commit the picker's default option. It is
+          // flushed once the picker resolves (transcript-tail observes the
+          // tool_result). Answers arrive via onAnswerQuestion, which bypasses
+          // the gate, so the picker can still be answered remotely.
+          if (pendingQuestionGate.shouldDefer(safe)) {
+            process.stderr.write(
+              `lictor: held inject from Concordia while question pending (source=${source ?? "?"})\n`,
+            );
+            return;
+          }
           const writer = ctx.ptyWriter;
           provider.submitInject(writer, safe);
           // Telemetry breadcrumb — surface that the inject landed so the
@@ -282,6 +306,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       sessionId: concordia.id,
       concordiaBaseUrl: `http://${process.env.CONCORDIA_HOST ?? "127.0.0.1"}:${process.env.CONCORDIA_PORT ?? "17330"}`,
       provider,
+      onQuestionOpen: (qid) => pendingQuestionGate.openQuestion(qid),
+      onQuestionResolved: (qid) => pendingQuestionGate.resolveQuestion(qid),
     });
     // active-repos watcher が transcript-tail 経由で session UUID を引けるよう
     // ctx に getter を差す. transcript-tail が JSONL を発見するまで null を返す.
@@ -345,6 +371,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     if (statTimer) clearInterval(statTimer);
     if (pollTimer) clearInterval(pollTimer);
     transcriptTail?.stop();
+    // Drop any held injects rather than flushing them into a dying pty.
+    pendingQuestionGate.forceClear();
     concordia?.liveness.close();
     sidecar.close();
     resetTitle();
