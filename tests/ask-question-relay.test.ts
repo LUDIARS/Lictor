@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  detectAnsweredQuestionIds,
   detectAskUserQuestion,
   providerSupportsAskUserQuestion,
 } from "../src/ask-question-relay.js";
@@ -151,6 +152,80 @@ test("detectAskUserQuestion: malformed JSON は空配列", () => {
   assert.deepEqual(detectAskUserQuestion("not-json"), []);
   assert.deepEqual(detectAskUserQuestion(""), []);
   assert.deepEqual(detectAskUserQuestion("42"), []);
+});
+
+test("detectAskUserQuestion: tool_use id を PendingQuestion.id に載せる", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_abc123",
+          name: "AskUserQuestion",
+          input: { questions: [{ question: "Q", options: [{ label: "A" }, { label: "B" }] }] },
+        },
+      ],
+    },
+  });
+  const pqs = detectAskUserQuestion(line);
+  assert.equal(pqs.length, 1);
+  assert.equal(pqs[0].id, "toolu_abc123");
+});
+
+test("detectAskUserQuestion: 複数 questions[] は同一 tool_use id を共有", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_xyz",
+          name: "AskUserQuestion",
+          input: {
+            questions: [
+              { question: "Q1", options: [{ label: "A" }] },
+              { question: "Q2", options: [{ label: "B" }] },
+            ],
+          },
+        },
+      ],
+    },
+  });
+  const pqs = detectAskUserQuestion(line);
+  assert.deepEqual(pqs.map((p) => p.id), ["toolu_xyz", "toolu_xyz"]);
+});
+
+test("detectAnsweredQuestionIds: user tool_result の tool_use_id を返す", () => {
+  // 実データ準拠: AskUserQuestion の回答は直後の user 行に
+  // tool_result{tool_use_id} として現れる。
+  const line = JSON.stringify({
+    type: "user",
+    message: {
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_abc123",
+          content: 'Your questions have been answered: "Q"="A"',
+        },
+      ],
+    },
+  });
+  assert.deepEqual(detectAnsweredQuestionIds(line), ["toolu_abc123"]);
+});
+
+test("detectAnsweredQuestionIds: assistant 行 / 非 tool_result は空配列", () => {
+  const assistantLine = JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "hi" }] },
+  });
+  assert.deepEqual(detectAnsweredQuestionIds(assistantLine), []);
+  const noResult = JSON.stringify({
+    type: "user",
+    message: { content: [{ type: "text", text: "plain message" }] },
+  });
+  assert.deepEqual(detectAnsweredQuestionIds(noResult), []);
+  assert.deepEqual(detectAnsweredQuestionIds("not-json"), []);
 });
 
 test("providerSupportsAskUserQuestion: claude のみ true", () => {

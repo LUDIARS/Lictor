@@ -20,6 +20,13 @@ import type { ProviderConfig } from "./provider.js";
 const POST_TIMEOUT_MS = 2000;
 
 export interface PendingQuestion {
+  /**
+   * The AskUserQuestion `tool_use` id. Carried so the caller can pair this
+   * question with its later `tool_result` (see {@link detectAnsweredQuestionIds})
+   * and gate pty injects while the picker is open. Empty string if the line
+   * somehow lacked an id (defensive — Claude always stamps one).
+   */
+  id: string;
   question: string;
   options: Array<{ label: string; description?: string }>;
 }
@@ -81,12 +88,47 @@ export function detectAskUserQuestion(line: string): PendingQuestion[] {
     const questions = part.input?.questions;
     if (!Array.isArray(questions) || questions.length === 0) continue;
 
+    const id = typeof part.id === "string" ? part.id : "";
     for (const q of questions) {
       if (!q || typeof q.question !== "string" || !q.question.trim()) continue;
       const options = extractOptions(q.options);
       if (options.length === 0) continue;
-      out.push({ question: q.question, options });
+      out.push({ id, question: q.question, options });
     }
+  }
+  return out;
+}
+
+/**
+ * Parse one JSONL line and return the `tool_use_id`s of every `tool_result`
+ * it contains. Claude records the answer to an AskUserQuestion as a `user`
+ * message whose `tool_result.tool_use_id` equals the original picker's
+ * `tool_use` id — empirically the very next line after the picker resolves,
+ * whether the answer came from a Discord button or the local keyboard.
+ *
+ * The caller ({@link PendingQuestionGate}) only acts on ids it has open, so
+ * returning *all* tool_result ids (not just question ones) is safe: ordinary
+ * tool results are no-ops. Returns an empty array for non-`user` lines.
+ */
+export function detectAnsweredQuestionIds(line: string): string[] {
+  let msg: any;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return [];
+  }
+  if (!msg || typeof msg !== "object") return [];
+  if (msg.type !== "user") return [];
+
+  const content = msg.message?.content;
+  if (!Array.isArray(content)) return [];
+
+  const out: string[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    if (part.type !== "tool_result") continue;
+    const id = part.tool_use_id;
+    if (typeof id === "string" && id) out.push(id);
   }
   return out;
 }

@@ -34,6 +34,7 @@ import {
 import { join } from "node:path";
 import type { ProviderConfig } from "./provider.js";
 import {
+  detectAnsweredQuestionIds,
   detectAskUserQuestion,
   postPendingQuestion,
   providerSupportsAskUserQuestion,
@@ -88,6 +89,18 @@ export interface TranscriptTailOptions {
   sessionId: string;
   concordiaBaseUrl: string;
   provider: ProviderConfig;
+  /**
+   * Called with the AskUserQuestion `tool_use` id when a picker is detected
+   * opening in the transcript. wrap.ts wires this to {@link PendingQuestionGate}
+   * so ordinary pty injects are held while the picker waits for an answer.
+   * Optional — omitted by harnesses that don't gate injects.
+   */
+  onQuestionOpen?: (id: string) => void;
+  /**
+   * Called with a `tool_result.tool_use_id` when one is observed. The gate
+   * resolves only ids it has open, so passing every tool_result id is safe.
+   */
+  onQuestionResolved?: (id: string) => void;
 }
 
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
@@ -187,6 +200,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
         const pqs = detectAskUserQuestion(line);
         for (const pq of pqs) {
           void postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, pq);
+          opts.onQuestionOpen?.(pq.id);
+        }
+        // A picker resolving (locally OR remotely) writes a tool_result whose
+        // tool_use_id matches the question — that is what releases the gate.
+        for (const id of detectAnsweredQuestionIds(line)) {
+          opts.onQuestionResolved?.(id);
         }
       }
       const frame = lineToFrame(line);
