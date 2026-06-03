@@ -27,7 +27,7 @@
     "url": "https://github.com/LUDIARS/Lictor.git"
   },
   "dependencies": {
-    "@ludiars/vestigium": "file:../Vestigium",
+    "@ludiars/vestigium": "git+https://github.com/LUDIARS/Vestigium.git",
     "node-pty": "^1.1.0"
   }
 }
