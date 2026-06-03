@@ -26,6 +26,14 @@ jobs:
           node-version: 22
           cache: npm
 
+      # @ludiars/vestigium は public な git 依存。 npm は github 依存を
+      # git+ssh:// に正規化するが CI runner に ssh 鍵は無いので、 https に
+      # 書き換えて auth 無しで clone できるようにする (public repo)。
+      - name: Use HTTPS for github git deps
+        run: |
+          git config --global url."https://github.com/".insteadOf "git+ssh://git@github.com/"
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
       - name: Install deps
         run: npm ci
 
