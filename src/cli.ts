@@ -3,6 +3,7 @@ import { runClient } from "./client.js";
 import { getProvider } from "./provider.js";
 import { runPermissionHook } from "./permission-hook.js";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
+import { install as installVestigium } from "@ludiars/vestigium";
 
 const HELP = `lictor — per-session sidecar for agent TUI CLIs (LUDIARS / Li)
 
@@ -77,6 +78,11 @@ Notes:
 `;
 
 async function main() {
+  installVestigium({
+    serviceCode: "lictor",
+    captureConsole: true,
+    pinoTransport: false,
+  });
   const argv = process.argv.slice(2);
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     process.stdout.write(HELP);
