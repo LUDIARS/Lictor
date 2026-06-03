@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { lineToFrame, tryClaimJsonl, readRecentFromFile } from "../src/transcript-tail.js";
+import { lineToFrame, tryClaimJsonl, refreshClaim, readRecentFromFile } from "../src/transcript-tail.js";
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
 
 test("lineToFrame: assistant text → text frame", () => {
   const f = lineToFrame(JSON.stringify({
@@ -285,6 +287,39 @@ test("tryClaimJsonl: 2 候補 jsonl で並走 wrapper が別 jsonl を pick で�
     const claimB = tryClaimJsonl(jsonlB);
     assert.ok(claimB, "wrapper B claims jsonl B");
     assert.notEqual(claimA, claimB);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("tryClaimJsonl: owner id を claim file に記録する", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-claim-"));
+  try {
+    const jsonl = join(dir, "abc.jsonl");
+    writeFileSync(jsonl, "");
+    const cp = tryClaimJsonl(jsonl, ONE_HOUR_MS, "lictor-OWNER");
+    assert.ok(cp);
+    assert.equal(readFileSync(cp, "utf8"), "lictor-OWNER", "claim file records the owner session id");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("refreshClaim: active claim を refresh すると stale 判定で剥がされない", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-claim-"));
+  try {
+    const jsonl = join(dir, "a.jsonl");
+    writeFileSync(jsonl, "");
+    const claim = `${jsonl}.lictor-claim`;
+    writeFileSync(claim, "owner-A");
+    // 2h 前に巻き戻す (stale 相当) → refresh で now に戻す
+    const old = (Date.now() - 2 * ONE_HOUR_MS) / 1000;
+    utimesSync(claim, old, old);
+    refreshClaim(claim);
+    // 別 wrapper (owner-B) が 1h stale 閾値で claim を試みても、 refresh 済なので奪えない
+    const stolen = tryClaimJsonl(jsonl, ONE_HOUR_MS, "owner-B");
+    assert.equal(stolen, null, "refreshed active claim is not stolen as stale");
+    assert.equal(readFileSync(claim, "utf8"), "owner-A", "original owner still holds the claim");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
