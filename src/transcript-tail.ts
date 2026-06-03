@@ -29,6 +29,8 @@ import {
   readFileSync,
   statSync,
   unlinkSync,
+  utimesSync,
+  writeSync,
   type Stats,
 } from "node:fs";
 import { join } from "node:path";
@@ -45,6 +47,23 @@ const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
 const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
 const STALE_CLAIM_MS = 60 * 60 * 1000; // 1h 経った claim は wrapper クラッシュ残骸とみなす
+
+// 別セッション誤投稿 (= 2 wrapper が同じ jsonl を tail) の原因特定用ログ.
+// 既定 ON。 安定確認後に撤去 PR で消す (verbose-logging-bootstrap)。CONCORDIA→Discord
+// で「別 channel に混在」 が出たらこのログで「同一 path を 2 owner が claim」 を確認する。
+const CLAIM_DEBUG = process.env.LICTOR_DEBUG_TRANSCRIPT !== "0";
+function claimDbg(msg: string): void {
+  if (!CLAIM_DEBUG) return;
+  try { process.stderr.write(`[verbose-transcript] ${msg}\n`); } catch { /* best-effort */ }
+}
+
+/** claim file の mtime を now に更新し stale 化を防ぐ (active 中は剥がされない). best-effort. */
+export function refreshClaim(claimPath: string): void {
+  try {
+    const t = Date.now() / 1000;
+    utimesSync(claimPath, t, t);
+  } catch { /* best-effort — 削除済等 */ }
+}
 
 export interface TranscriptTailHandle {
   stop: () => void;
@@ -160,7 +179,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     });
     candidates.sort((a, b) => b.mtime - a.mtime);
     for (const c of candidates) {
-      const cp = tryClaimJsonl(c.path);
+      const cp = tryClaimJsonl(c.path, STALE_CLAIM_MS, opts.sessionId);
       if (cp) {
         claimPath = cp;
         return c.path;
@@ -176,6 +195,9 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       if (!jsonlPath) return;
       offset = 0;
     }
+    // active 中は claim の mtime を更新し続け、 stale (1h) 判定で他 wrapper に
+    // 剥がされて「同じ jsonl を 2 wrapper が tail → 別 channel 誤投稿」 になるのを防ぐ。
+    if (claimPath) refreshClaim(claimPath);
     let size: number;
     try {
       size = statSync(jsonlPath).size;
@@ -310,12 +332,20 @@ export function readRecentFromFile(
  *
  * 純関数なので unit test で複数 wrapper の race を simulation できる.
  */
-export function tryClaimJsonl(jsonlPath: string, staleMs: number = STALE_CLAIM_MS): string | null {
+export function tryClaimJsonl(
+  jsonlPath: string,
+  staleMs: number = STALE_CLAIM_MS,
+  ownerId = "",
+): string | null {
   const cp = `${jsonlPath}.lictor-claim`;
   try {
     const cst = statSync(cp);
     if (Date.now() - cst.mtimeMs > staleMs) {
+      // stale claim を剥がす前に旧所有者を控えてログる (誤投稿が再発した際の追跡用)。
+      let staleOwner = "";
+      try { staleOwner = readFileSync(cp, "utf8").trim(); } catch { /* best-effort */ }
       try { unlinkSync(cp); } catch { /* race; 別 wrapper が同時に剥がした */ }
+      claimDbg(`stale claim removed path=${jsonlPath} staleOwner=${staleOwner || "?"} ageMs=${Math.round(Date.now() - cst.mtimeMs)} by=${ownerId || "?"}`);
     } else {
       return null; // active claim, owned by someone else
     }
@@ -324,7 +354,9 @@ export function tryClaimJsonl(jsonlPath: string, staleMs: number = STALE_CLAIM_M
   }
   try {
     const fd = openSync(cp, "wx");
+    try { writeSync(fd, ownerId); } catch { /* owner 記録は best-effort */ }
     closeSync(fd);
+    claimDbg(`claim acquired path=${jsonlPath} owner=${ownerId || "?"}`);
     return cp;
   } catch {
     return null;
