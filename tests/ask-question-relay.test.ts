@@ -3,9 +3,35 @@ import assert from "node:assert/strict";
 import {
   detectAnsweredQuestionIds,
   detectAskUserQuestion,
+  extractPendingQuestions,
   providerSupportsAskUserQuestion,
 } from "../src/ask-question-relay.js";
 import { PROVIDERS } from "../src/provider.js";
+
+test("extractPendingQuestions: PreToolUse の tool_input.questions[] を変換 (早期投稿用)", () => {
+  const questions = [
+    {
+      question: "進めますか?",
+      options: [
+        { label: "はい", description: "進める" },
+        "いいえ",
+      ],
+    },
+    { question: "  ", options: [{ label: "x" }] }, // 空 question → skip
+    { question: "options 無し", options: [] }, // option ゼロ → skip
+  ];
+  const pqs = extractPendingQuestions(questions);
+  assert.equal(pqs.length, 1);
+  assert.equal(pqs[0].id, ""); // PreToolUse は tool_use id を持たない
+  assert.equal(pqs[0].question, "進めますか?");
+  assert.deepEqual(pqs[0].options, [{ label: "はい", description: "進める" }, { label: "いいえ" }]);
+});
+
+test("extractPendingQuestions: 非配列は空", () => {
+  assert.deepEqual(extractPendingQuestions(undefined), []);
+  assert.deepEqual(extractPendingQuestions("nope"), []);
+  assert.deepEqual(extractPendingQuestions(null), []);
+});
 
 test("detectAskUserQuestion: AskUserQuestion tool_use → 単一 question 配列", () => {
   const line = JSON.stringify({

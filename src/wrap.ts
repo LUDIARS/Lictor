@@ -462,6 +462,19 @@ function writePermissionHookSettings(sessionDir: string): string {
             },
           ],
         },
+        {
+          // AskUserQuestion を picker-open 時に検知して Concordia へ早期投稿する
+          // (回答前に Discord へ出すため)。 これは権限ゲートではなく、 decision を
+          // 返さず picker をそのまま開かせる。 src/ask-question-hook.ts 参照。
+          matcher: "AskUserQuestion",
+          hooks: [
+            {
+              type: "command",
+              command: "lictor cli ask-question-hook",
+              timeout: 10,
+            },
+          ],
+        },
       ],
     },
   }, null, 2);

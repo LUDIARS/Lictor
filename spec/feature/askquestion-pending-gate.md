@@ -16,8 +16,30 @@ Claude Code の `AskUserQuestion` picker が開いている間、通常の pty i
 - 修正前は (2) が「picker が開いているか」を知らず、picker 表示中に届いた
   inject が `text + Enter` として picker に入り、**デフォルト/誤った候補を確定**
   していた。Concordia が直前に投稿した質問 embed は事後表示に見えた。
-- なお `AskUserQuestion` の `tool_use` 行は picker 表示の瞬間（回答の数十秒〜
-  数分前）に JSONL へ書かれるため、検知遅延は原因ではない（実 transcript で確認）。
+- ⚠️ **訂正 (2026-06-04)**: 旧記述では「`tool_use` 行は picker 表示の瞬間に
+  JSONL へ書かれる」としていたが、 現行 Claude Code では **回答が確定してターンが
+  閉じた時** に書かれる。 そのため transcript-tail 起点の Discord 早期投稿は
+  **原理的に回答後**になり手遅れだった (= Discord から答えられない)。
+  → 質問の Discord 投稿は **PreToolUse hook 起点**に変更した（下記「早期投稿」）。
+  transcript-tail は引き続き gate と resolve (tool_result 検知) を担当する。
+
+## 早期投稿（PreToolUse hook, 2026-06-04）
+
+picker が**開く前**に発火する Claude Code の PreToolUse hook（matcher
+`AskUserQuestion`）で質問を Concordia へ早期投稿する:
+
+1. per-session settings に `lictor cli ask-question-hook` を PreToolUse として登録
+   ([`../../src/wrap.ts`](../../src/wrap.ts) `writePermissionHookSettings`)。
+2. hook は stdin の `tool_input.questions[]` を sidecar
+   `POST /v1/internal/ask-question` に渡す（[`../../src/ask-question-hook.ts`](../../src/ask-question-hook.ts)）。
+   decision は返さず picker をそのまま開かせる（権限ゲートではない）。
+3. sidecar は `extractPendingQuestions` で変換し `postPendingQuestion` で Concordia に
+   即投稿 → Discord に**回答前に**質問カードが出る。
+4. transcript-tail も後追いで同じ質問を投稿するが、 Concordia 側が
+   `(session, question)` で**冪等化**して同一 `question_id` に収束させるため重複しない。
+   この冪等化により transcript-tail の `tool_use id → question_id` マップも正しく張られ、
+   resolve / gate は従来どおり成立する。
+- LICTOR_PORT 無し / sidecar 不達 / 例外時は hook が何もせず exit 0（picker を止めない）。
 
 ## 振る舞い（[`../../src/pending-question-gate.ts`](../../src/pending-question-gate.ts)）
 1. **open** — transcript-tail が `AskUserQuestion` の `tool_use` を検知したら、
