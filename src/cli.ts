@@ -2,6 +2,7 @@ import { runWrapped } from "./wrap.js";
 import { runClient } from "./client.js";
 import { getProvider } from "./provider.js";
 import { runPermissionHook } from "./permission-hook.js";
+import { runAskQuestionHook } from "./ask-question-hook.js";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 import { install as installVestigium } from "@ludiars/vestigium";
 
@@ -111,6 +112,12 @@ async function main() {
     // built-in permission flow).
     if (rest[0] === "permission-hook") {
       await runPermissionHook();
+      return;
+    }
+    // ask-question-hook も同様に LICTOR_PORT チェックを迂回し、 出力 / exit code で
+    // picker を絶対に止めない (内部で全エラーを飲み込み exit 0)。
+    if (rest[0] === "ask-question-hook") {
+      await runAskQuestionHook();
       return;
     }
     await runClient(rest);
