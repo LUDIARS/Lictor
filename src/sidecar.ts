@@ -11,6 +11,7 @@ import type { TaskState } from "./task-relay.js";
 import { relayTask } from "./task-relay.js";
 import { fsRead, fsList, fsGrep } from "./fs-rpc.js";
 import type { TranscriptReadResult } from "./transcript-tail.js";
+import { extractPendingQuestions, postPendingQuestion } from "./ask-question-relay.js";
 
 export interface TitleState {
   manualOverride: string | null;
@@ -540,6 +541,26 @@ async function handle(
     });
     writeJson(res, 200, decision);
     return;
+  }
+
+  // PreToolUse(AskUserQuestion) hook (`lictor cli ask-question-hook`) が picker-open
+  // 時に叩く。 質問を **回答前に** Concordia へ早期投稿し、 Discord から答えられる
+  // ようにする。 transcript-tail の遅延投稿は Concordia 側の冪等化で重複しない。
+  // fire-and-forget — picker をネットワーク往復で待たせない。
+  if (method === "POST" && url === "/v1/internal/ask-question") {
+    if (!ctx.concordia || !ctx.sessionId) {
+      return writeJson(res, 200, { ok: true, skipped: "no concordia" });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { questions?: unknown };
+    const pqs = extractPendingQuestions(payload.questions);
+    const baseUrl = ctx.concordia.cfg.baseUrl;
+    const sid = ctx.sessionId;
+    for (const pq of pqs) {
+      void postPendingQuestion(baseUrl, sid, pq);
+    }
+    return writeJson(res, 200, { ok: true, count: pqs.length });
   }
 
   if (method === "POST" && url === "/v1/internal/permission-response") {

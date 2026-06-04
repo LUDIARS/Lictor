@@ -134,6 +134,29 @@ export function detectAnsweredQuestionIds(line: string): string[] {
 }
 
 /**
+ * `tool_input.questions[]` (AskUserQuestion の入力そのもの) を `PendingQuestion[]`
+ * に変換する。 transcript JSONL ではなく **PreToolUse hook が picker-open 時に渡す
+ * tool_input** から直接抽出する経路 (= 回答前に Discord へ出すための早期投稿)。
+ *
+ * id は空文字 (PreToolUse は tool_use id を持たないことがあるため)。 resolve 用の
+ * tool_use id↔question_id 対応は従来どおり transcript-tail が後追いで張る
+ * (Concordia 側が同一 question を冪等化して同じ question_id に収束させる前提)。
+ */
+export function extractPendingQuestions(questions: unknown): PendingQuestion[] {
+  if (!Array.isArray(questions)) return [];
+  const out: PendingQuestion[] = [];
+  for (const q of questions) {
+    if (!q || typeof q !== "object") continue;
+    const question = (q as { question?: unknown }).question;
+    if (typeof question !== "string" || !question.trim()) continue;
+    const options = extractOptions((q as { options?: unknown }).options);
+    if (options.length === 0) continue;
+    out.push({ id: "", question, options });
+  }
+  return out;
+}
+
+/**
  * Normalize `questions[i].options` into labeled options.
  *
  * Each option can be `{ label, description }` (the schema Claude documents)
