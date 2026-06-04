@@ -42,6 +42,7 @@ import {
   postResolveQuestion,
   providerSupportsAskUserQuestion,
 } from "./ask-question-relay.js";
+import { parseAskMarkerText } from "./ask-marker.js";
 
 const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
@@ -121,6 +122,21 @@ export interface TranscriptTailOptions {
    * resolves only ids it has open, so passing every tool_result id is safe.
    */
   onQuestionResolved?: (id: string) => void;
+  /**
+   * ask マーカー検出を有効にするか (= ステアリング注入済の provider セッション)。
+   * 有効なら assistant テキスト中の ```ask ブロックを pending-question に流す。
+   */
+  askMarkerEnabled?: boolean;
+  /**
+   * ask マーカー由来の pending-question が Concordia に登録され question_id が
+   * 返ったとき呼ぶ。wrap.ts はこの id を「テキスト回答で返す」集合に記録する。
+   */
+  onAskMarkerPosted?: (questionId: number) => void;
+  /**
+   * transcript に user メッセージ (端末でのローカル返信) が現れたとき呼ぶ。
+   * 開いている ask マーカー質問をローカル解決扱いにして Discord ボタンを失効させる。
+   */
+  onUserReply?: () => void;
 }
 
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
@@ -244,6 +260,27 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       }
       const frame = lineToFrame(line);
       if (!frame) continue;
+      // ask マーカー: assistant テキスト中の ```ask ブロックを pending-question へ。
+      // provider 非依存 — lineToFrame が Claude/Codex の assistant テキストを正規化済。
+      // user テキストはローカル返信とみなし、開いている marker 質問を resolve させる。
+      if (opts.askMarkerEnabled && frame.kind === "text") {
+        const p = frame.payload as { role?: unknown; text?: unknown };
+        if (p.role === "assistant" && typeof p.text === "string") {
+          const marker = parseAskMarkerText(p.text);
+          if (marker) {
+            void postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, {
+              id: "",
+              question: marker.question,
+              options: marker.options,
+              multiSelect: marker.multiSelect,
+            }).then((qid) => {
+              if (qid != null) opts.onAskMarkerPosted?.(qid);
+            });
+          }
+        } else if (p.role === "user" && typeof p.text === "string") {
+          opts.onUserReply?.();
+        }
+      }
       const seqNum = seq++;
       void postFrame(opts.concordiaBaseUrl, opts.sessionId, seqNum, frame.kind, frame.payload);
     }

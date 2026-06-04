@@ -42,12 +42,13 @@ export interface ReactorContext {
   onInject?: (text: string, source: string | null) => void;
   /**
    * Called when a Concordia `question.answered` event arrives with a
-   * matching `target_session_id`. `answerIndex` is 0-based (matching the
-   * options[] order in the original AskUserQuestion). wrap.ts wires this
-   * to feed `(answerIndex × Down-Arrow) + Enter` into the pty so the
-   * picker confirms the same choice the user made in Discord.
+   * matching `target_session_id`. Carries the Concordia `question_id`, the
+   * 0-based `index` (options[] order; -1 for free-text "Other"), and the
+   * resolved `text` (single=label / multi=comma-joined labels / Other=free
+   * text). wrap.ts routes ask-marker questions to a plain text inject and
+   * built-in AskUserQuestion pickers to keystroke confirmation.
    */
-  onAnswerQuestion?: (answerIndex: number) => void;
+  onAnswerQuestion?: (answer: { questionId: number; index: number; text: string }) => void;
 }
 
 /**
@@ -81,9 +82,12 @@ export function reactToEvent(ev: unknown, ctx: ReactorContext): void {
   if (ev.type === "question.answered") {
     if (typeof ev.target_session_id !== "string") return;
     if (ev.target_session_id !== ctx.ownSessionId) return;
-    if (typeof ev.answer_index !== "number" || !Number.isInteger(ev.answer_index)) return;
-    if (ev.answer_index < 0) return;
-    ctx.onAnswerQuestion?.(ev.answer_index);
+    if (typeof ev.question_id !== "number" || !Number.isInteger(ev.question_id)) return;
+    // index は picker fallback 用 (Other は -1)。text は ask-marker のテキスト回答用。
+    const index =
+      typeof ev.answer_index === "number" && Number.isInteger(ev.answer_index) ? ev.answer_index : -1;
+    const text = typeof ev.answer_text === "string" ? ev.answer_text : "";
+    ctx.onAnswerQuestion?.({ questionId: ev.question_id, index, text });
     return;
   }
 
