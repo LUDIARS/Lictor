@@ -38,6 +38,13 @@ import {
   readActiveRepos,
   resolveActiveReposDir,
 } from "./active-repos.js";
+import {
+  ASK_MARKER_SKILL_BODY,
+  ASK_MARKER_SKILL_DESCRIPTION,
+  ASK_MARKER_SKILL_NAME,
+  writeAskMarkerPrompt,
+} from "./ask-marker.js";
+import { postResolveQuestion } from "./ask-question-relay.js";
 
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
@@ -135,6 +142,15 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     (msg) => process.stderr.write(`lictor: ${msg}\n`),
   );
 
+  // ask マーカー由来の pending-question id を覚えておく。これらは picker ではなく
+  // テキスト出力なので、回答は「キー注入」ではなく「テキスト注入」で返す
+  // (単一/複数/自由文を全部テキスト返信に一本化)。組み込み AskUserQuestion 由来の
+  // 質問 (= ここに無い id) は従来どおりキー注入の fallback に回す。
+  const markerQuestionIds = new Set<number>();
+  // まだローカル/リモートで解決していない marker 質問。ユーザが端末で返信したら
+  // (transcript に user メッセージが出たら) resolve 通知して Discord ボタンを失効させる。
+  const openMarkerQids = new Set<number>();
+
   // WS reactor — attach AFTER ctx so the dispatcher can read live state.
   if (concordia) {
     concordia.liveness.close(); // close the pre-ctx liveness opened by tryRegisterConcordia
@@ -180,12 +196,26 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
             `lictor: injected ${safe.length} bytes from Concordia (source=${source ?? "?"}, provider=${provider.name})\n`,
           );
         },
-        onAnswerQuestion: (answerIndex) => {
+        onAnswerQuestion: ({ questionId, index, text }) => {
           if (!ctx.ptyWriter) return;
-          // Concordia carries 0-based answer_index; buildAnswerSequence is
-          // 1-based ([1, 50]). Clamp the upper bound here so a malformed
-          // event can't push the picker past option 50.
-          const choice = answerIndex + 1;
+          // ask マーカー由来の質問は picker ではなくテキスト出力なので、回答は
+          // 「テキスト + Enter」 を通常の inject 経路で返す (キー注入しない)。
+          // answer_text は単一=ラベル / 複数=カンマ結合ラベル / Other=自由文。
+          if (markerQuestionIds.has(questionId)) {
+            markerQuestionIds.delete(questionId);
+            openMarkerQids.delete(questionId);
+            const safe = sanitizeKeySeq(text);
+            if (!safe) return;
+            provider.submitInject(ctx.ptyWriter, safe);
+            process.stderr.write(
+              `lictor: answered ask-marker question via text (qid=${questionId}, provider=${provider.name})\n`,
+            );
+            return;
+          }
+          // fallback: 組み込み AskUserQuestion picker。Concordia carries 0-based
+          // answer_index; buildAnswerSequence is 1-based ([1, 50]). Clamp the
+          // upper bound so a malformed event can't push the picker past option 50.
+          const choice = index + 1;
           if (choice < 1 || choice > 50) return;
           let seq: string;
           try {
@@ -195,7 +225,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           }
           ctx.ptyWriter(seq);
           process.stderr.write(
-            `lictor: confirmed AskUserQuestion picker via Concordia (answer_index=${answerIndex}, provider=${provider.name})\n`,
+            `lictor: confirmed AskUserQuestion picker via Concordia (answer_index=${index}, provider=${provider.name})\n`,
           );
         },
       }),
@@ -261,6 +291,43 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   }
   if (extraSettingsPath) providerArgs.push("--settings", extraSettingsPath);
 
+  // ask マーカー ステアリング注入 (concordia 連携時のみ = リモート回答対象)。
+  //   - claude: 共通マーカールール + 組み込み AskUserQuestion 禁止 を常時
+  //     --append-system-prompt-file で注入 (ファイル経由で Windows の cmd.exe
+  //     クォート問題を回避)。
+  //   - codex : 共通マーカールールを skill 注入 (Codex は ~/.agents/skills を自動探索)。
+  // gemini は注入機構が無いので skip。検出側 (transcript-tail) は askMarkerActive と連動。
+  let askMarkerActive = false;
+  if (concordia && injector) {
+    if (provider.name === "claude") {
+      try {
+        const promptPath = writeAskMarkerPrompt(injector.sessionDir);
+        providerArgs.push("--append-system-prompt-file", promptPath);
+        askMarkerActive = true;
+      } catch (err) {
+        process.stderr.write(
+          `lictor: ask-marker system-prompt write failed: ${(err as Error).message}\n`,
+        );
+      }
+    } else if (provider.name === "codex") {
+      try {
+        injector.writeSkill(
+          ASK_MARKER_SKILL_NAME,
+          renderSkillMd({
+            name: ASK_MARKER_SKILL_NAME,
+            description: ASK_MARKER_SKILL_DESCRIPTION,
+            body: ASK_MARKER_SKILL_BODY,
+          }),
+        );
+        askMarkerActive = true;
+      } catch (err) {
+        process.stderr.write(
+          `lictor: ask-marker skill seed failed: ${(err as Error).message}\n`,
+        );
+      }
+    }
+  }
+
   // node-pty on Windows uses CreateProcessW which does not auto-resolve .cmd
   // extensions. CLI bins ship as `<name>.cmd` in npm global bin, so wrap via
   // cmd.exe; on POSIX, spawn the binary directly.
@@ -301,13 +368,27 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // the wrapped session at all. Only meaningful when concordia is up.
   let transcriptTail: TranscriptTailHandle | null = null;
   if (concordia) {
+    const concordiaBaseUrl = `http://${process.env.CONCORDIA_HOST ?? "127.0.0.1"}:${process.env.CONCORDIA_PORT ?? "17330"}`;
     transcriptTail = startTranscriptTail({
       cwd: meta.cwd,
       sessionId: concordia.id,
-      concordiaBaseUrl: `http://${process.env.CONCORDIA_HOST ?? "127.0.0.1"}:${process.env.CONCORDIA_PORT ?? "17330"}`,
+      concordiaBaseUrl,
       provider,
       onQuestionOpen: (qid) => pendingQuestionGate.openQuestion(qid),
       onQuestionResolved: (qid) => pendingQuestionGate.resolveQuestion(qid),
+      askMarkerEnabled: askMarkerActive,
+      onAskMarkerPosted: (qid) => {
+        // この id の回答は picker キー注入ではなくテキスト注入で返す。
+        markerQuestionIds.add(qid);
+        openMarkerQids.add(qid);
+      },
+      onUserReply: () => {
+        // 端末でローカル返信された → 開いている marker 質問を解決し Discord ボタンを失効。
+        for (const qid of openMarkerQids) {
+          void postResolveQuestion(concordiaBaseUrl, concordia.id, qid);
+        }
+        openMarkerQids.clear();
+      },
     });
     // active-repos watcher が transcript-tail 経由で session UUID を引けるよう
     // ctx に getter を差す. transcript-tail が JSONL を発見するまで null を返す.

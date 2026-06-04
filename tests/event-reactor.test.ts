@@ -138,33 +138,37 @@ test("reactToEvent: question.answered with matching id calls onAnswerQuestion", 
     },
     ctx,
   );
-  assert.deepEqual(ctx.answerQuestionCalls, [2]);
+  assert.deepEqual(ctx.answerQuestionCalls, [{ questionId: 7, index: 2, text: "third option" }]);
 });
 
 test("reactToEvent: question.answered for a different session is ignored", () => {
   const ctx = makeReactorCtx({ ownSessionId: "me" });
   reactToEvent(
-    { type: "question.answered", target_session_id: "someone-else", answer_index: 0, ts: 1 },
+    { type: "question.answered", target_session_id: "someone-else", question_id: 1, answer_index: 0, ts: 1 },
     ctx,
   );
   assert.equal(ctx.answerQuestionCalls.length, 0);
 });
 
-test("reactToEvent: question.answered with non-integer answer_index is dropped", () => {
+test("reactToEvent: question.answered without a valid question_id is dropped", () => {
   const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent({ type: "question.answered", target_session_id: "me", answer_index: 0, ts: 1 }, ctx);
   reactToEvent(
-    { type: "question.answered", target_session_id: "me", answer_index: 1.5, ts: 1 },
-    ctx,
-  );
-  reactToEvent(
-    { type: "question.answered", target_session_id: "me", answer_index: "0", ts: 1 },
-    ctx,
-  );
-  reactToEvent(
-    { type: "question.answered", target_session_id: "me", answer_index: -1, ts: 1 },
+    { type: "question.answered", target_session_id: "me", question_id: 1.5, answer_index: 0, ts: 1 },
     ctx,
   );
   assert.equal(ctx.answerQuestionCalls.length, 0);
+});
+
+test("reactToEvent: Other 回答 (answer_index 欠落) でも text を載せて発火", () => {
+  // ask マーカーの自由文回答は answer_index を持たない (-1)。question_id があれば
+  // index=-1 + answer_text で発火し、wrap.ts がテキスト注入で返す。
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    { type: "question.answered", target_session_id: "me", question_id: 9, answer_text: "自由文回答", ts: 1 },
+    ctx,
+  );
+  assert.deepEqual(ctx.answerQuestionCalls, [{ questionId: 9, index: -1, text: "自由文回答" }]);
 });
 
 test("reactToEvent: question.answered with index 0 (first option) still fires", () => {
@@ -172,10 +176,10 @@ test("reactToEvent: question.answered with index 0 (first option) still fires", 
   // confirms the default selection (translates to plain Enter downstream).
   const ctx = makeReactorCtx({ ownSessionId: "me" });
   reactToEvent(
-    { type: "question.answered", target_session_id: "me", answer_index: 0, ts: 1 },
+    { type: "question.answered", target_session_id: "me", question_id: 3, answer_index: 0, answer_text: "A", ts: 1 },
     ctx,
   );
-  assert.deepEqual(ctx.answerQuestionCalls, [0]);
+  assert.deepEqual(ctx.answerQuestionCalls, [{ questionId: 3, index: 0, text: "A" }]);
 });
 
 test("applyTitleWithMarks: respects manual override", () => {
@@ -203,8 +207,8 @@ interface FakeReactorCtx {
   onPendingTaskHintCalled: number;
   onInject: (text: string, source: string | null) => void;
   injectCalls: Array<{ text: string; source: string | null }>;
-  onAnswerQuestion: (answerIndex: number) => void;
-  answerQuestionCalls: number[];
+  onAnswerQuestion: (answer: { questionId: number; index: number; text: string }) => void;
+  answerQuestionCalls: Array<{ questionId: number; index: number; text: string }>;
 }
 
 function makeReactorCtx(opts: { ownSessionId?: string | null }): FakeReactorCtx {
@@ -226,8 +230,8 @@ function makeReactorCtx(opts: { ownSessionId?: string | null }): FakeReactorCtx 
       ctx.injectCalls.push({ text, source });
     },
     injectCalls: [],
-    onAnswerQuestion: (answerIndex) => {
-      ctx.answerQuestionCalls.push(answerIndex);
+    onAnswerQuestion: (answer) => {
+      ctx.answerQuestionCalls.push(answer);
     },
     answerQuestionCalls: [],
   };

@@ -29,6 +29,8 @@ export interface PendingQuestion {
   id: string;
   question: string;
   options: Array<{ label: string; description?: string }>;
+  /** 複数選択可か (Discord 側の UI 切替用)。未指定は単一選択扱い。 */
+  multiSelect?: boolean;
 }
 
 /**
@@ -164,7 +166,7 @@ export function extractPendingQuestions(questions: unknown): PendingQuestion[] {
  * are dropped. Order is preserved so the answer-index → label mapping on
  * Concordia's side stays aligned.
  */
-function extractOptions(raw: unknown): Array<{ label: string; description?: string }> {
+export function extractOptions(raw: unknown): Array<{ label: string; description?: string }> {
   if (!Array.isArray(raw)) return [];
   const out: Array<{ label: string; description?: string }> = [];
   for (const opt of raw) {
@@ -207,7 +209,7 @@ export async function postPendingQuestion(
     const res = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ question: pq.question, options: pq.options }),
+      body: JSON.stringify({ question: pq.question, options: pq.options, multi_select: pq.multiSelect === true }),
       signal: ctrl.signal,
     });
     if (!res.ok) return null;
