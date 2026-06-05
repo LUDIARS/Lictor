@@ -24,6 +24,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractOptions } from "./ask-question-relay.js";
+import { extractAskJsonText, parseLenientJson } from "./ask-json.js";
 
 export interface AskMarker {
   question: string;
@@ -103,20 +104,46 @@ export function detectAskMarker(line: string): AskMarker | null {
 
 /**
  * 生テキストから ```ask ... ``` ブロックを取り出してパースする純関数 (テスト容易性のため分離)。
+ *
+ * 抽出は brace マッチ ({@link extractAskJsonText})、パースは寛容版
+ * ({@link parseLenientJson}) を使う。これで Windows パスの未エスケープ
+ * バックスラッシュ・全角クォート区切り・末尾カンマ・文字列内の生制御文字
+ * といった「手書き JSON あるある」を取りこぼさず質問カードに変換できる。
+ *
+ * ```ask フェンスはあるのに JSON が取り出せない / 直しても壊れている場合は、
+ * 無言で捨てず stderr に `[ask-marker]` で記録する (質問が消える事故の可視化)。
  */
 export function parseAskMarkerText(text: string): AskMarker | null {
-  const m = /```ask[^\n]*\n([\s\S]*?)```/.exec(text);
-  if (!m) return null;
-  let obj: any;
-  try {
-    obj = JSON.parse(m[1]);
-  } catch {
+  const raw = extractAskJsonText(text);
+  if (raw === null) return null; // そもそも ask マーカーが無い → 静かに無視
+  const obj = parseLenientJson(raw) as any;
+  if (!obj || typeof obj !== "object") {
+    logAskMarkerFailure("json-unparseable", raw);
     return null;
   }
-  if (!obj || typeof obj !== "object") return null;
   const question = typeof obj.question === "string" ? obj.question.trim() : "";
-  if (!question) return null;
+  if (!question) {
+    logAskMarkerFailure("missing-question", raw);
+    return null;
+  }
   const options = extractOptions(obj.options);
-  if (options.length === 0) return null;
+  if (options.length === 0) {
+    logAskMarkerFailure("no-options", raw);
+    return null;
+  }
   return { question, multiSelect: obj.multiSelect === true, options };
+}
+
+/**
+ * ask マーカーは見つかったのに質問カードに変換できなかったときの best-effort ログ。
+ * 生 JSON の先頭だけを切り詰めて出す (機微情報を長々と残さない)。stderr は
+ * Lictor のログに拾われる。失敗しても黙って無視 (ログのために本筋を壊さない)。
+ */
+function logAskMarkerFailure(reason: string, raw: string): void {
+  try {
+    const preview = raw.replace(/\s+/g, " ").slice(0, 160);
+    process.stderr.write(`[ask-marker] dropped question (${reason}): ${preview}\n`);
+  } catch {
+    /* best-effort */
+  }
 }
