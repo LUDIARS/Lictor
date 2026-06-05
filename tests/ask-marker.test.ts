@@ -45,6 +45,47 @@ test("parseAskMarkerText: 不正 JSON / 空 question / option ゼロ は null", 
   assert.equal(parseAskMarkerText('```ask\n{"question":"Q","options":[]}\n```'), null);
 });
 
+test("parseAskMarkerText: Windows パスの未エスケープ \\ を救済", () => {
+  // モデルが手書きで `E:\Document\Ars` のようにバックスラッシュを 1 個で書くと
+  // 厳格 JSON では不正エスケープ。寛容パースで質問カードに変換できること。
+  const text = '```ask\n{"question":"E:\\Document\\Ars を削除しますか?","options":[{"label":"はい"},{"label":"いいえ"}]}\n```';
+  const m = parseAskMarkerText(text);
+  assert.ok(m, "Windows パス入りでも null にならない");
+  assert.equal(m.question, "E:\\Document\\Ars を削除しますか?");
+  assert.equal(m.options.length, 2);
+});
+
+test("parseAskMarkerText: 末尾カンマを救済", () => {
+  const text = '```ask\n{"question":"どれ?","options":[{"label":"A"},{"label":"B"},]}\n```';
+  const m = parseAskMarkerText(text);
+  assert.ok(m);
+  assert.deepEqual(m.options, [{ label: "A" }, { label: "B" }]);
+});
+
+test("parseAskMarkerText: 全角クォート区切りを救済", () => {
+  const text = "```ask\n{“question”:“進める?”,“options”:[{“label”:“はい”}]}\n```";
+  const m = parseAskMarkerText(text);
+  assert.ok(m);
+  assert.equal(m.question, "進める?");
+  assert.deepEqual(m.options, [{ label: "はい" }]);
+});
+
+test("parseAskMarkerText: 文字列値に ``` が入っても切れない", () => {
+  // 旧実装は非貪欲 regex が値中の ``` で切れて壊れていた。
+  const text = '```ask\n{"question":"```json ブロックを消す?","options":[{"label":"消す"},{"label":"残す"}]}\n```';
+  const m = parseAskMarkerText(text);
+  assert.ok(m);
+  assert.equal(m.question, "```json ブロックを消す?");
+  assert.equal(m.options.length, 2);
+});
+
+test("parseAskMarkerText: 文字列値内の生改行を救済", () => {
+  const text = '```ask\n{"question":"複数行\nの確認","options":[{"label":"OK"}]}\n```';
+  const m = parseAskMarkerText(text);
+  assert.ok(m);
+  assert.equal(m.question, "複数行\nの確認");
+});
+
 test("detectAskMarker: Claude assistant 行から抽出", () => {
   const line = JSON.stringify({
     type: "assistant",
