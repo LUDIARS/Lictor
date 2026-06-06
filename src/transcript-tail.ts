@@ -137,6 +137,20 @@ export interface TranscriptTailOptions {
    * 開いている ask マーカー質問をローカル解決扱いにして Discord ボタンを失効させる。
    */
   onUserReply?: () => void;
+  /**
+   * spawn 時に `--session-id <uuid>` で固定した transcript JSONL の絶対パス。
+   *
+   * 指定があると mtime ベースの discover を **完全にバイパス** し、 このパスが
+   * 生成され次第そのファイルだけを claim/tail する。 uuid は wrapper が発番した
+   * 一意値なので、 同 cwd で別 wrapper が並走していても・先に非 Lictor の同
+   * provider を起動していても・context 要約で別 session に jsonl がローテート
+   * しても、 自分以外の transcript を誤って掴む (= 投稿が 1 つズレて別チャンネル
+   * に出る crosstalk) ことが構造的に起きない。
+   *
+   * null/未指定なら従来どおり mtime discover にフォールバックする
+   * (session-id 固定非対応 provider、 または resume 系 flag 指定時)。
+   */
+  pinnedTranscriptPath?: string | null;
 }
 
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
@@ -176,6 +190,19 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // 取れた wrapper だけがその jsonl を tail する. 取れなかった候補は次点を試す.
   // 自分の jsonl がまだ作成されていない場合は null で抜けて、 次回 poll で再 discover.
   const discover = (): string | null => {
+    // session-id 固定束縛が効いている場合は mtime 推測を一切せず、 固定 path のみ。
+    // wrapper が発番した一意 uuid のファイルなので claim 競合は構造的に起きないが、
+    // stale-claim 剥がし等の共通ロジックを通すため tryClaimJsonl は経由する。
+    if (opts.pinnedTranscriptPath) {
+      if (!existsSync(opts.pinnedTranscriptPath)) return null; // claude が生成するまで待つ
+      const cp = tryClaimJsonl(opts.pinnedTranscriptPath, STALE_CLAIM_MS, opts.sessionId);
+      if (cp) {
+        claimPath = cp;
+        claimDbg(`pinned transcript claimed path=${opts.pinnedTranscriptPath} owner=${opts.sessionId}`);
+        return opts.pinnedTranscriptPath;
+      }
+      return null; // 一意 uuid のため通常起き得ない; 万一 claim 済なら次 poll で再試行
+    }
     if (!existsSync(dir)) return null;
     type Candidate = { path: string; mtime: number };
     const candidates: Candidate[] = [];

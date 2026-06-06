@@ -95,6 +95,29 @@ export interface ProviderConfig {
    * watcher が session ID 単位で state ファイルを引くのに使う。
    */
   extractSessionId: (basenameWithoutExt: string) => string | null;
+  /**
+   * spawn 時に session-id を固定できる provider か。true なら wrap.ts が
+   * uuid を発番して {@link sessionPinArgs} を spawn 引数に足し、その uuid の
+   * transcript ファイル ({@link pinnedTranscriptFile}) だけを claim する。
+   *
+   * これにより transcript-tail の mtime 推測 discover を完全に回避できる。
+   * 別 wrapper の並走・非 Lictor で先行起動した同 provider・context 要約に
+   * よる session ローテートがあっても「Discord セッション ↔ jsonl ↔ channel」
+   * の取り違え (= 投稿が 1 つズレる crosstalk) が原理的に起きなくなる。
+   *
+   * false の provider (codex / gemini) は従来どおり mtime discover に委譲する。
+   */
+  supportsSessionPin: boolean;
+  /**
+   * 固定 uuid を spawn 引数に変換する (claude: `["--session-id", uuid]`)。
+   * {@link supportsSessionPin} が true のとき必須。
+   */
+  sessionPinArgs?: (uuid: string) => string[];
+  /**
+   * 固定 uuid に対応する transcript JSONL の絶対パスを返す。
+   * {@link supportsSessionPin} が true のとき必須。dir が解決できなければ null。
+   */
+  pinnedTranscriptFile?: (cwd: string, uuid: string) => string | null;
 }
 
 /**
@@ -199,6 +222,14 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     submitInject: submitInjectSingleWrite,
     transcriptDir: claudeTranscriptDir,
     extractSessionId: extractUuid,
+    // claude CLI は `--session-id <uuid>` で session を固定でき、 jsonl は
+    // `<uuid>.jsonl` に確定で書かれる。 これを使って取り違えを構造的に潰す。
+    supportsSessionPin: true,
+    sessionPinArgs: (uuid) => ["--session-id", uuid],
+    pinnedTranscriptFile: (cwd, uuid) => {
+      const dir = claudeTranscriptDir(cwd);
+      return dir ? join(dir, `${uuid}.jsonl`) : null;
+    },
   },
   codex: {
     name: "codex",
@@ -214,6 +245,9 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     submitInject: submitInjectTwoStep,
     transcriptDir: codexTranscriptDir,
     extractSessionId: extractUuid,
+    // codex は rollout filename を CLI 側が自動採番し session-id 固定 flag が
+    // 無いため pin 不可。 従来どおり mtime discover に委譲する。
+    supportsSessionPin: false,
   },
   gemini: {
     name: "gemini",
@@ -228,6 +262,8 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     submitInject: submitInjectSingleWrite,
     transcriptDir: () => null,
     extractSessionId: () => null,
+    // transcript ファイル自体が安定形式で吐かれないため pin 不可 (tail 自体 no-op)。
+    supportsSessionPin: false,
   },
 };
 

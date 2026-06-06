@@ -49,6 +49,23 @@ import { postResolveQuestion } from "./ask-question-relay.js";
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
 
+/**
+ * ユーザ自身が「既存 session を開く / 再開する」 flag を渡しているか。
+ * これらが在るときは Lictor が `--session-id` を固定すると意図 (resume 等) と
+ * 衝突するため、 session-id 固定束縛を見送って従来の mtime discover に委譲する。
+ */
+function hasSessionSelectingArg(args: readonly string[]): boolean {
+  return args.some(
+    (a) =>
+      a === "--session-id" ||
+      a === "--resume" ||
+      a === "-r" ||
+      a === "--continue" ||
+      a === "-c" ||
+      a === "--from-pr",
+  );
+}
+
 export async function runWrapped(args: string[], provider: ProviderConfig = PROVIDERS.claude): Promise<void> {
   const meta = gatherBaseMeta();
   meta.provider = provider.name;
@@ -291,6 +308,37 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   }
   if (extraSettingsPath) providerArgs.push("--settings", extraSettingsPath);
 
+  // セッション ID 固定束縛 (Discord セッション ↔ jsonl ↔ channel の取り違え防止)。
+  //
+  // wrapped CLI が session-id 固定に対応する (claude) なら、 ここで uuid を発番
+  // して `--session-id <uuid>` を spawn 引数に足し、 transcript-tail には
+  // 「その uuid の jsonl だけを claim せよ」 と固定 path を渡す。 これで
+  // transcript-tail の mtime 推測 discover を完全に廃し、
+  //   - 先に非 Lictor の claude を起動していた
+  //   - 同 cwd で別 wrapper が並走している
+  //   - context 要約で session が新 jsonl にローテートした
+  // のいずれでも、 自分以外の transcript を誤って掴む (= 投稿が 1 つズレて
+  // 別チャンネルに出る) crosstalk が構造的に起きなくなる。
+  //
+  // concordia 連携時のみ (= リモート中継対象)。 ユーザが自分で
+  // --session-id / --resume / --continue / --from-pr を渡している場合は、
+  // 既存 session を開く意図なので固定せず従来 discover に委譲する。
+  let pinnedTranscriptPath: string | null = null;
+  if (
+    concordia &&
+    provider.supportsSessionPin &&
+    provider.sessionPinArgs &&
+    provider.pinnedTranscriptFile &&
+    !hasSessionSelectingArg(args)
+  ) {
+    const pinnedUuid = randomUUID();
+    providerArgs.push(...provider.sessionPinArgs(pinnedUuid));
+    pinnedTranscriptPath = provider.pinnedTranscriptFile(meta.cwd, pinnedUuid);
+    process.stderr.write(
+      `lictor: pinned ${provider.displayName} session-id ${pinnedUuid} (transcript claim 固定)\n`,
+    );
+  }
+
   // ask マーカー ステアリング注入 (concordia 連携時のみ = リモート回答対象)。
   //   - claude: 共通マーカールール + 組み込み AskUserQuestion 禁止 を常時
   //     --append-system-prompt-file で注入 (ファイル経由で Windows の cmd.exe
@@ -377,6 +425,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       onQuestionOpen: (qid) => pendingQuestionGate.openQuestion(qid),
       onQuestionResolved: (qid) => pendingQuestionGate.resolveQuestion(qid),
       askMarkerEnabled: askMarkerActive,
+      pinnedTranscriptPath,
       onAskMarkerPosted: (qid) => {
         // この id の回答は picker キー注入ではなくテキスト注入で返す。
         markerQuestionIds.add(qid);
@@ -663,25 +712,32 @@ async function pollDiscordChannels(
 }
 
 export function applyAutoTitle(ctx: SidecarContext, stat: ReturnType<typeof gatherRepoStat>): void {
-  // Drop stale notify marks before composing so old "[!]" doesn't linger
-  // past its TTL across stat refreshes.
-  if (isNotifyStale(ctx.notifyState)) {
-    ctx.notifyState.mark = null;
-    ctx.notifyState.expiresAt = null;
+  // 状態由来のタイトル更新は完全に best-effort。 ここで throw すると status loop
+  // だけでなく sidecar の refreshAutoTitle 等 非 status 呼び出し元にも波及するため、
+  // never-throw を保証する (タイトルが古くなる < 主処理を止めない)。
+  try {
+    // Drop stale notify marks before composing so old "[!]" doesn't linger
+    // past its TTL across stat refreshes.
+    if (isNotifyStale(ctx.notifyState)) {
+      ctx.notifyState.mark = null;
+      ctx.notifyState.expiresAt = null;
+    }
+    applyTitleWithMarks(
+      ctx.titleState,
+      {
+        persona: ctx.meta.persona,
+        roleLabel: ctx.roleLabel,
+        stat,
+        cwd: ctx.meta.cwd,
+      },
+      {
+        conflict: ctx.conflictState.titleMark,
+        notify: ctx.notifyState.mark,
+      },
+    );
+  } catch (err) {
+    process.stderr.write(`lictor: applyAutoTitle best-effort failed: ${(err as Error).message}\n`);
   }
-  applyTitleWithMarks(
-    ctx.titleState,
-    {
-      persona: ctx.meta.persona,
-      roleLabel: ctx.roleLabel,
-      stat,
-      cwd: ctx.meta.cwd,
-    },
-    {
-      conflict: ctx.conflictState.titleMark,
-      notify: ctx.notifyState.mark,
-    },
-  );
 }
 
 /**
@@ -754,14 +810,22 @@ function seedSkills(injector: SkillInjector, meta: Meta): void {
 
 async function pushStat(ctx: SidecarContext): Promise<void> {
   if (!ctx.concordia || !ctx.sessionId) return;
-  // active-repo が判明していればそれを基準に stat を採取. 未判明 (Claude 未起動、
-  // hook 未発火、 transcript-tail 未 discover) なら wrap-start cwd フォールバック.
-  const cwd = ctx.activeRepoState.lastActive ?? ctx.meta.cwd;
-  const stat = gatherRepoStat(cwd);
-  applyAutoTitle(ctx, stat); // auto-refresh title each cycle in case branch changed
-  // v0.4: also refresh the live-state skill so claude sees the snapshot.
-  if (ctx.injector) writeSessionStateSkill(ctx.injector, stat);
-  await ctx.concordia.stat(ctx.sessionId, stat);
+  // 状態更新 (stat / 状態チャンネル) は best-effort。 セッション本体 (transcript
+  // relay / 質問 / 入力注入) とは独立で、 ここで何が起きても主処理に波及させない。
+  // 状態とセッションは「対応させる」 必要が無いので、 全 IO を 1 つの try/catch で
+  // 黙って握りつぶす (誤った状態が出るより、 主処理を止めない方を優先する)。
+  try {
+    // active-repo が判明していればそれを基準に stat を採取. 未判明 (Claude 未起動、
+    // hook 未発火、 transcript-tail 未 discover) なら wrap-start cwd フォールバック.
+    const cwd = ctx.activeRepoState.lastActive ?? ctx.meta.cwd;
+    const stat = gatherRepoStat(cwd);
+    applyAutoTitle(ctx, stat); // auto-refresh title each cycle in case branch changed
+    // v0.4: also refresh the live-state skill so claude sees the snapshot.
+    if (ctx.injector) writeSessionStateSkill(ctx.injector, stat);
+    await ctx.concordia.stat(ctx.sessionId, stat);
+  } catch (err) {
+    process.stderr.write(`lictor: pushStat best-effort failed: ${(err as Error).message}\n`);
+  }
 }
 
 /**
@@ -809,25 +873,33 @@ async function pollLiveState(ctx: SidecarContext): Promise<void> {
     ctx.activeRepoState.lastList = activeRepos.slice();
   }
 
-  // 残り branch / conflicts / 標題は active repo を基準に計算する
+  // 残り branch / conflicts / 標題は active repo を基準に計算する。
+  // gatherRepoStat は内部で全 git 失敗を握りつぶす (never-throw)、 applyAutoTitle も
+  // never-throw 化済。 唯一 reject し得る branch relay の await だけを try/catch で
+  // 隔離し、 何が起きても以降の pending-tasks / conflicts ステップは回す
+  // (= docstring 通りステップ間独立を保証)。
   const stat = gatherRepoStat(activeCwd);
   if (activeChanged) applyAutoTitle(ctx, stat);
 
   // Branch relay — if the working branch changed since last seen, PATCH
   // Concordia and emit an event so other sessions/dashboards stay synced.
   if (stat.branch && stat.branch !== ctx.taskState.branch) {
-    const next = await relayTask({
-      client: ctx.concordia,
-      sessionId: ctx.sessionId,
-      injector: ctx.injector,
-      state: ctx.taskState,
-      branch: stat.branch,
-      // Don't auto-fill desc — that's the user/claude's job via lictor cli task set.
-      source: "auto",
-    });
-    ctx.taskState = next;
-    // Conflict mark may shift on branch change; refresh title.
-    applyAutoTitle(ctx, stat);
+    try {
+      const next = await relayTask({
+        client: ctx.concordia,
+        sessionId: ctx.sessionId,
+        injector: ctx.injector,
+        state: ctx.taskState,
+        branch: stat.branch,
+        // Don't auto-fill desc — that's the user/claude's job via lictor cli task set.
+        source: "auto",
+      });
+      ctx.taskState = next;
+      // Conflict mark may shift on branch change; refresh title.
+      applyAutoTitle(ctx, stat);
+    } catch (err) {
+      process.stderr.write(`lictor: pollLiveState branch relay best-effort failed: ${(err as Error).message}\n`);
+    }
   }
 
   // Pending tasks → lictor-pending-tasks skill

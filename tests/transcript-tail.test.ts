@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { lineToFrame, tryClaimJsonl, refreshClaim, readRecentFromFile } from "../src/transcript-tail.js";
+import { lineToFrame, tryClaimJsonl, refreshClaim, readRecentFromFile, startTranscriptTail } from "../src/transcript-tail.js";
+import { PROVIDERS } from "../src/provider.js";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 test("lineToFrame: assistant text → text frame", () => {
   const f = lineToFrame(JSON.stringify({
@@ -429,6 +432,54 @@ test("readRecentFromFile: raw=true で壊れた行は捨てる", () => {
     const r = readRecentFromFile(p, 10, true);
     assert.equal(r.total_lines, 2); // 母数は非空行数
     assert.equal(r.returned, 1);    // パースできた 1 件だけ
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ─── pinned transcript path (session-id 固定束縛) ──────────────────────────
+// `--session-id <uuid>` で固定したセッションは、 mtime 推測を一切せず自分の
+// uuid の jsonl だけを claim する。 同 dir に「より新しい別 jsonl (= 並走別
+// wrapper / 先行起動した非 Lictor claude)」 があっても掴まない (= 投稿が 1 つ
+// ズレて別チャンネルに出る crosstalk が構造的に起きない) ことを固定する。
+test("startTranscriptTail: pinnedTranscriptPath は自分の jsonl だけを claim し、 より新しい decoy を無視する", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-pin-"));
+  try {
+    // decoy: 別セッションの jsonl を「より新しい mtime」 で先に置く。
+    const decoyUuid = "11111111-1111-4111-8111-111111111111";
+    const decoyPath = join(dir, `${decoyUuid}.jsonl`);
+    writeFileSync(decoyPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"decoy"}]}}\n');
+    const future = Date.now() / 1000 + 600; // 10 分未来 → mtime 最新
+    utimesSync(decoyPath, future, future);
+
+    // 自分の固定 uuid。 transcriptDir を temp dir に差し替えた provider を渡す。
+    const ownUuid = "22222222-2222-4222-8222-222222222222";
+    const pinnedPath = join(dir, `${ownUuid}.jsonl`);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-test-session",
+      concordiaBaseUrl: "http://127.0.0.1:1", // 到達不能 → postFrame は黙って drop
+      provider,
+      pinnedTranscriptPath: pinnedPath,
+    });
+    try {
+      // 固定ファイルはまだ無い → poll しても何も claim しない (decoy も掴まない)。
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), null, "固定ファイル未生成の間は何も discover しない");
+      assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "decoy を mtime で誤掴みしない");
+
+      // 自分の jsonl が生成された → これだけを claim する。
+      writeFileSync(pinnedPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"mine"}]}}\n');
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), pinnedPath, "固定 path を tail する");
+      assert.equal(existsSync(`${pinnedPath}.lictor-claim`), true, "固定 path を claim する");
+      assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "より新しい decoy は最後まで掴まない");
+      assert.equal(tail.getSessionUuid(), ownUuid, "session uuid は固定 uuid を返す");
+    } finally {
+      tail.stop();
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
