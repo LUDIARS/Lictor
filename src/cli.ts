@@ -18,10 +18,11 @@ Usage:
   lictor gemini [args...]              Wrap Gemini CLI. pty + title + Concordia
                                        (no skill injection — Gemini lacks a
                                        SKILL.md discovery mechanism).
-  lictor local [args...]               ローカル LLM (Ollama) の軽量チャット
-                                       エージェント。会話ログ永続 + 文脈
-                                       compaction + hook。pty + title + Concordia。
-                                       LICTOR_LOCAL_MODEL 等で設定 (既定 gemma4:12b)。
+  lictor gemma4-12 [args...]           ローカル LLM (Ollama) の軽量チャット
+                                       エージェント (既定モデル gemma4:12b)。会話ログ
+                                       永続 + 文脈 compaction + hook。pty + title +
+                                       Concordia。LICTOR_LOCAL_MODEL 等で設定可。
+                                       旧名 \`lictor local\` もエイリアスで起動可。
 
   lictor cli title <text>              Set the host terminal title (manual override).
   lictor cli title-auto                Drop the manual override; resume auto title.

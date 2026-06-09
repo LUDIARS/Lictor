@@ -17,14 +17,15 @@ LUDIARS short code: **Li**. Default loopback port: ephemeral (registered in
 |----------------------|-----------------------|-----------------|--------------------|-----------|
 | Claude Code          | `lictor claude [args]`| ✅ (`--add-dir`) | ✅                  | ✅         |
 | OpenAI Codex CLI     | `lictor codex [args]` | ❌ (no SKILL.md disco) | ✅                  | ✅         |
-| Local LLM (Ollama)   | `lictor local`        | ❌ (built-in agent)   | ✅                  | ✅         |
+| Local LLM (Ollama)   | `lictor gemma4-12`    | ❌ (built-in agent)   | ✅                  | ✅         |
 
 Claude/Codex/Gemini share the title/Concordia/session-meta/pty surface; only the
 skill-injection paths differ. Codex's own `--add-dir` widens the writable
 sandbox but doesn't trigger skill scanning, so `/v1/skill` returns 503 for
 Codex sessions.
 
-`lictor local` is different: it does **not** wrap an external CLI. It spawns
+`lictor gemma4-12` (旧名 `lictor local` も alias で可) is different: it does
+**not** wrap an external CLI. It spawns
 Lictor itself (`lictor cli local-agent`) as a built-in lightweight chat agent
 that talks to a local OpenAI-compatible endpoint (Ollama, default
 `http://127.0.0.1:11434/v1`, model `gemma4:12b`). It is a light stand-in for

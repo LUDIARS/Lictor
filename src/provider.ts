@@ -271,11 +271,12 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // transcript ファイル自体が安定形式で吐かれないため pin 不可 (tail 自体 no-op)。
     supportsSessionPin: false,
   },
-  local: {
-    // ローカル LLM エージェント。外部 CLI ではなく lictor 自身を pty で再起動し、
-    // 隠しサブコマンド `lictor cli local-agent` (= Ollama を文脈保持で叩く軽量 REPL)
-    // を起動する。codex ガワの軽量代行。spec/local-llm-agent.md。
-    name: "local",
+  "gemma4-12": {
+    // ローカル LLM エージェント (既定モデル gemma4:12b)。外部 CLI ではなく lictor
+    // 自身を pty で再起動し、隠しサブコマンド `lictor cli local-agent` (= Ollama を
+    // 文脈保持で叩く軽量 REPL) を起動する。codex ガワの軽量代行。spec/local-llm-agent.md。
+    // 旧名 `local` は getProvider のエイリアスで引き続き起動可。
+    name: "gemma4-12",
     binary: "lictor",
     spawnArgs: ["cli", "local-agent"],
     // 会話ログ・compaction・hook は REPL 自身が持つ。Lictor の SKILL 注入は使わない。
@@ -293,6 +294,11 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
   },
 };
 
+// 旧 provider 名 → 現行キーのエイリアス。後方互換のためだけに引く。
+const PROVIDER_ALIASES: Record<string, string> = {
+  local: "gemma4-12",
+};
+
 export function getProvider(name: string): ProviderConfig | null {
-  return PROVIDERS[name] ?? null;
+  return PROVIDERS[name] ?? PROVIDERS[PROVIDER_ALIASES[name] ?? ""] ?? null;
 }
