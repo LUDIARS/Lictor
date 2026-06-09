@@ -37,6 +37,12 @@ export interface ProviderConfig {
   /** Binary to spawn. Resolved via PATH (with shell:true on Windows for .cmd). */
   binary: string;
   /**
+   * binary に対して **ユーザ args の前に** 必ず差し込む固定 args。
+   * `local` provider が `binary = "lictor"` を自分自身 (`lictor cli local-agent`)
+   * として再起動するために使う。未指定なら何も差さない (claude/codex/gemini)。
+   */
+  spawnArgs?: string[];
+  /**
    * Strategy for delivering SKILL.md files to the wrapped CLI. See
    * {@link SkillStrategy} for layout details. `none` disables skill
    * injection entirely for the provider.
@@ -263,6 +269,26 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     transcriptDir: () => null,
     extractSessionId: () => null,
     // transcript ファイル自体が安定形式で吐かれないため pin 不可 (tail 自体 no-op)。
+    supportsSessionPin: false,
+  },
+  local: {
+    // ローカル LLM エージェント。外部 CLI ではなく lictor 自身を pty で再起動し、
+    // 隠しサブコマンド `lictor cli local-agent` (= Ollama を文脈保持で叩く軽量 REPL)
+    // を起動する。codex ガワの軽量代行。spec/local-llm-agent.md。
+    name: "local",
+    binary: "lictor",
+    spawnArgs: ["cli", "local-agent"],
+    // 会話ログ・compaction・hook は REPL 自身が持つ。Lictor の SKILL 注入は使わない。
+    skillStrategy: "none",
+    supportsSkills: false,
+    concordiaProvider: "local-llm",
+    displayName: "Local LLM (Ollama)",
+    submitInject: submitInjectSingleWrite,
+    // 本エージェントは独自 JSONL (~/.lictor/local-sessions) に書く。Concordia
+    // transcript-tail への frame 中継は形式が違うため follow-up (tail 側に local
+    // parser を足す別 PR)。ここでは null = tail 起動せず。
+    transcriptDir: () => null,
+    extractSessionId: () => null,
     supportsSessionPin: false,
   },
 };

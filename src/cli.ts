@@ -3,6 +3,7 @@ import { runClient } from "./client.js";
 import { getProvider } from "./provider.js";
 import { runPermissionHook } from "./permission-hook.js";
 import { runAskQuestionHook } from "./ask-question-hook.js";
+import { runLocalAgent } from "./local-agent/index.js";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 import { install as installVestigium } from "@ludiars/vestigium";
 
@@ -17,6 +18,10 @@ Usage:
   lictor gemini [args...]              Wrap Gemini CLI. pty + title + Concordia
                                        (no skill injection — Gemini lacks a
                                        SKILL.md discovery mechanism).
+  lictor local [args...]               ローカル LLM (Ollama) の軽量チャット
+                                       エージェント。会話ログ永続 + 文脈
+                                       compaction + hook。pty + title + Concordia。
+                                       LICTOR_LOCAL_MODEL 等で設定 (既定 gemma4:12b)。
 
   lictor cli title <text>              Set the host terminal title (manual override).
   lictor cli title-auto                Drop the manual override; resume auto title.
@@ -118,6 +123,12 @@ async function main() {
     // picker を絶対に止めない (内部で全エラーを飲み込み exit 0)。
     if (rest[0] === "ask-question-hook") {
       await runAskQuestionHook();
+      return;
+    }
+    // `lictor local` provider が pty で起動する内部サブコマンド (= ローカル LLM REPL)。
+    // 直接ユーザが叩くことも可。LICTOR_PORT 等は wrap が env で渡す。
+    if (rest[0] === "local-agent") {
+      await runLocalAgent();
       return;
     }
     await runClient(rest);
