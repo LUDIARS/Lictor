@@ -291,10 +291,13 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   //      bridge. Only applies when Concordia is up AND we have an injector
   //      (i.e. a real session dir to write the settings file into). For
   //      Codex we skip — claude's --settings flag is not portable.
+  // provider.spawnArgs は user args の前に必ず差す (local: ["cli","local-agent"] で
+  // lictor 自身を REPL として再起動)。claude/codex/gemini は spawnArgs 無し。
+  const baseArgs = provider.spawnArgs ? [...provider.spawnArgs, ...args] : [...args];
   const providerArgs =
     provider.skillStrategy === "claude-add-dir" && injector
-      ? ["--add-dir", injector.sessionDir, ...args]
-      : [...args];
+      ? ["--add-dir", injector.sessionDir, ...baseArgs]
+      : baseArgs;
 
   let extraSettingsPath: string | null = null;
   if (concordia && injector && provider.name === "claude") {
