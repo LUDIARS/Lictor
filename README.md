@@ -17,11 +17,23 @@ LUDIARS short code: **Li**. Default loopback port: ephemeral (registered in
 |----------------------|-----------------------|-----------------|--------------------|-----------|
 | Claude Code          | `lictor claude [args]`| ✅ (`--add-dir`) | ✅                  | ✅         |
 | OpenAI Codex CLI     | `lictor codex [args]` | ❌ (no SKILL.md disco) | ✅                  | ✅         |
+| Local LLM (Ollama)   | `lictor local`        | ❌ (built-in agent)   | ✅                  | ✅         |
 
-Both providers share the title/Concordia/session-meta/pty surface; only the
+Claude/Codex/Gemini share the title/Concordia/session-meta/pty surface; only the
 skill-injection paths differ. Codex's own `--add-dir` widens the writable
 sandbox but doesn't trigger skill scanning, so `/v1/skill` returns 503 for
 Codex sessions.
+
+`lictor local` is different: it does **not** wrap an external CLI. It spawns
+Lictor itself (`lictor cli local-agent`) as a built-in lightweight chat agent
+that talks to a local OpenAI-compatible endpoint (Ollama, default
+`http://127.0.0.1:11434/v1`, model `gemma4:12b`). It is a light stand-in for
+the codex shell when you just want a **context-keeping local LLM session** (no
+tool-use / file-editing). Features: conversation-log persistence (resumable
+JSONL), context-size **compaction** (summarize-and-fold past the threshold,
+done by the local LLM itself — zero cloud), and lifecycle **hooks**
+(SessionStart / UserPromptSubmit / Stop). Config via `LICTOR_LOCAL_*` env.
+Design: `spec/local-llm-agent.md`.
 
 ## Why
 
