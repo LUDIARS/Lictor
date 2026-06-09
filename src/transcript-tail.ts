@@ -481,6 +481,21 @@ export function lineToFrame(line: string): Frame | null {
   }
   if (!msg || typeof msg !== "object") return null;
 
+  // ─── Lictor ローカル LLM エージェント形式 ──────────────────────────────
+  // local-agent (`lictor cli local-agent`) の独自 JSONL は {ts, role, content}
+  // で `type` を持たない。 role+content の string ペアで判定し text/system frame 化する。
+  // (compaction 等 role を持たない行は下の type 分岐へ素通りし最終的に raw になる)
+  if (
+    msg.type === undefined &&
+    typeof msg.role === "string" &&
+    typeof msg.content === "string"
+  ) {
+    if (msg.role === "assistant" || msg.role === "user") {
+      return { kind: "text", payload: { role: msg.role, text: msg.content.slice(0, 4000) } };
+    }
+    return { kind: "system", payload: { text: msg.content.slice(0, 4000) } };
+  }
+
   const type = typeof msg.type === "string" ? msg.type : "unknown";
 
   // Claude per-message uuid — used by PR-F as a fork anchor.
