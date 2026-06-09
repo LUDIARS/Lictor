@@ -28,6 +28,21 @@ test("lineToFrame: user text → text frame", () => {
   assert.deepEqual(f, { kind: "text", payload: { role: "user", text: "do the thing", claude_uuid: "msg-2" } });
 });
 
+test("lineToFrame: local-agent {ts,role,content} assistant → text frame", () => {
+  const f = lineToFrame(JSON.stringify({ ts: 1, role: "assistant", content: "ローカル応答" }));
+  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "ローカル応答" } });
+});
+
+test("lineToFrame: local-agent {ts,role,content} user → text frame", () => {
+  const f = lineToFrame(JSON.stringify({ ts: 2, role: "user", content: "質問" }));
+  assert.deepEqual(f, { kind: "text", payload: { role: "user", text: "質問" } });
+});
+
+test("lineToFrame: local-agent system role → system frame", () => {
+  const f = lineToFrame(JSON.stringify({ ts: 3, role: "system", content: "[hook] ctx" }));
+  assert.deepEqual(f, { kind: "system", payload: { text: "[hook] ctx" } });
+});
+
 test("lineToFrame: text frame includes null claude_uuid when missing", () => {
   const f = lineToFrame(JSON.stringify({
     type: "assistant",
