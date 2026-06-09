@@ -285,11 +285,14 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     concordiaProvider: "local-llm",
     displayName: "Local LLM (Ollama)",
     submitInject: submitInjectSingleWrite,
-    // 本エージェントは独自 JSONL (~/.lictor/local-sessions) に書く。Concordia
-    // transcript-tail への frame 中継は形式が違うため follow-up (tail 側に local
-    // parser を足す別 PR)。ここでは null = tail 起動せず。
-    transcriptDir: () => null,
-    extractSessionId: () => null,
+    // 本エージェントは独自 JSONL (~/.lictor/local-sessions/<sessionId>.jsonl) に
+    // {ts, role, content} 形式で書く。 transcript-tail がこの dir を mtime discover
+    // で tail し、 lineToFrame の local 分岐で text frame 化して Concordia に中継する
+    // (= REPL の応答が Web/Discord に出る)。 local-agent の sessionId は
+    // LICTOR_SESSION_ID (= Concordia session id) なので衝突せず discover できる。
+    transcriptDir: () => join(homedir(), ".lictor", "local-sessions"),
+    // ファイル名は `<lictor-uuid>.jsonl`。 末尾 UUID を共通正規表現で抽出する。
+    extractSessionId: extractUuid,
     supportsSessionPin: false,
   },
 };
