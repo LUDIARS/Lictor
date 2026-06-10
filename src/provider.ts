@@ -272,25 +272,26 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     supportsSessionPin: false,
   },
   "gemma4-12": {
-    // ローカル LLM エージェント (既定モデル gemma4:12b)。外部 CLI ではなく lictor
-    // 自身を pty で再起動し、隠しサブコマンド `lictor cli local-agent` (= Ollama を
-    // 文脈保持で叩く軽量 REPL) を起動する。codex ガワの軽量代行。spec/local-llm-agent.md。
-    // 旧名 `local` は getProvider のエイリアスで引き続き起動可。
+    // ローカル LLM エージェント (既定モデル gemma4:12b)。実体は別リポ Famulus
+    // (@ludiars/famulus、ローカル LLM スポナー) の `famulus run` を pty で起動する。
+    // 旧 `lictor cli local-agent` 内蔵実装からの載せ替え (2026-06-10)。Famulus は
+    // 任意タスクからも再利用される共通スポナー。旧名 `local` は getProvider の
+    // エイリアスで引き続き起動可。
     name: "gemma4-12",
-    binary: "lictor",
-    spawnArgs: ["cli", "local-agent"],
-    // 会話ログ・compaction・hook は REPL 自身が持つ。Lictor の SKILL 注入は使わない。
+    binary: "famulus",
+    spawnArgs: ["run"],
+    // 会話ログ・compaction・hook は Famulus の REPL が持つ。Lictor の SKILL 注入は使わない。
     skillStrategy: "none",
     supportsSkills: false,
     concordiaProvider: "local-llm",
-    displayName: "Local LLM (Ollama)",
+    displayName: "Local LLM (Famulus / Ollama)",
     submitInject: submitInjectSingleWrite,
-    // 本エージェントは独自 JSONL (~/.lictor/local-sessions/<sessionId>.jsonl) に
-    // {ts, role, content} 形式で書く。 transcript-tail がこの dir を mtime discover
-    // で tail し、 lineToFrame の local 分岐で text frame 化して Concordia に中継する
-    // (= REPL の応答が Web/Discord に出る)。 local-agent の sessionId は
-    // LICTOR_SESSION_ID (= Concordia session id) なので衝突せず discover できる。
-    transcriptDir: () => join(homedir(), ".lictor", "local-sessions"),
+    // Famulus は独自 JSONL (~/.famulus/sessions/<sessionId>.jsonl) に {ts, role, content}
+    // 形式で書く。 transcript-tail がこの dir を mtime discover で tail し、 lineToFrame の
+    // local 分岐で text frame 化して Concordia に中継する (= REPL の応答が Web/Discord に出る)。
+    // Famulus の sessionId は LICTOR_SESSION_ID (= Concordia session id) を後方互換で読むので
+    // 衝突せず discover できる (Lictor が wrap で env export 済)。
+    transcriptDir: () => join(homedir(), ".famulus", "sessions"),
     // ファイル名は `<lictor-uuid>.jsonl`。 末尾 UUID を共通正規表現で抽出する。
     extractSessionId: extractUuid,
     supportsSessionPin: false,
