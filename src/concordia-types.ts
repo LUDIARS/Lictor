@@ -47,6 +47,11 @@ export interface ConcordiaChatPayload {
    * (session→channel ルックアップを介さない = 返信混線の根治)。
    */
   discord_channel_id?: string;
+  /**
+   * Concordia サーバと同一ホスト上のファイル絶対パス一覧。
+   * egress が読み込んで Discord webhook に添付する。最大 10 件。
+   */
+  attachment_paths?: string[];
 }
 
 /**
