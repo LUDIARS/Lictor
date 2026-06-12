@@ -279,6 +279,7 @@ async function handle(
       author_label?: unknown;
       scope?: unknown;
       in_reply_to?: unknown;
+      attachment_paths?: unknown;
     };
     if (typeof payload.channel !== "string" || typeof payload.text !== "string") {
       return writeJson(res, 400, { error: "channel and text (string) required" });
@@ -287,6 +288,11 @@ async function handle(
       typeof payload.author_label === "string" && payload.author_label.length > 0
         ? payload.author_label
         : defaultAuthorLabel(ctx);
+    const attachmentPaths =
+      Array.isArray(payload.attachment_paths) &&
+      payload.attachment_paths.every((p) => typeof p === "string")
+        ? (payload.attachment_paths as string[])
+        : undefined;
     // identity (session_id / author_label) と送信先 channel ID は sidecar が
     // authoritative に刻印する。AI/skill は channel 名と中身しか渡さないので
     // 別 session へのなりすまし (返信混線) が原理的に起きない。
@@ -298,6 +304,7 @@ async function handle(
       scope: typeof payload.scope === "string" ? payload.scope : undefined,
       in_reply_to: typeof payload.in_reply_to === "number" ? payload.in_reply_to : undefined,
       discord_channel_id: resolveDiscordChannelId(ctx, payload.channel),
+      ...(attachmentPaths ? { attachment_paths: attachmentPaths } : {}),
     });
     writeJson(res, 200, reply);
     return;
