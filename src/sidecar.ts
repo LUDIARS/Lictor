@@ -74,6 +74,12 @@ export interface SidecarContext {
    * pty 無し harness) のときは null で、 `GET /v1/transcript` は 503 を返す.
    */
   getTranscript: ((limit: number, raw: boolean) => TranscriptReadResult) | null;
+  /**
+   * ラップ中の AI プロセス (node-pty child) を強制終了するコールバック。
+   * wrap.ts が pty spawn 後にセットする。pty 無し harness では null。
+   * Concordia の session DELETE が force-exit を要求したときに使う。
+   */
+  forceExit: (() => void) | null;
 }
 
 export interface Sidecar {
@@ -588,6 +594,17 @@ async function handle(
       decision: payload.decision,
       reason: typeof payload.reason === "string" ? payload.reason : undefined,
     });
+    writeJson(res, 200, { ok: true });
+    return;
+  }
+
+  // Concordia の session DELETE 後に呼ばれ、ラップ中の AI プロセスを終了させる。
+  // Lictor の cleanup() が onExit で走るので Concordia への unregister も後続する。
+  if (method === "POST" && url === "/v1/internal/force-exit") {
+    if (!ctx.forceExit) {
+      return writeJson(res, 503, { error: "force-exit not available (no pty)" });
+    }
+    ctx.forceExit();
     writeJson(res, 200, { ok: true });
     return;
   }

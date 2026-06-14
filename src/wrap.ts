@@ -117,6 +117,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     activeRepoState: { lastActive: null, lastList: [] },
     getClaudeSessionId: null,
     getTranscript: null,
+    forceExit: null,
   };
 
   const sidecar = await startSidecar(ctx);
@@ -398,6 +399,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   });
 
   ctx.ptyWriter = (data: string) => child.write(data);
+  ctx.forceExit = () => { child.kill("SIGTERM"); };
 
   // Delegation prompt auto-inject — when Concordia spawned us via
   // /v1/delegation/invoke, env CONCORDIA_DELEGATION_PROMPT_FILE points at the
