@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getProvider, PROVIDERS } from "../src/provider.js";
+import { getProvider, PROVIDERS, resolveBinary } from "../src/provider.js";
 
 test("PROVIDERS registers claude with claude-add-dir skill strategy", () => {
   const p = PROVIDERS.claude;
@@ -38,6 +38,48 @@ test("getProvider: known names resolve", () => {
 test("getProvider: unknown returns null", () => {
   assert.equal(getProvider("gpt-cli"), null);
   assert.equal(getProvider(""), null);
+});
+
+// ─── resolveBinary: famulus 等の外部 CLI を env で差し替える ──────────────
+
+test("PROVIDERS.gemma4-12 declares LICTOR_FAMULUS_BIN as its binary override", () => {
+  const p = PROVIDERS["gemma4-12"];
+  assert.equal(p.binary, "famulus");
+  assert.equal(p.binaryEnvVar, "LICTOR_FAMULUS_BIN");
+  // 旧名 `local` も同じ provider に解決する。
+  assert.equal(getProvider("local")?.binaryEnvVar, "LICTOR_FAMULUS_BIN");
+});
+
+test("resolveBinary: env が設定済なら binary を上書きする", () => {
+  const bin = resolveBinary(PROVIDERS["gemma4-12"], {
+    LICTOR_FAMULUS_BIN: "C:\\tools\\famulus.cmd",
+  });
+  assert.equal(bin, "C:\\tools\\famulus.cmd");
+});
+
+test("resolveBinary: env 未設定なら既定 binary のまま", () => {
+  assert.equal(resolveBinary(PROVIDERS["gemma4-12"], {}), "famulus");
+});
+
+test("resolveBinary: 空白のみの override は無視して既定にフォールバック", () => {
+  assert.equal(
+    resolveBinary(PROVIDERS["gemma4-12"], { LICTOR_FAMULUS_BIN: "   " }),
+    "famulus",
+  );
+  // 値は trim される。
+  assert.equal(
+    resolveBinary(PROVIDERS["gemma4-12"], { LICTOR_FAMULUS_BIN: "  fam  " }),
+    "fam",
+  );
+});
+
+test("resolveBinary: binaryEnvVar を持たない provider は env を無視する", () => {
+  // claude は override スロットを持たないので env があっても binary 固定。
+  assert.equal(PROVIDERS.claude.binaryEnvVar, undefined);
+  assert.equal(
+    resolveBinary(PROVIDERS.claude, { LICTOR_FAMULUS_BIN: "nope" }),
+    "claude",
+  );
 });
 
 test("submitInject(claude): 1 chunk で text + \\r を書く", () => {

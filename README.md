@@ -24,17 +24,20 @@ skill-injection paths differ. Codex's own `--add-dir` widens the writable
 sandbox but doesn't trigger skill scanning, so `/v1/skill` returns 503 for
 Codex sessions.
 
-`lictor gemma4-12` (旧名 `lictor local` も alias で可) is different: it does
-**not** wrap an external CLI. It spawns
-Lictor itself (`lictor cli local-agent`) as a built-in lightweight chat agent
-that talks to a local OpenAI-compatible endpoint (Ollama, default
-`http://127.0.0.1:11434/v1`, model `gemma4:12b`). It is a light stand-in for
-the codex shell when you just want a **context-keeping local LLM session** (no
-tool-use / file-editing). Features: conversation-log persistence (resumable
-JSONL), context-size **compaction** (summarize-and-fold past the threshold,
-done by the local LLM itself — zero cloud), and lifecycle **hooks**
-(SessionStart / UserPromptSubmit / Stop). Config via `LICTOR_LOCAL_*` env.
-Design: `spec/local-llm-agent.md`.
+`lictor gemma4-12` (旧名 `lictor local` も alias で可) is different: it wraps
+**Famulus** (`@ludiars/famulus`, `famulus run`), a separate local-LLM spawner
+CLI, instead of a cloud agent. Famulus is a light stand-in for the codex shell
+when you just want a **context-keeping local LLM session** (no tool-use /
+file-editing): conversation-log persistence (resumable JSONL), context-size
+**compaction**, and lifecycle **hooks**. It talks to a local
+OpenAI-compatible endpoint (Ollama, default `http://127.0.0.1:11434/v1`, model
+`gemma4:12b`).
+
+> Famulus is **not** a Lictor dependency — install it separately on each
+> machine. By default Lictor spawns `famulus` from `PATH`; if it lives
+> elsewhere, point Lictor at it with **`LICTOR_FAMULUS_BIN`** (full path or
+> alternate name). Famulus' own runtime is configured via `LICTOR_LOCAL_*` env.
+> Design: `spec/local-llm-agent.md`.
 
 ## Why
 

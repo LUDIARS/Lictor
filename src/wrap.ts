@@ -23,7 +23,7 @@ import {
   SESSION_END_SKILL_DESCRIPTION,
   SESSION_END_SKILL_NAME,
 } from "./session-end-skill.js";
-import { type ProviderConfig, PROVIDERS } from "./provider.js";
+import { type ProviderConfig, PROVIDERS, resolveBinary } from "./provider.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
 import { PendingQuestionGate } from "./pending-question-gate.js";
 import {
@@ -265,8 +265,12 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   pollTimer?.unref?.();
   if (concordia) pollLiveState(ctx).catch(() => {});
 
+  // spawn する実バイナリ。 binaryEnvVar (例: gemma4-12 の LICTOR_FAMULUS_BIN) が
+  // 設定されていれば PATH 既定を上書きする。 log / spawn で同じ値を使う。
+  const effectiveBinary = resolveBinary(provider);
+
   process.stderr.write(
-    `lictor: wrapping ${provider.displayName} (${provider.binary})${
+    `lictor: wrapping ${provider.displayName} (${effectiveBinary})${
       concordia ? `, Concordia session ${concordia.id}` : ""
     }\n`,
   );
@@ -384,8 +388,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // extensions. CLI bins ship as `<name>.cmd` in npm global bin, so wrap via
   // cmd.exe; on POSIX, spawn the binary directly.
   const isWindows = process.platform === "win32";
-  const ptyFile = isWindows ? process.env.ComSpec ?? "cmd.exe" : provider.binary;
-  const ptyArgs = isWindows ? ["/d", "/s", "/c", provider.binary, ...providerArgs] : providerArgs;
+  const ptyFile = isWindows ? process.env.ComSpec ?? "cmd.exe" : effectiveBinary;
+  const ptyArgs = isWindows ? ["/d", "/s", "/c", effectiveBinary, ...providerArgs] : providerArgs;
 
   const { cols, rows } = currentSize();
   const child = pty.spawn(ptyFile, ptyArgs, {
