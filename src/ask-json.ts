@@ -56,6 +56,65 @@ export function extractAskJsonText(text: string): string | null {
   return null; // 閉じ波括弧に到達しなかった (途中で切れた出力)
 }
 
+/**
+ * `text` から最初の ```ask ... ``` ブロックを丸ごと取り除いて返す純関数。
+ *
+ * ask マーカーの質問は別経路 (pending-question カード) で送るので、説明テキストから
+ * raw JSON を「分割」して、(1) Discord でカードが説明より先に出る順序逆転と、
+ * (2) 説明メッセージへの raw JSON 二重表示、を防ぐのに使う。
+ *
+ * - フェンス (```ask) が無ければ原文をそのまま返す。
+ * - フェンスはあるが JSON が無ければ原文のまま (壊さない)。
+ * - JSON が閉じない (出力途中で切れた) 場合はフェンス以降を丸ごと落とす。
+ * - 正常時はフェンス開始〜閉じフェンス (```) までを除去。閉じフェンスが無ければ
+ *   少なくとも JSON オブジェクト末尾までを除去する。
+ * 前後の余計な空行は詰める。
+ */
+export function stripAskBlock(text: string): string {
+  const fence = /```ask[^\n]*\n/.exec(text);
+  if (!fence) return text;
+  const fenceStart = fence.index;
+  const from = fenceStart + fence[0].length;
+  const objStart = text.indexOf("{", from);
+  if (objStart === -1) return text; // ask フェンスはあるが JSON 無し — いじらない
+
+  // brace マッチで JSON オブジェクト末尾を求める (extractAskJsonText と同じ走査)。
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  let objEnd = -1;
+  for (let i = objStart; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') {
+      inStr = true;
+      continue;
+    }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        objEnd = i + 1;
+        break;
+      }
+    }
+  }
+  if (objEnd === -1) {
+    // JSON が閉じていない — フェンス以降を丸ごと落とす (壊れた末尾を残さない)。
+    return text.slice(0, fenceStart).replace(/\n{3,}/g, "\n\n").trim();
+  }
+  // JSON の後ろの閉じフェンス ``` まで取り除く (無ければ JSON 末尾まで)。
+  const closing = text.indexOf("```", objEnd);
+  const blockEnd = closing === -1 ? objEnd : closing + 3;
+  const merged = text.slice(0, fenceStart) + text.slice(blockEnd);
+  return merged.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /** JSON 文字列で有効なエスケープ後続文字。 */
 const VALID_ESCAPE = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
 

@@ -131,3 +131,53 @@ test("共通本文は AskUserQuestion 禁止を含まない (Claude addendum 専
   // Claude 用は禁止文言を含む。
   assert.ok(ASK_MARKER_CLAUDE_SYSTEM_PROMPT.includes("AskUserQuestion"));
 });
+
+// ─── stripAskBlock: 説明テキストと raw JSON の分割 ──────────────────────────
+import { stripAskBlock } from "../src/ask-json.js";
+
+test("stripAskBlock: ask ブロックを除去して説明だけ残す", () => {
+  const text = [
+    "選んでください:",
+    "```ask",
+    '{"question":"進めますか?","multiSelect":false,"options":[{"label":"はい"},{"label":"いいえ"}]}',
+    "```",
+  ].join("\n");
+  assert.equal(stripAskBlock(text), "選んでください:");
+});
+
+test("stripAskBlock: ブロック後の後書きを保持する", () => {
+  const text = ["前置き", "```ask", '{"question":"q","options":["A"]}', "```", "あとがき"].join("\n");
+  assert.equal(stripAskBlock(text), "前置き\n\nあとがき");
+});
+
+test("stripAskBlock: ブロックのみなら空文字を返す", () => {
+  const text = '```ask\n{"question":"q","options":["A","B"]}\n```';
+  assert.equal(stripAskBlock(text), "");
+});
+
+test("stripAskBlock: フェンスが無ければ原文のまま", () => {
+  const text = "ただの説明テキスト。質問カードは無い。";
+  assert.equal(stripAskBlock(text), text);
+});
+
+test("stripAskBlock: JSON 文字列値に ``` が入っても途中で切れない", () => {
+  const text = [
+    "説明",
+    "```ask",
+    '{"question":"```code``` を含む?","options":["はい","いいえ"]}',
+    "```",
+    "末尾",
+  ].join("\n");
+  assert.equal(stripAskBlock(text), "説明\n\n末尾");
+});
+
+test("stripAskBlock: Windows パスの未エスケープ \ を含む JSON でも除去できる", () => {
+  const text = [
+    "説明文",
+    "```ask",
+    '{"question":"E:\Document\Ars で良い?","options":[{"label":"はい"}]}',
+    "```",
+  ].join("\n");
+  // brace 走査は文字列状態を見るので未エスケープ \ でも JSON 末尾を見つけられる
+  assert.equal(stripAskBlock(text), "説明文");
+});
