@@ -43,6 +43,7 @@ import {
   providerSupportsAskUserQuestion,
 } from "./ask-question-relay.js";
 import { parseAskMarkerText } from "./ask-marker.js";
+import { stripAskBlock } from "./ask-json.js";
 
 const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
@@ -289,20 +290,35 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       if (!frame) continue;
       // ask マーカー: assistant テキスト中の ```ask ブロックを pending-question へ。
       // provider 非依存 — lineToFrame が Claude/Codex の assistant テキストを正規化済。
+      //
+      // 「説明テキストを先に / 質問カード (raw JSON) を最後に分割送信」 する:
+      //   1. ask ブロックを除いた説明テキストを text frame として **先に await 送信**
+      //   2. そのあとで pending-question (質問カード) を送る
+      // これで Discord 側の「カードが説明より先に出る」順序逆転と、説明メッセージへの
+      // raw JSON 二重表示を解消する。元フレーム (raw JSON 入り) は再送しない。
       // user テキストはローカル返信とみなし、開いている marker 質問を resolve させる。
       if (opts.askMarkerEnabled && frame.kind === "text") {
         const p = frame.payload as { role?: unknown; text?: unknown };
         if (p.role === "assistant" && typeof p.text === "string") {
           const marker = parseAskMarkerText(p.text);
           if (marker) {
-            void postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, {
+            // 1. 説明テキスト (ask ブロック除去済) を先に送る。中身が空なら省略。
+            const stripped = stripAskBlock(p.text);
+            if (stripped) {
+              await postFrame(opts.concordiaBaseUrl, opts.sessionId, seq++, "text", {
+                ...(frame.payload as object),
+                text: stripped,
+              });
+            }
+            // 2. 質問カードを最後に送る (説明の後に届くよう await 後に投稿)。
+            const qid = await postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, {
               id: "",
               question: marker.question,
               options: marker.options,
               multiSelect: marker.multiSelect,
-            }).then((qid) => {
-              if (qid != null) opts.onAskMarkerPosted?.(qid);
             });
+            if (qid != null) opts.onAskMarkerPosted?.(qid);
+            continue; // raw JSON を含む元フレームは送らない (分割済み)
           }
         } else if (p.role === "user" && typeof p.text === "string") {
           opts.onUserReply?.();
