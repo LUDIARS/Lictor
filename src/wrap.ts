@@ -324,12 +324,17 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // のいずれでも、 自分以外の transcript を誤って掴む (= 投稿が 1 つズレて
   // 別チャンネルに出る) crosstalk が構造的に起きなくなる。
   //
-  // concordia 連携時のみ (= リモート中継対象)。 ユーザが自分で
-  // --session-id / --resume / --continue / --from-pr を渡している場合は、
+  // concordia 連携時 (= リモート中継対象) のほか、 LICTOR_PIN_TRANSCRIPT=1 が
+  // 明示指定されたときも固定する。 後者は Concordia を無効化して起動する常駐ワーカー
+  // (Discutere worker-pool 等) が transcript path を知りたいケース向け。 固定した
+  // path は LICTOR_TRANSCRIPT_FILE として wrapped CLI の env に公開し、 ワーカーが
+  // セッションの usage / token を transcript から回収できるようにする (Discutere #135)。
+  // ユーザが自分で --session-id / --resume / --continue / --from-pr を渡している場合は、
   // 既存 session を開く意図なので固定せず従来 discover に委譲する。
+  const pinRequested = process.env.LICTOR_PIN_TRANSCRIPT === "1";
   let pinnedTranscriptPath: string | null = null;
   if (
-    concordia &&
+    (concordia || pinRequested) &&
     provider.supportsSessionPin &&
     provider.sessionPinArgs &&
     provider.pinnedTranscriptFile &&
@@ -338,6 +343,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     const pinnedUuid = randomUUID();
     providerArgs.push(...provider.sessionPinArgs(pinnedUuid));
     pinnedTranscriptPath = provider.pinnedTranscriptFile(meta.cwd, pinnedUuid);
+    if (pinnedTranscriptPath) env.LICTOR_TRANSCRIPT_FILE = pinnedTranscriptPath;
     process.stderr.write(
       `lictor: pinned ${provider.displayName} session-id ${pinnedUuid} (transcript claim 固定)\n`,
     );

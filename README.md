@@ -133,6 +133,7 @@ stripped first).
 | `LICTOR_PERSONA_NAME`   | Persona `name` (role kind, e.g. `深掘り型`) |
 | `LICTOR_ROLE_LABEL`     | Convenience: server-supplied `role_label` |
 | `CONCORDIA_SESSION_ID`  | Same as `LICTOR_SESSION_ID`; kept for compatibility with existing Concordia hooks |
+| `LICTOR_TRANSCRIPT_FILE` | Absolute path of the pinned transcript JSONL — set only when the session-id was pinned (Concordia on, or `LICTOR_PIN_TRANSCRIPT=1`). Lets the wrapped CLI read its own session usage/tokens (e.g. Discutere worker-pool cost回収) |
 
 ## Env vars Lictor reads
 
@@ -141,6 +142,7 @@ stripped first).
 | `CONCORDIA_HOST`             | `127.0.0.1` | Where Concordia listens |
 | `CONCORDIA_PORT`             | `17330`     | — |
 | `LICTOR_DISABLE_CONCORDIA`   | (unset)     | Set to `1` to skip Concordia registration entirely (v0.0 behavior) |
+| `LICTOR_PIN_TRANSCRIPT`      | (unset)     | Set to `1` to pin the session-id (`--session-id`) and export `LICTOR_TRANSCRIPT_FILE` to the child even when Concordia is disabled. For headless workers that need to read their own transcript |
 | `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Set by Concordia `/v1/delegation/invoke` to a rendered prompt file. Lictor reads it and pastes+submits it into the wrapped CLI once the TUI is up (delegation auto-inject) |
 | `LICTOR_DELEGATION_INJECT_DELAY_MS` | `2500` | Delay after first pty output before the delegation prompt is injected (lets the TUI finish drawing) |
 
