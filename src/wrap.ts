@@ -8,6 +8,7 @@ import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./con
 import { gatherRepoStat } from "./stat.js";
 import { renderSkillMd, SkillInjector } from "./skill-injector.js";
 import { findRepoMemories, memoryDirForCwd, renderMemoryDigest, repoLeafFromCwd } from "./memory-loader.js";
+import { buildLictorHookSettings, resolveHarnessGuard } from "./harness-hook.js";
 import {
   applyTitleWithMarks,
   isNotifyStale,
@@ -590,36 +591,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
  */
 function writePermissionHookSettings(sessionDir: string): string {
   const path = `${sessionDir}/lictor-hook-settings.json`;
-  const content = JSON.stringify({
-    hooks: {
-      PreToolUse: [
-        {
-          matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__.*",
-          hooks: [
-            {
-              type: "command",
-              command: "lictor cli permission-hook",
-              timeout: 65,
-            },
-          ],
-        },
-        {
-          // AskUserQuestion を picker-open 時に検知して Concordia へ早期投稿する
-          // (回答前に Discord へ出すため)。 これは権限ゲートではなく、 decision を
-          // 返さず picker をそのまま開かせる。 src/ask-question-hook.ts 参照。
-          matcher: "AskUserQuestion",
-          hooks: [
-            {
-              type: "command",
-              command: "lictor cli ask-question-hook",
-              timeout: 10,
-            },
-          ],
-        },
-      ],
-    },
-  }, null, 2);
-  writeFileSync(path, content, "utf8");
+  // env LICTOR_HARNESS_GUARD が指す harness-guard.mjs があれば PreToolUse(Bash)
+  // に注入する (HARNESS §4 の地雷を着手前に止める)。未設定なら従来どおり 2 フックのみ。
+  const settings = buildLictorHookSettings(resolveHarnessGuard());
+  writeFileSync(path, JSON.stringify(settings, null, 2), "utf8");
   return path;
 }
 
