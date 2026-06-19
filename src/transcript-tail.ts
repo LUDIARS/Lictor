@@ -532,6 +532,21 @@ export function lineToFrame(line: string): Frame | null {
           };
         }
         if (part?.type === "tool_result") {
+          if (Array.isArray(part.content)) {
+            for (const c of part.content) {
+              if (
+                c?.type === "image" &&
+                c?.source?.type === "base64" &&
+                typeof c?.source?.data === "string" &&
+                c.source.data.length > 0
+              ) {
+                return {
+                  kind: "image",
+                  payload: { media_type: c.source.media_type ?? "image/png", data: c.source.data },
+                };
+              }
+            }
+          }
           return {
             kind: "tool-result",
             payload: {
