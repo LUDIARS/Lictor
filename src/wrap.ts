@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, statSync } from "node:fs";
 import * as pty from "node-pty";
 import { buildAnswerSequence, sanitizeKeySeq, startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
 import { gatherBaseMeta, type Meta } from "./meta.js";
@@ -26,6 +26,7 @@ import {
 } from "./session-end-skill.js";
 import { type ProviderConfig, PROVIDERS } from "./provider.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
+import { scheduleGracefulExit, type GracefulExitHandle } from "./graceful-exit.js";
 import { PendingQuestionGate } from "./pending-question-gate.js";
 import {
   createDelegationInjector,
@@ -49,6 +50,13 @@ import { postResolveQuestion } from "./ask-question-relay.js";
 
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
+
+/** Parse a positive-int env var, falling back to `fallback` when unset/invalid. */
+function envInt(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
 /**
  * ユーザ自身が「既存 session を開く / 再開する」 flag を渡しているか。
@@ -119,6 +127,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     getClaudeSessionId: null,
     getTranscript: null,
     forceExit: null,
+    requestGracefulExit: null,
   };
 
   const sidecar = await startSidecar(ctx);
@@ -407,6 +416,26 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
 
   ctx.ptyWriter = (data: string) => child.write(data);
   ctx.forceExit = () => { child.kill("SIGTERM"); };
+  // session-end の session-log 保存を途中で殺さないため、force-exit は既定で
+  // 「猶予付き」: transcript が一定時間無活動になってから kill する。
+  let gracefulExit: GracefulExitHandle | null = null;
+  ctx.requestGracefulExit = (gopts) => {
+    if (gopts?.immediate) { gracefulExit?.cancel(); child.kill("SIGTERM"); return; }
+    if (gracefulExit) return; // 既にスケジュール済 (idempotent)
+    gracefulExit = scheduleGracefulExit({
+      // transcript JSONL の mtime = 最終書き込み時刻 = 活動シグナル。
+      lastActivityMs: () => {
+        const p = transcriptTail?.getTranscriptPath() ?? null;
+        if (!p) return null;
+        try { return statSync(p).mtimeMs; } catch { return null; }
+      },
+      kill: () => child.kill("SIGTERM"),
+      idleMs: envInt(env.LICTOR_SESSION_END_IDLE_KILL_MS, 300_000),
+      maxWaitMs: envInt(env.LICTOR_SESSION_END_MAX_WAIT_MS, 1_800_000),
+      checkMs: envInt(env.LICTOR_SESSION_END_CHECK_MS, 30_000),
+      log: (m) => process.stderr.write(`lictor: ${m}\n`),
+    });
+  };
 
   // Delegation prompt auto-inject — when Concordia spawned us via
   // /v1/delegation/invoke, env CONCORDIA_DELEGATION_PROMPT_FILE points at the
