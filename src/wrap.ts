@@ -313,7 +313,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   let extraSettingsPath: string | null = null;
   if (concordia && injector && provider.name === "claude") {
     try {
-      extraSettingsPath = writePermissionHookSettings(injector.sessionDir);
+      extraSettingsPath = writePermissionHookSettings(injector.sessionDir, meta.cwd);
     } catch (err) {
       process.stderr.write(
         `lictor: permission-hook settings write failed: ${(err as Error).message}\n`,
@@ -618,11 +618,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
  * `mcp__`. Read-only tools (Read/Glob/Grep) are intentionally NOT gated
  * — they would explode the modal count and add no value.
  */
-function writePermissionHookSettings(sessionDir: string): string {
+function writePermissionHookSettings(sessionDir: string, cwd: string): string {
   const path = `${sessionDir}/lictor-hook-settings.json`;
-  // env LICTOR_HARNESS_GUARD が指す harness-guard.mjs があれば PreToolUse(Bash)
-  // に注入する (HARNESS §4 の地雷を着手前に止める)。未設定なら従来どおり 2 フックのみ。
-  const settings = buildLictorHookSettings(resolveHarnessGuard());
+  // cwd から上位を辿って .claude/hooks/harness-guard.mjs を見つけたら PreToolUse(Bash)
+  // に注入する (HARNESS §4 の地雷を着手前に止める)。無ければ従来どおり 2 フックのみ。
+  const settings = buildLictorHookSettings(resolveHarnessGuard(cwd));
   writeFileSync(path, JSON.stringify(settings, null, 2), "utf8");
   return path;
 }
