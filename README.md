@@ -145,7 +145,17 @@ stripped first).
 | `LICTOR_PIN_TRANSCRIPT`      | (unset)     | Set to `1` to pin the session-id (`--session-id`) and export `LICTOR_TRANSCRIPT_FILE` to the child even when Concordia is disabled. For headless workers that need to read their own transcript |
 | `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Set by Concordia `/v1/delegation/invoke` to a rendered prompt file. Lictor reads it and pastes+submits it into the wrapped CLI once the TUI is up (delegation auto-inject) |
 | `LICTOR_DELEGATION_INJECT_DELAY_MS` | `2500` | Delay after first pty output before the delegation prompt is injected (lets the TUI finish drawing) |
-| `LICTOR_HARNESS_GUARD`       | (unset)     | Absolute path to AIFormat's `harness-guard.mjs`. When set (and the file exists), Lictor injects it as a `PreToolUse(Bash)` hook into the claude session `--settings`, so every spawned/delegated session blocks HARNESS §4 landmines (`git reset --hard`, SQLite `cp`, `gh pr merge` from a worktree, `rm -rf …backup`) before they run. Unset = no harness hook (claude-only; the `--settings` path is not portable to Codex/Gemini) |
+
+### harness-guard injection
+
+When a claude session is wrapped, Lictor walks up from the session cwd looking
+for `.claude/hooks/harness-guard.mjs` (it lives at the workspace root, so any
+repo under it resolves the same file). If found, Lictor adds it as a
+`PreToolUse(Bash)` hook in the session `--settings`, so every spawned/delegated
+session blocks HARNESS §4 landmines (`git reset --hard`, SQLite `cp`, `gh pr
+merge` from a worktree, `rm -rf …backup`) before they run. No env or config —
+it's automatic when the workspace ships the hook. Not found ⇒ the usual two
+hooks only. Claude-only (the `--settings` path is not portable to Codex/Gemini).
 
 ## Concordia integration
 

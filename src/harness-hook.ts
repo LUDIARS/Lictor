@@ -1,13 +1,17 @@
 // Lictor が spawn する Claude セッションへ渡す PreToolUse hook 設定の組み立て。
 //
-// 既定の 2 フック (permission-hook / ask-question-hook) に加え、env
-// LICTOR_HARNESS_GUARD が指す AIFormat の harness-guard.mjs を PreToolUse(Bash)
-// として注入する。これにより委託先含む全セッションで「着手前に既知の地雷を止める」
-// ガード (HARNESS §4) が効く。env 未設定 / ファイル不在なら注入しない (opt-in)。
+// 既定の 2 フック (permission-hook / ask-question-hook) に加え、ワークスペース直下の
+// AIFormat harness-guard.mjs を PreToolUse(Bash) として注入する。これにより委託先
+// 含む全セッションで「着手前に既知の地雷を止める」ガード (HARNESS §4) が効く。
+//
+// フックの場所は env ではなく、セッション cwd から上位ディレクトリを辿って
+// `.claude/hooks/harness-guard.mjs` を探して決定する (ワークスペース直下に在るため
+// どのリポ配下からでも一意に解決できる)。見つからなければ注入しない。
 //
 // 純粋ロジックのみ (node-pty 等に依存しない) で、テスト可能に wrap.ts から分離。
 
 import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export interface HookCommand {
   type: "command";
@@ -22,15 +26,21 @@ export interface LictorHookSettings {
   hooks: { PreToolUse: HookMatcher[] };
 }
 
+const GUARD_REL = join(".claude", "hooks", "harness-guard.mjs");
+
 /**
- * harness-guard.mjs の絶対パスを解決する。env LICTOR_HARNESS_GUARD が指す実在
- * ファイルのみ採用する。未設定 / 不在なら null (= 注入しない)。
+ * セッション cwd から上位へ辿り `.claude/hooks/harness-guard.mjs` を探す。
+ * 最初に見つかった絶対パスを返す。無ければ null (= 注入しない)。
  */
-export function resolveHarnessGuard(
-  env: NodeJS.ProcessEnv = process.env,
-): string | null {
-  const p = env.LICTOR_HARNESS_GUARD;
-  if (p && p.trim() && existsSync(p)) return p;
+export function resolveHarnessGuard(cwd: string): string | null {
+  let dir = cwd;
+  while (dir) {
+    const cand = join(dir, GUARD_REL);
+    if (existsSync(cand)) return cand;
+    const parent = dirname(dir);
+    if (parent === dir) break; // ルート到達
+    dir = parent;
+  }
   return null;
 }
 

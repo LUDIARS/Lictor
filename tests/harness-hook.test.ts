@@ -1,29 +1,32 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildLictorHookSettings, resolveHarnessGuard } from "../src/harness-hook.js";
 
-test("resolveHarnessGuard: env 未設定なら null", () => {
-  assert.equal(resolveHarnessGuard({}), null);
-});
-
-test("resolveHarnessGuard: 指すファイルが無ければ null", () => {
-  assert.equal(
-    resolveHarnessGuard({ LICTOR_HARNESS_GUARD: join(tmpdir(), "no-such-harness-guard.mjs") }),
-    null,
-  );
-});
-
-test("resolveHarnessGuard: 実在ファイルならそのパス", () => {
+test("resolveHarnessGuard: .claude/hooks/harness-guard.mjs が無ければ null", () => {
   const dir = mkdtempSync(join(tmpdir(), "lictor-hg-"));
-  const f = join(dir, "harness-guard.mjs");
-  writeFileSync(f, "// stub\n", "utf8");
   try {
-    assert.equal(resolveHarnessGuard({ LICTOR_HARNESS_GUARD: f }), f);
+    assert.equal(resolveHarnessGuard(dir), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveHarnessGuard: 上位の .claude/hooks/harness-guard.mjs を辿って見つける", () => {
+  const root = mkdtempSync(join(tmpdir(), "lictor-ws-"));
+  const guard = join(root, ".claude", "hooks", "harness-guard.mjs");
+  mkdirSync(join(root, ".claude", "hooks"), { recursive: true });
+  writeFileSync(guard, "// stub\n", "utf8");
+  const deep = join(root, "SomeRepo", "src");
+  mkdirSync(deep, { recursive: true });
+  try {
+    // ワークスペース直下に置いた guard を、配下の repo/src からでも解決する
+    assert.equal(resolveHarnessGuard(deep), guard);
+    assert.equal(resolveHarnessGuard(root), guard);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
