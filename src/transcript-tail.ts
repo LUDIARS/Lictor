@@ -51,6 +51,20 @@ const POST_TIMEOUT_MS = 2000;
 const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
 const STALE_CLAIM_MS = 60 * 60 * 1000; // 1h 経った claim は wrapper クラッシュ残骸とみなす
 
+// `--session-id <uuid>` で固定した pinned transcript が現れないまま放置しない猶予 (ms)。
+//
+// 現行 Claude Code は hook が報告する session_id (= Lictor が渡した --session-id) と、
+// 実際に書き出す transcript JSONL のファイル名 uuid が一致しないことがある。 その場合
+// pinned path (`<session-id>.jsonl`) は永遠に existsSync=false のままで、 pin 固定 discover
+// だけだと「地の文がまったく中継されない」 状態に陥る (initial pin も maybeRepin も同じ
+// `<sid>.jsonl` を計算するため復旧しない)。 この猶予を過ぎても pinned path が現れなければ
+// 従来の mtime discover にフォールバックして中継を成立させる。 claim 機構は両経路で共通
+// なので crosstalk 防護は維持される。 0 で即フォールバック。 env override 可。
+const PIN_FALLBACK_GRACE_MS = ((): number => {
+  const v = Number(process.env.LICTOR_PIN_FALLBACK_GRACE_MS ?? "8000");
+  return Number.isFinite(v) && v >= 0 ? v : 8000;
+})();
+
 // 別セッション誤投稿 (= 2 wrapper が同じ jsonl を tail) の原因特定用ログ.
 // 既定 ON。 安定確認後に撤去 PR で消す (verbose-logging-bootstrap)。CONCORDIA→Discord
 // で「別 channel に混在」 が出たらこのログで「同一 path を 2 owner が claim」 を確認する。
@@ -170,6 +184,12 @@ export interface TranscriptTailOptions {
    * (session-id 固定非対応 provider、 または resume 系 flag 指定時)。
    */
   pinnedTranscriptPath?: string | null;
+  /**
+   * pinned transcript path が現れないまま中継が始まらないのを防ぐため、 mtime discover
+   * にフォールバックするまでの猶予 (ms)。 省略時は env `LICTOR_PIN_FALLBACK_GRACE_MS`
+   * (既定 8000)。 テストから即時フォールバックを検証するときは 0 を渡す。
+   */
+  pinFallbackGraceMs?: number;
 }
 
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
@@ -183,6 +203,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   let seq = 0;
   let pending = "";
   let stopped = false;
+  // pinned path が猶予内に現れず mtime discover にフォールバックしたか。 一度立つと
+  // 以降は pin 固定 discover / sid ベース再 pin を行わない (どちらも現行 Claude Code では
+  // 正しいファイルに辿り着けないため)。
+  let pinFellBack = false;
+  // pinned path が現れないまま中継不能に陥らないための猶予 (ms)。
+  const pinFallbackGraceMs = opts.pinFallbackGraceMs ?? PIN_FALLBACK_GRACE_MS;
   const startedAt = Date.now();
   // AskUserQuestion の tool_use id → Concordia の question_id。picker がローカル回答で
   // 解決した（tool_result 検知）とき、Concordia に resolve 通知して古いボタンを失効させる。
@@ -215,15 +241,26 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     // session-id 固定束縛が効いている場合は mtime 推測を一切せず、 固定 path のみ。
     // wrapper が発番した一意 uuid のファイルなので claim 競合は構造的に起きないが、
     // stale-claim 剥がし等の共通ロジックを通すため tryClaimJsonl は経由する。
-    if (pinnedPath) {
-      if (!existsSync(pinnedPath)) return null; // claude が生成するまで待つ
-      const cp = tryClaimJsonl(pinnedPath, STALE_CLAIM_MS, opts.sessionId);
-      if (cp) {
-        claimPath = cp;
-        claimDbg(`pinned transcript claimed path=${pinnedPath} owner=${opts.sessionId}`);
-        return pinnedPath;
+    if (pinnedPath && !pinFellBack) {
+      if (existsSync(pinnedPath)) {
+        const cp = tryClaimJsonl(pinnedPath, STALE_CLAIM_MS, opts.sessionId);
+        if (cp) {
+          claimPath = cp;
+          claimDbg(`pinned transcript claimed path=${pinnedPath} owner=${opts.sessionId}`);
+          return pinnedPath;
+        }
+        return null; // 一意 uuid のため通常起き得ない; 万一 claim 済なら次 poll で再試行
       }
-      return null; // 一意 uuid のため通常起き得ない; 万一 claim 済なら次 poll で再試行
+      // pinned path がまだ現れない。 猶予内は待つが、 猶予を超えても現れなければ
+      // (session_id ≠ transcript filename の Claude Code では永遠に現れない) 従来の
+      // mtime discover にフォールバックして中継不能を回避する。
+      if (Date.now() - startedAt < pinFallbackGraceMs) return null;
+      pinFellBack = true;
+      claimDbg(
+        `pinned path absent after ${pinFallbackGraceMs}ms grace; ` +
+          `falling back to mtime discover (pinned=${pinnedPath})`,
+      );
+      // ↓ mtime discover へ流れる (return せず下へ落とす)
     }
     if (!existsSync(dir)) return null;
     type Candidate = { path: string; mtime: number };
@@ -257,6 +294,10 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // hook が書く state ファイルを読んで新しい pin 先へ差し替える。 これをしないと固定
   // ファイルを掴んだまま中継が止まる (session-pin provider = claude のみ意味を持つ)。
   const maybeRepin = (): void => {
+    // mtime discover にフォールバック済なら sid ベースの再 pin は無効化する。
+    // session_id ≠ transcript filename の環境では sid から正しいファイルを引けず、
+    // 再 pin すると掴んでいる実ファイルを手放してしまうため。
+    if (pinFellBack) return;
     if (!opts.lictorSessionStatePath) return;
     if (!opts.provider.supportsSessionPin || !opts.provider.pinnedTranscriptFile) return;
     const sid = readClaudeSessionId(opts.lictorSessionStatePath);
