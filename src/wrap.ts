@@ -36,7 +36,7 @@ import {
 } from "./delegation-inject.js";
 import {
   activeReposPath,
-  claudeSessionStatePath,
+  claudeTranscriptStatePath,
   pickActiveRepo,
   readActiveRepos,
   resolveActiveReposDir,
@@ -485,10 +485,12 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       onQuestionResolved: (qid) => pendingQuestionGate.resolveQuestion(qid),
       askMarkerEnabled: askMarkerActive,
       pinnedTranscriptPath,
-      // `/clear` 等で claude session が新 JSONL にローテートしたら再 pin する入力源。
-      // SessionStart hook (lictor cli session-id-hook) が現 claude sid を書く。
-      // env は wrap の spawn env と同じものを渡し、 hook 側の解決と一致させる。
-      lictorSessionStatePath: claudeSessionStatePath(resolveActiveReposDir(env), concordia.id),
+      // tail 対象を束縛する権威ソース。 SessionStart hook (lictor cli session-id-hook) が
+      // claude の実 transcript_path をこのファイルへ書く。 これにより --session-id uuid と
+      // 実ファイル名が不一致でも実ファイルを掴め、 /clear ローテートも追従し、 mtime 推測を
+      // 排除して別セッション混入 (crosstalk) を構造的に防ぐ。 env は wrap の spawn env と
+      // 同じものを渡し、 hook 側の state dir 解決と一致させる。
+      lictorTranscriptStatePath: claudeTranscriptStatePath(resolveActiveReposDir(env), concordia.id),
       onUserMessage: () => submitWatchdog.noteUserMessage(),
       onAskMarkerPosted: (qid) => {
         // この id の回答は picker キー注入ではなくテキスト注入で返す。

@@ -35,7 +35,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { ProviderConfig } from "./provider.js";
-import { readClaudeSessionId } from "./active-repos.js";
+import { readClaudeTranscriptPath } from "./active-repos.js";
 import {
   detectAnsweredQuestionIds,
   detectAskUserQuestion,
@@ -50,20 +50,6 @@ const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
 const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
 const STALE_CLAIM_MS = 60 * 60 * 1000; // 1h 経った claim は wrapper クラッシュ残骸とみなす
-
-// `--session-id <uuid>` で固定した pinned transcript が現れないまま放置しない猶予 (ms)。
-//
-// 現行 Claude Code は hook が報告する session_id (= Lictor が渡した --session-id) と、
-// 実際に書き出す transcript JSONL のファイル名 uuid が一致しないことがある。 その場合
-// pinned path (`<session-id>.jsonl`) は永遠に existsSync=false のままで、 pin 固定 discover
-// だけだと「地の文がまったく中継されない」 状態に陥る (initial pin も maybeRepin も同じ
-// `<sid>.jsonl` を計算するため復旧しない)。 この猶予を過ぎても pinned path が現れなければ
-// 従来の mtime discover にフォールバックして中継を成立させる。 claim 機構は両経路で共通
-// なので crosstalk 防護は維持される。 0 で即フォールバック。 env override 可。
-const PIN_FALLBACK_GRACE_MS = ((): number => {
-  const v = Number(process.env.LICTOR_PIN_FALLBACK_GRACE_MS ?? "8000");
-  return Number.isFinite(v) && v >= 0 ? v : 8000;
-})();
 
 // 別セッション誤投稿 (= 2 wrapper が同じ jsonl を tail) の原因特定用ログ.
 // 既定 ON。 安定確認後に撤去 PR で消す (verbose-logging-bootstrap)。CONCORDIA→Discord
@@ -161,54 +147,49 @@ export interface TranscriptTailOptions {
    */
   onUserMessage?: () => void;
   /**
-   * 「現在の Claude session id」 追跡ファイルの絶対パス
-   * (`<stateDir>/claude-session-<lictorId>.txt`、 SessionStart hook が書く)。
+   * 「現在の Claude transcript JSONL 実パス」 追跡ファイルの絶対パス
+   * (`<stateDir>/claude-transcript-<lictorId>.txt`、 SessionStart hook が書く)。
    *
-   * 指定があり provider が session-pin 対応のとき、 poll ごとにこのファイルを読み、
-   * 記録された claude session id が現在 pin 中の JSONL と変わっていたら
-   * (= `/clear` 等でローテートした) 新しい `<sid>.jsonl` へ再 pin して中継を継続する。
-   * null/未指定なら再 pin しない (従来動作)。
+   * これは「どの JSONL を tail すべきか」 の **権威ソース**。 指定があり poll ごとに
+   * このファイルが claude の実 transcript_path を報告していれば、 現在束縛中の JSONL と
+   * 変わったとき (= 起動直後の確定 / `/clear` 等でローテート) 新しい実パスへ束縛し直して
+   * 中継を継続する。 `--session-id` で渡した uuid と実ファイル名が一致しなくても、 hook が
+   * 実パスを報告するので正しく掴める (mtime 推測を一切しないので crosstalk が起きない)。
+   * null/未指定なら hook 由来の束縛更新はしない (従来の computed pin / mtime discover)。
    */
-  lictorSessionStatePath?: string | null;
+  lictorTranscriptStatePath?: string | null;
   /**
-   * spawn 時に `--session-id <uuid>` で固定した transcript JSONL の絶対パス。
+   * spawn 時に `--session-id <uuid>` で固定した transcript JSONL の **計算上の** 絶対パス
+   * (`<cwdKey>/<uuid>.jsonl`)。
    *
-   * 指定があると mtime ベースの discover を **完全にバイパス** し、 このパスが
-   * 生成され次第そのファイルだけを claim/tail する。 uuid は wrapper が発番した
-   * 一意値なので、 同 cwd で別 wrapper が並走していても・先に非 Lictor の同
-   * provider を起動していても・context 要約で別 session に jsonl がローテート
-   * しても、 自分以外の transcript を誤って掴む (= 投稿が 1 つズレて別チャンネル
-   * に出る crosstalk) ことが構造的に起きない。
+   * 指定があると mtime ベースの discover を **完全にバイパス** し、 このパスだけを
+   * claim/tail する。 uuid は wrapper が発番した一意値なので、 同 cwd で別 wrapper が
+   * 並走していても・先に非 Lictor の同 provider を起動していても・context 要約で別
+   * session に jsonl がローテートしても、 自分以外の transcript を誤って掴む (= 投稿が
+   * 1 つズレて別チャンネルに出る crosstalk) ことが構造的に起きない。
    *
-   * null/未指定なら従来どおり mtime discover にフォールバックする
-   * (session-id 固定非対応 provider、 または resume 系 flag 指定時)。
+   * これは SessionStart hook が実 transcript_path ({@link lictorTranscriptStatePath}) を
+   * 報告するまでの **起動直後ブリッジ** として働く。 ファイル名が一致する通常ケースでは
+   * これだけで中継が即始まり、 一致しないケースでも hook 報告後に正しい実パスへ束縛が
+   * 差し替わる。 null/未指定なら mtime discover に委譲する (pin 非対応 provider /
+   * resume 系 flag 指定時)。
    */
   pinnedTranscriptPath?: string | null;
-  /**
-   * pinned transcript path が現れないまま中継が始まらないのを防ぐため、 mtime discover
-   * にフォールバックするまでの猶予 (ms)。 省略時は env `LICTOR_PIN_FALLBACK_GRACE_MS`
-   * (既定 8000)。 テストから即時フォールバックを検証するときは 0 を渡す。
-   */
-  pinFallbackGraceMs?: number;
 }
 
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
   const dir = opts.provider.transcriptDir(opts.cwd);
   let jsonlPath: string | null = null;
-  // pin 中の JSONL パス. `/clear` 等で claude session がローテートしたら maybeRepin が
-  // 差し替える (起動時は opts 由来の固定値、 非 pin provider では null)。
+  // 現在 tail 対象として束縛している実 transcript JSONL パス. 起動時は opts 由来の
+  // computed pin (`<uuid>.jsonl`、 非 pin provider では null)。 SessionStart hook が
+  // 実 transcript_path を報告したら maybeRebind がそちらへ差し替える (権威ソース)。
+  // `/clear` 等でローテートしても hook 再報告で追従する。
   let pinnedPath: string | null = opts.pinnedTranscriptPath ?? null;
   let claimPath: string | null = null;
   let offset = 0;
   let seq = 0;
   let pending = "";
   let stopped = false;
-  // pinned path が猶予内に現れず mtime discover にフォールバックしたか。 一度立つと
-  // 以降は pin 固定 discover / sid ベース再 pin を行わない (どちらも現行 Claude Code では
-  // 正しいファイルに辿り着けないため)。
-  let pinFellBack = false;
-  // pinned path が現れないまま中継不能に陥らないための猶予 (ms)。
-  const pinFallbackGraceMs = opts.pinFallbackGraceMs ?? PIN_FALLBACK_GRACE_MS;
   const startedAt = Date.now();
   // AskUserQuestion の tool_use id → Concordia の question_id。picker がローカル回答で
   // 解決した（tool_result 検知）とき、Concordia に resolve 通知して古いボタンを失効させる。
@@ -238,10 +219,13 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // 取れた wrapper だけがその jsonl を tail する. 取れなかった候補は次点を試す.
   // 自分の jsonl がまだ作成されていない場合は null で抜けて、 次回 poll で再 discover.
   const discover = (): string | null => {
-    // session-id 固定束縛が効いている場合は mtime 推測を一切せず、 固定 path のみ。
-    // wrapper が発番した一意 uuid のファイルなので claim 競合は構造的に起きないが、
-    // stale-claim 剥がし等の共通ロジックを通すため tryClaimJsonl は経由する。
-    if (pinnedPath && !pinFellBack) {
+    // 束縛先 (pinnedPath) が決まっている場合は mtime 推測を一切せず、 その path のみ。
+    // pinnedPath は (a) wrapper が発番した一意 uuid の computed pin、 または
+    // (b) SessionStart hook が報告した実 transcript_path (maybeRebind が差し替え済) の
+    // どちらか。 いずれも自分のセッション固有のファイルなので、 別セッションの JSONL を
+    // 誤掴みする crosstalk が構造的に起きない。 stale-claim 剥がし等の共通ロジックを
+    // 通すため tryClaimJsonl は経由する。
+    if (pinnedPath) {
       if (existsSync(pinnedPath)) {
         const cp = tryClaimJsonl(pinnedPath, STALE_CLAIM_MS, opts.sessionId);
         if (cp) {
@@ -249,19 +233,16 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
           claimDbg(`pinned transcript claimed path=${pinnedPath} owner=${opts.sessionId}`);
           return pinnedPath;
         }
-        return null; // 一意 uuid のため通常起き得ない; 万一 claim 済なら次 poll で再試行
+        return null; // 一意 uuid / 実パスのため通常起き得ない; 万一 claim 済なら次 poll で再試行
       }
-      // pinned path がまだ現れない。 猶予内は待つが、 猶予を超えても現れなければ
-      // (session_id ≠ transcript filename の Claude Code では永遠に現れない) 従来の
-      // mtime discover にフォールバックして中継不能を回避する。
-      if (Date.now() - startedAt < pinFallbackGraceMs) return null;
-      pinFellBack = true;
-      claimDbg(
-        `pinned path absent after ${pinFallbackGraceMs}ms grace; ` +
-          `falling back to mtime discover (pinned=${pinnedPath})`,
-      );
-      // ↓ mtime discover へ流れる (return せず下へ落とす)
+      // pinned path がまだ現れない。 mtime 推測にフォールバックすると別セッションの JSONL を
+      // 誤掴みして crosstalk が再発するため、 ここでは待つだけ。 computed pin のファイル名が
+      // 実体と不一致でも、 SessionStart hook が実 transcript_path を報告し次第 maybeRebind が
+      // 正しい実パスへ束縛を差し替えるので中継不能には陥らない。
+      return null;
     }
+    // pinnedPath が null = pin 非対応 provider (codex/gemini/famulus) かつ hook 権威も
+    // 未取得。 従来の mtime discover に委譲する。
     if (!existsSync(dir)) return null;
     type Candidate = { path: string; mtime: number };
     const candidates: Candidate[] = [];
@@ -290,22 +271,19 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     return null;
   };
 
-  // `/clear` 等で claude session が別 uuid の JSONL にローテートしたら、 SessionStart
-  // hook が書く state ファイルを読んで新しい pin 先へ差し替える。 これをしないと固定
-  // ファイルを掴んだまま中継が止まる (session-pin provider = claude のみ意味を持つ)。
-  const maybeRepin = (): void => {
-    // mtime discover にフォールバック済なら sid ベースの再 pin は無効化する。
-    // session_id ≠ transcript filename の環境では sid から正しいファイルを引けず、
-    // 再 pin すると掴んでいる実ファイルを手放してしまうため。
-    if (pinFellBack) return;
-    if (!opts.lictorSessionStatePath) return;
-    if (!opts.provider.supportsSessionPin || !opts.provider.pinnedTranscriptFile) return;
-    const sid = readClaudeSessionId(opts.lictorSessionStatePath);
-    if (!sid) return; // SessionStart hook 未発火
-    const want = opts.provider.pinnedTranscriptFile(opts.cwd, sid);
-    if (!want || want === pinnedPath) return; // 解決不能 or ローテートなし
-    claimDbg(`re-pin: claude session rotated ${pinnedPath ?? "?"} -> ${want} (sid=${sid})`);
-    // 旧 JSONL の claim を解放し (もう成長しない死ファイル)、 新ファイルを次の discover で掴む。
+  // SessionStart hook (起動 / `/clear` / resume / compact で発火) が報告する実
+  // transcript_path を権威ソースとして、 tail 対象の束縛先を最新に保つ。 これにより:
+  //   - `--session-id` uuid と実ファイル名が不一致でも実ファイルを掴める (中継不能の解消)
+  //   - `/clear` で別 JSONL にローテートしても新ファイルへ追従する
+  //   - mtime 推測を一切しないので別セッションの JSONL を誤掴みしない (crosstalk 構造排除)
+  const maybeRebind = (): void => {
+    if (!opts.lictorTranscriptStatePath) return; // hook 由来の権威更新なし (従来動作)
+    const want = readClaudeTranscriptPath(opts.lictorTranscriptStatePath);
+    if (!want) return; // SessionStart hook 未発火 — 起動直後は computed pin で橋渡し
+    if (want === pinnedPath) return; // 変化なし
+    claimDbg(`rebind: authoritative transcript_path ${pinnedPath ?? "?"} -> ${want}`);
+    // 旧 JSONL の claim を解放し (computed pin の誤ファイル or ローテート前の死ファイル)、
+    // 新ファイルを次の discover で掴む。
     if (claimPath) {
       try {
         unlinkSync(claimPath);
@@ -323,7 +301,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
 
   const pollOnce = async (): Promise<void> => {
     if (stopped) return;
-    maybeRepin();
+    maybeRebind();
     if (!jsonlPath) {
       jsonlPath = discover();
       if (!jsonlPath) return;
