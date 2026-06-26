@@ -75,9 +75,10 @@ export function buildLictorHookSettings(
     });
   }
 
-  // SessionStart: 起動 / `/clear` / resume / compact のたびに現 claude session_id を
-  // state ファイルへ記録する。 transcript-tail が `/clear` 後の新 JSONL へ再 pin する
-  // ための入力源 (matcher 無しで全 source に効かせる)。
+  // SessionStart: 起動 / `/clear` / resume / compact のたびに現 claude session_id と
+  // 実 transcript_path を state ファイルへ記録する。 transcript-tail はこの transcript_path
+  // を権威ソースに tail 対象を束縛し、 `/clear` 後の新 JSONL へも追従する (matcher 無しで
+  // 全 source に効かせる)。
   const sessionStart: HookMatcher[] = [
     {
       hooks: [{ type: "command", command: "lictor cli session-id-hook", timeout: 10 }],

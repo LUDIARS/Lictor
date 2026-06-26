@@ -10,9 +10,9 @@
  * 観測する。 これを「発火した」シグナルにし、 来なければ Enter を補って確定させる。
  *
  * 注意: transcript-tail が現セッションの JSONL を正しく追っていることが前提
- * (= `/clear` 後の再 pin が効いていること)。 古い JSONL を掴んだままだと user
- * フレームが永遠に来ず、 毎回スプリアスに `\r` を打つ。 そのため再 pin
- * (maybeRepin) とセットで成立する。
+ * (= `/clear` 後の束縛し直しが効いていること)。 古い JSONL を掴んだままだと user
+ * フレームが永遠に来ず、 毎回スプリアスに `\r` を打つ。 そのため hook の transcript_path
+ * を権威ソースにした束縛追従 (maybeRebind) とセットで成立する。
  */
 
 export interface SubmitWatchdog {
