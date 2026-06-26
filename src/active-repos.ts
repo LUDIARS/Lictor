@@ -65,6 +65,33 @@ export function readClaudeSessionId(path: string): string | null {
 }
 
 /**
+ * 「現在の Claude transcript JSONL 実パス」 追跡ファイルの絶対パス. キーは Lictor
+ * session id で、 SessionStart hook (`lictor cli session-id-hook`) が hook payload の
+ * `transcript_path` (= claude が実際に書き出している JSONL の絶対パス) を書き込む.
+ *
+ * transcript-tail はこれを権威ソースとして tail 対象を束縛する. これにより:
+ *  - `--session-id` で渡した uuid と実 JSONL のファイル名 uuid が一致しなくても
+ *    実ファイルを正しく掴める (中継不能の解消).
+ *  - `/clear` 等で別 uuid の新 JSONL にローテートしても hook 再発火で新パスに
+ *    更新されるので追従できる.
+ *  - mtime 推測 discover を一切しないので、 並走する別セッションの JSONL を
+ *    誤掴みする crosstalk が構造的に起きない.
+ */
+export function claudeTranscriptStatePath(stateDir: string, lictorSessionId: string): string {
+  return join(stateDir, `claude-transcript-${lictorSessionId}.txt`);
+}
+
+/** {@link claudeTranscriptStatePath} の中身 (現 transcript JSONL 実パス) を読む. 無ければ null. */
+export function readClaudeTranscriptPath(path: string): string | null {
+  try {
+    const v = readFileSync(path, "utf8").trim();
+    return v || null;
+  } catch {
+    return null; // 未作成 (SessionStart hook 未発火) / 読めない
+  }
+}
+
+/**
  * State file を読み、 dedup・空行除外・trim 済みの repo パス配列を返す.
  * 順序は file 出現順 (= track-active-repo.sh の append 順 = 触った順) を維持する.
  *

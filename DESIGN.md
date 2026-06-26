@@ -306,27 +306,36 @@ and frame/raw shaping are unit-tested without spinning up a poll loop.
 Returns 503 when transcript-tail never started (no Concordia, or no pty —
 e.g. the smoke harness).
 
-### Following `/clear` (transcript re-pin)
+### Binding the right JSONL (`transcript_path` authority)
 
-For session-pin providers (claude) `wrap.ts` passes `--session-id <uuid>` and
-tails **only** that one JSONL (`pinnedTranscriptPath`) — this is what kills
-crosstalk between parallel wrappers. But `/clear` rotates the conversation to a
-**new** session id, so claude starts writing a different `<uuid>.jsonl` while the
-tail stays pinned to the dead one — the relay (and the submit watchdog's
-"did it fire?" signal) silently goes quiet.
+For session-pin providers (claude) `wrap.ts` passes `--session-id <uuid>` and the
+tail binds to a single JSONL — never mtime-guessing, which is what kills crosstalk
+between parallel wrappers. Two failure modes complicate the naive "tail
+`<uuid>.jsonl`" approach, though:
 
-To follow the rotation deterministically (no mtime guessing, which would
-re-introduce the crosstalk the pin prevents), Lictor injects a **SessionStart
-hook** (`lictor cli session-id-hook`, added to the `--settings` file in
-`harness-hook.ts`). It fires on startup / `/clear` / resume / compact and writes
-the *current* claude `session_id` to `<stateDir>/claude-session-<lictorId>.txt`
-(`active-repos.ts` owns the path; `stateDir` resolves the same way as the
-active-repos relay). `transcript-tail.ts`'s `maybeRepin()` reads that file each
-poll and, when the recorded id maps to a different JSONL than the one pinned,
-releases the old claim and re-pins to `provider.pinnedTranscriptFile(cwd, sid)`
-(same function `wrap.ts` used originally, so they agree). `seq` stays monotonic
-so Concordia frame ordering survives the switch. Non-pin providers (codex/gemini
-don't fire claude hooks) are unaffected.
+1. **Filename mismatch.** Current Claude Code does not always name the JSONL after
+   the `--session-id` uuid, so the *computed* pin (`<uuid>.jsonl`) may never appear
+   — and waiting on it alone means the relay never starts.
+2. **`/clear` rotation.** `/clear` rotates the conversation to a new session id, so
+   claude starts writing a *different* `<uuid>.jsonl` while the tail stays bound to
+   the dead one — the relay (and the submit watchdog's "did it fire?" signal)
+   silently goes quiet.
+
+Both are solved by treating the SessionStart hook's **`transcript_path`** as the
+authoritative source. Lictor injects a SessionStart hook (`lictor cli
+session-id-hook`, added to the `--settings` file in `harness-hook.ts`) that fires
+on startup / `/clear` / resume / compact and writes the hook payload's real
+`transcript_path` to `<stateDir>/claude-transcript-<lictorId>.txt` (`active-repos.ts`
+owns the path; `stateDir` resolves the same way as the active-repos relay).
+`transcript-tail.ts`'s `maybeRebind()` reads that file each poll and, when the
+reported path differs from the one currently bound, releases the old claim and
+binds to the real file. Because the path comes straight from claude, it is correct
+even when the filename ≠ the pin uuid, and it tracks `/clear` rotations exactly —
+all without a single mtime comparison, so the crosstalk the pin prevents can never
+creep back in. The computed `pinnedTranscriptPath` still serves as a startup bridge
+until the hook first fires (it's a unique uuid, so it's crosstalk-safe too). `seq`
+stays monotonic so Concordia frame ordering survives the switch. Non-pin providers
+(codex/gemini don't fire claude hooks) fall back to mtime discover as before.
 
 ### Submit watchdog (forced Enter)
 
@@ -341,9 +350,10 @@ successful submit makes claude write a `user` message to the JSONL, which
 `noteUserMessage()` disarms the timer. If no user frame arrives within
 `LICTOR_SUBMIT_WATCHDOG_MS` (default 2000; `0` disables), the watchdog writes a
 lone `\r` once to force submission. It is **not** armed for picker key sequences
-(those produce a `tool_result`, not a user frame). This relies on the re-pin
-above: if the tail were stuck on a stale JSONL post-`/clear`, the user frame
-would never be seen and every inject would spuriously force Enter.
+(those produce a `tool_result`, not a user frame). This relies on the
+`transcript_path` rebinding above: if the tail were stuck on a stale JSONL
+post-`/clear`, the user frame would never be seen and every inject would
+spuriously force Enter.
 
 ## Delegation prompt auto-inject
 
