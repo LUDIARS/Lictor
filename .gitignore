@@ -5,3 +5,6 @@ dist/
 .env
 .env.local
 *.tsbuildinfo
+
+# ローカル review/ は中央 Review/<repo>/ に集約する (per-repo review/ は追跡しない)
+review/
