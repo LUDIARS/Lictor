@@ -12,7 +12,12 @@ import type {
 } from "./concordia-types.js";
 
 const DEFAULT_HOST = "127.0.0.1";
-const DEFAULT_PORT = 17330;
+// Concordia backend の loopback port。 Concordia 本体 (concordia.config.json /
+// shared/config.ts) は 11111 を bind するため既定もそれに揃える。 通常は Concordia が
+// spawn 時に CONCORDIA_HOST/PORT を注入するので、 この既定は env 無し起動時のみ効く。
+// (canonical infra/PORT-MAP.md は 17330 を記載しているが、 実体は 11111。 PORT-MAP 側の
+// 全面見直し時に再整理予定。)
+const DEFAULT_PORT = 11111;
 
 export interface ConcordiaConfig {
   host: string;
