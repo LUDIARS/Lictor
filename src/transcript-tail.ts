@@ -35,6 +35,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { ProviderConfig } from "./provider.js";
+import { readClaudeSessionId } from "./active-repos.js";
 import {
   detectAnsweredQuestionIds,
   detectAskUserQuestion,
@@ -136,8 +137,25 @@ export interface TranscriptTailOptions {
   /**
    * transcript に user メッセージ (端末でのローカル返信) が現れたとき呼ぶ。
    * 開いている ask マーカー質問をローカル解決扱いにして Discord ボタンを失効させる。
+   * askMarkerEnabled のときのみ発火する (ask マーカー専用)。
    */
   onUserReply?: () => void;
+  /**
+   * transcript に user ロールのメッセージフレームが現れるたびに呼ぶ汎用シグナル
+   * (askMarkerEnabled に依らず常時発火)。 submit-watchdog が「注入テキストが実際に
+   * submit されて LLM ターンが始まったか」 を判定するのに使う。
+   */
+  onUserMessage?: () => void;
+  /**
+   * 「現在の Claude session id」 追跡ファイルの絶対パス
+   * (`<stateDir>/claude-session-<lictorId>.txt`、 SessionStart hook が書く)。
+   *
+   * 指定があり provider が session-pin 対応のとき、 poll ごとにこのファイルを読み、
+   * 記録された claude session id が現在 pin 中の JSONL と変わっていたら
+   * (= `/clear` 等でローテートした) 新しい `<sid>.jsonl` へ再 pin して中継を継続する。
+   * null/未指定なら再 pin しない (従来動作)。
+   */
+  lictorSessionStatePath?: string | null;
   /**
    * spawn 時に `--session-id <uuid>` で固定した transcript JSONL の絶対パス。
    *
@@ -157,6 +175,9 @@ export interface TranscriptTailOptions {
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
   const dir = opts.provider.transcriptDir(opts.cwd);
   let jsonlPath: string | null = null;
+  // pin 中の JSONL パス. `/clear` 等で claude session がローテートしたら maybeRepin が
+  // 差し替える (起動時は opts 由来の固定値、 非 pin provider では null)。
+  let pinnedPath: string | null = opts.pinnedTranscriptPath ?? null;
   let claimPath: string | null = null;
   let offset = 0;
   let seq = 0;
@@ -194,13 +215,13 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     // session-id 固定束縛が効いている場合は mtime 推測を一切せず、 固定 path のみ。
     // wrapper が発番した一意 uuid のファイルなので claim 競合は構造的に起きないが、
     // stale-claim 剥がし等の共通ロジックを通すため tryClaimJsonl は経由する。
-    if (opts.pinnedTranscriptPath) {
-      if (!existsSync(opts.pinnedTranscriptPath)) return null; // claude が生成するまで待つ
-      const cp = tryClaimJsonl(opts.pinnedTranscriptPath, STALE_CLAIM_MS, opts.sessionId);
+    if (pinnedPath) {
+      if (!existsSync(pinnedPath)) return null; // claude が生成するまで待つ
+      const cp = tryClaimJsonl(pinnedPath, STALE_CLAIM_MS, opts.sessionId);
       if (cp) {
         claimPath = cp;
-        claimDbg(`pinned transcript claimed path=${opts.pinnedTranscriptPath} owner=${opts.sessionId}`);
-        return opts.pinnedTranscriptPath;
+        claimDbg(`pinned transcript claimed path=${pinnedPath} owner=${opts.sessionId}`);
+        return pinnedPath;
       }
       return null; // 一意 uuid のため通常起き得ない; 万一 claim 済なら次 poll で再試行
     }
@@ -232,8 +253,36 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     return null;
   };
 
+  // `/clear` 等で claude session が別 uuid の JSONL にローテートしたら、 SessionStart
+  // hook が書く state ファイルを読んで新しい pin 先へ差し替える。 これをしないと固定
+  // ファイルを掴んだまま中継が止まる (session-pin provider = claude のみ意味を持つ)。
+  const maybeRepin = (): void => {
+    if (!opts.lictorSessionStatePath) return;
+    if (!opts.provider.supportsSessionPin || !opts.provider.pinnedTranscriptFile) return;
+    const sid = readClaudeSessionId(opts.lictorSessionStatePath);
+    if (!sid) return; // SessionStart hook 未発火
+    const want = opts.provider.pinnedTranscriptFile(opts.cwd, sid);
+    if (!want || want === pinnedPath) return; // 解決不能 or ローテートなし
+    claimDbg(`re-pin: claude session rotated ${pinnedPath ?? "?"} -> ${want} (sid=${sid})`);
+    // 旧 JSONL の claim を解放し (もう成長しない死ファイル)、 新ファイルを次の discover で掴む。
+    if (claimPath) {
+      try {
+        unlinkSync(claimPath);
+      } catch {
+        /* best-effort */
+      }
+      claimPath = null;
+    }
+    pinnedPath = want;
+    jsonlPath = null;
+    offset = 0;
+    pending = "";
+    // seq は連続維持 (Concordia 側の frame 順序を壊さない)。
+  };
+
   const pollOnce = async (): Promise<void> => {
     if (stopped) return;
+    maybeRepin();
     if (!jsonlPath) {
       jsonlPath = discover();
       if (!jsonlPath) return;
@@ -288,6 +337,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       }
       const frame = lineToFrame(line);
       if (!frame) continue;
+      // user ロールのメッセージが出た = 端末入力 or 注入テキストが submit されて
+      // LLM ターンが始まった汎用シグナル。 submit-watchdog の武装解除に使う
+      // (askMarkerEnabled に依らず常時発火)。
+      if (frame.kind === "text" && (frame.payload as { role?: unknown }).role === "user") {
+        opts.onUserMessage?.();
+      }
       // ask マーカー: assistant テキスト中の ```ask ブロックを pending-question へ。
       // provider 非依存 — lineToFrame が Claude/Codex の assistant テキストを正規化済。
       //

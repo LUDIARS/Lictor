@@ -5,10 +5,31 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   activeReposPath,
+  claudeSessionStatePath,
   pickActiveRepo,
   readActiveRepos,
+  readClaudeSessionId,
   resolveActiveReposDir,
 } from "../src/active-repos.js";
+
+test("claudeSessionStatePath: lictor id ごとの追跡ファイル名", () => {
+  const p = claudeSessionStatePath("C:/state", "lictor-abc");
+  assert.equal(p, join("C:/state", "claude-session-lictor-abc.txt"));
+});
+
+test("readClaudeSessionId: 書いた sid を読み戻す / 無ければ null", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-csid-"));
+  try {
+    const p = claudeSessionStatePath(dir, "lictor-xyz");
+    assert.equal(readClaudeSessionId(p), null); // 未作成
+    writeFileSync(p, "  79408afa-6e3a-4d1f-84d0-4916670dd84f  \n", "utf8");
+    assert.equal(readClaudeSessionId(p), "79408afa-6e3a-4d1f-84d0-4916670dd84f"); // trim 済
+    writeFileSync(p, "   \n", "utf8");
+    assert.equal(readClaudeSessionId(p), null); // 空白のみは null
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("resolveActiveReposDir prefers LICTOR_ACTIVE_REPOS_DIR", () => {
   const dir = resolveActiveReposDir({ LICTOR_ACTIVE_REPOS_DIR: "C:/custom/state" } as NodeJS.ProcessEnv);

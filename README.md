@@ -145,6 +145,17 @@ stripped first).
 | `LICTOR_PIN_TRANSCRIPT`      | (unset)     | Set to `1` to pin the session-id (`--session-id`) and export `LICTOR_TRANSCRIPT_FILE` to the child even when Concordia is disabled. For headless workers that need to read their own transcript |
 | `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Set by Concordia `/v1/delegation/invoke` to a rendered prompt file. Lictor reads it and pastes+submits it into the wrapped CLI once the TUI is up (delegation auto-inject) |
 | `LICTOR_DELEGATION_INJECT_DELAY_MS` | `2500` | Delay after first pty output before the delegation prompt is injected (lets the TUI finish drawing) |
+| `LICTOR_SUBMIT_WATCHDOG_MS`  | `2000`      | After a relay text inject (`submitInject`), if no `user` frame appears in the transcript within this many ms, force a single `\r` to submit (bracketed-paste fallback). `0` disables. See DESIGN "Submit watchdog" |
+
+### Following `/clear` (transcript re-pin)
+
+For session-pin providers (claude), `/clear` rotates to a new session-id /
+JSONL while the tail stays pinned to the old one — so the transcript relay goes
+quiet. Lictor injects a **SessionStart hook** (`lictor cli session-id-hook`) that
+records the current claude `session_id` to
+`<stateDir>/claude-session-<lictorId>.txt`; `transcript-tail` polls it and
+re-pins to the new JSONL on rotation. Deterministic (no mtime guessing), so the
+anti-crosstalk pin invariant is preserved. See DESIGN "Following `/clear`".
 
 ### harness-guard injection
 
