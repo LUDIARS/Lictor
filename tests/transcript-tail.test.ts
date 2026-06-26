@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { lineToFrame, tryClaimJsonl, refreshClaim, readRecentFromFile, startTranscriptTail } from "../src/transcript-tail.js";
 import { PROVIDERS } from "../src/provider.js";
+import { claudeSessionStatePath } from "../src/active-repos.js";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
@@ -492,6 +493,60 @@ test("startTranscriptTail: pinnedTranscriptPath は自分の jsonl だけを cla
       assert.equal(existsSync(`${pinnedPath}.lictor-claim`), true, "固定 path を claim する");
       assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "より新しい decoy は最後まで掴まない");
       assert.equal(tail.getSessionUuid(), ownUuid, "session uuid は固定 uuid を返す");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// `/clear` 後の再 pin: SessionStart hook が state ファイルに書いた新 claude session id を
+// transcript-tail が読み、 固定していた旧 JSONL から新 `<sid>.jsonl` へ追従する。
+// これをしないと `/clear` 後に中継 (transcript-frame) が止まる (= 本 PR の主目的)。
+test("startTranscriptTail: state ファイルの session id 変化で新 JSONL へ再 pin する", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-repin-"));
+  try {
+    const sessionId = "lictor-repin-session";
+    const statePath = claudeSessionStatePath(dir, sessionId);
+    // transcriptDir と pinnedTranscriptFile の両方を temp dir に揃える
+    // (本番では wrap.ts の pin と maybeRepin が同じ provider.pinnedTranscriptFile を使うので一致する)。
+    const provider = {
+      ...PROVIDERS.claude,
+      transcriptDir: () => dir,
+      pinnedTranscriptFile: (_cwd: string, uuid: string) => join(dir, `${uuid}.jsonl`),
+    };
+
+    const uuidA = "33333333-3333-4333-8333-333333333333";
+    const pathA = join(dir, `${uuidA}.jsonl`);
+    const uuidB = "44444444-4444-4444-8444-444444444444";
+    const pathB = join(dir, `${uuidB}.jsonl`);
+
+    // 起動時の pin = A。 state ファイルにも A を書いておく (SessionStart hook 相当)。
+    writeFileSync(statePath, uuidA);
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId,
+      concordiaBaseUrl: "http://127.0.0.1:1", // 到達不能 → drop
+      provider,
+      pinnedTranscriptPath: pathA,
+      lictorSessionStatePath: statePath,
+    });
+    try {
+      writeFileSync(pathA, '{"type":"assistant","message":{"content":[{"type":"text","text":"A"}]}}\n');
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), pathA, "起動時は A を tail");
+      assert.equal(existsSync(`${pathA}.lictor-claim`), true, "A を claim");
+
+      // `/clear`: SessionStart hook が新 sid=B を state ファイルへ書き、 claude が B.jsonl を作る。
+      writeFileSync(pathB, '{"type":"assistant","message":{"content":[{"type":"text","text":"B"}]}}\n');
+      writeFileSync(statePath, uuidB);
+      await sleep(900);
+
+      assert.equal(tail.getTranscriptPath(), pathB, "/clear 後は B へ再 pin して tail");
+      assert.equal(tail.getSessionUuid(), uuidB, "session uuid も B を返す");
+      assert.equal(existsSync(`${pathB}.lictor-claim`), true, "B を claim");
+      assert.equal(existsSync(`${pathA}.lictor-claim`), false, "旧 A の claim は解放する");
     } finally {
       tail.stop();
     }

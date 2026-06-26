@@ -306,6 +306,45 @@ and frame/raw shaping are unit-tested without spinning up a poll loop.
 Returns 503 when transcript-tail never started (no Concordia, or no pty —
 e.g. the smoke harness).
 
+### Following `/clear` (transcript re-pin)
+
+For session-pin providers (claude) `wrap.ts` passes `--session-id <uuid>` and
+tails **only** that one JSONL (`pinnedTranscriptPath`) — this is what kills
+crosstalk between parallel wrappers. But `/clear` rotates the conversation to a
+**new** session id, so claude starts writing a different `<uuid>.jsonl` while the
+tail stays pinned to the dead one — the relay (and the submit watchdog's
+"did it fire?" signal) silently goes quiet.
+
+To follow the rotation deterministically (no mtime guessing, which would
+re-introduce the crosstalk the pin prevents), Lictor injects a **SessionStart
+hook** (`lictor cli session-id-hook`, added to the `--settings` file in
+`harness-hook.ts`). It fires on startup / `/clear` / resume / compact and writes
+the *current* claude `session_id` to `<stateDir>/claude-session-<lictorId>.txt`
+(`active-repos.ts` owns the path; `stateDir` resolves the same way as the
+active-repos relay). `transcript-tail.ts`'s `maybeRepin()` reads that file each
+poll and, when the recorded id maps to a different JSONL than the one pinned,
+releases the old claim and re-pins to `provider.pinnedTranscriptFile(cwd, sid)`
+(same function `wrap.ts` used originally, so they agree). `seq` stays monotonic
+so Concordia frame ordering survives the switch. Non-pin providers (codex/gemini
+don't fire claude hooks) are unaffected.
+
+### Submit watchdog (forced Enter)
+
+Lictor's text injection is one-shot: `provider.submitInject` writes `text + \r`
+(claude/gemini) or text→delay→`\r` (codex). When the TUI treats the burst as a
+bracketed paste the `\r` becomes a literal newline and the text sits unsent in
+the input box — the turn never fires. `src/submit-watchdog.ts` is the safety net:
+every relay submit path in `wrap.ts` (Concordia `onInject`, ask-marker answer,
+pending-question-gate flush) calls `submitWatchdog.arm()` after injecting. A
+successful submit makes claude write a `user` message to the JSONL, which
+`transcript-tail` surfaces via the generic `onUserMessage` callback →
+`noteUserMessage()` disarms the timer. If no user frame arrives within
+`LICTOR_SUBMIT_WATCHDOG_MS` (default 2000; `0` disables), the watchdog writes a
+lone `\r` once to force submission. It is **not** armed for picker key sequences
+(those produce a `tool_result`, not a user frame). This relies on the re-pin
+above: if the tail were stuck on a stale JSONL post-`/clear`, the user frame
+would never be seen and every inject would spuriously force Enter.
+
 ## Delegation prompt auto-inject
 
 When Concordia spawns a lictor-wrapped agent via `POST /v1/delegation/invoke`,

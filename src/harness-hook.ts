@@ -19,11 +19,12 @@ export interface HookCommand {
   timeout: number;
 }
 export interface HookMatcher {
-  matcher: string;
+  // SessionStart 等 matcher を取らない hook では省略する。
+  matcher?: string;
   hooks: HookCommand[];
 }
 export interface LictorHookSettings {
-  hooks: { PreToolUse: HookMatcher[] };
+  hooks: { PreToolUse: HookMatcher[]; SessionStart: HookMatcher[] };
 }
 
 const GUARD_REL = join(".claude", "hooks", "harness-guard.mjs");
@@ -74,5 +75,14 @@ export function buildLictorHookSettings(
     });
   }
 
-  return { hooks: { PreToolUse: preToolUse } };
+  // SessionStart: 起動 / `/clear` / resume / compact のたびに現 claude session_id を
+  // state ファイルへ記録する。 transcript-tail が `/clear` 後の新 JSONL へ再 pin する
+  // ための入力源 (matcher 無しで全 source に効かせる)。
+  const sessionStart: HookMatcher[] = [
+    {
+      hooks: [{ type: "command", command: "lictor cli session-id-hook", timeout: 10 }],
+    },
+  ];
+
+  return { hooks: { PreToolUse: preToolUse, SessionStart: sessionStart } };
 }

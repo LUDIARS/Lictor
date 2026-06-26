@@ -41,6 +41,30 @@ export function activeReposPath(stateDir: string, claudeSessionId: string): stri
 }
 
 /**
+ * 「現在の Claude session id」 追跡ファイルの絶対パス. キーは Lictor session id
+ * (= Concordia session id, `lictor-<uuid>`) で、 SessionStart hook
+ * (`lictor cli session-id-hook`) が現 claude session_id を書き込む.
+ *
+ * `--session-id` で固定した transcript JSONL は `/clear` で別 uuid の新 JSONL に
+ * ローテートするが、 transcript-tail は固定ファイルを掴んだまま再 discover しない.
+ * このファイルを transcript-tail が poll し、 記録された sid が現在の pin と
+ * 変わったら新 `<sid>.jsonl` へ再 pin して中継を継続する.
+ */
+export function claudeSessionStatePath(stateDir: string, lictorSessionId: string): string {
+  return join(stateDir, `claude-session-${lictorSessionId}.txt`);
+}
+
+/** {@link claudeSessionStatePath} の中身 (現 claude session id) を読む. 無ければ null. */
+export function readClaudeSessionId(path: string): string | null {
+  try {
+    const v = readFileSync(path, "utf8").trim();
+    return v || null;
+  } catch {
+    return null; // 未作成 (SessionStart hook 未発火) / 読めない
+  }
+}
+
+/**
  * State file を読み、 dedup・空行除外・trim 済みの repo パス配列を返す.
  * 順序は file 出現順 (= track-active-repo.sh の append 順 = 触った順) を維持する.
  *

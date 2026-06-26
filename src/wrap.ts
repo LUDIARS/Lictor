@@ -36,10 +36,12 @@ import {
 } from "./delegation-inject.js";
 import {
   activeReposPath,
+  claudeSessionStatePath,
   pickActiveRepo,
   readActiveRepos,
   resolveActiveReposDir,
 } from "./active-repos.js";
+import { createSubmitWatchdog } from "./submit-watchdog.js";
 import {
   ASK_MARKER_SKILL_BODY,
   ASK_MARKER_SKILL_DESCRIPTION,
@@ -158,6 +160,16 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // Initial auto title (composed with conflict/notify marks once they exist).
   applyAutoTitle(ctx, gatherRepoStat(meta.cwd));
 
+  // 注入テキストが TUI の bracketed-paste で submit されず入力欄に溜まる事象の保険。
+  // submitInject 後に arm し、 transcript に user フレーム (= submit 成立) が
+  // LICTOR_SUBMIT_WATCHDOG_MS 以内に出なければ Enter を 1 回補う。0 で無効化。
+  // 発火先は ctx.ptyWriter (pty spawn 後に差さる) を実行時評価する。
+  const submitWatchdog = createSubmitWatchdog({
+    write: (d) => ctx.ptyWriter?.(d),
+    timeoutMs: envInt(process.env.LICTOR_SUBMIT_WATCHDOG_MS, 2000),
+    log: (m) => process.stderr.write(`lictor: ${m}\n`),
+  });
+
   // Holds ordinary pty injects while an AskUserQuestion picker is open, so a
   // stray Discord message / `/enter` / Codex submit-fallback can't commit the
   // picker's default option before the user actually answers. Opened/closed by
@@ -165,7 +177,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // onAnswerQuestion. See pending-question-gate.ts.
   const pendingQuestionGate = new PendingQuestionGate(
     (text) => {
-      if (ctx.ptyWriter) provider.submitInject(ctx.ptyWriter, text);
+      if (ctx.ptyWriter) {
+        provider.submitInject(ctx.ptyWriter, text);
+        submitWatchdog.arm();
+      }
     },
     (msg) => process.stderr.write(`lictor: ${msg}\n`),
   );
@@ -218,6 +233,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           }
           const writer = ctx.ptyWriter;
           provider.submitInject(writer, safe);
+          submitWatchdog.arm();
           // Telemetry breadcrumb — surface that the inject landed so the
           // user can see who pushed what without trawling Concordia logs.
           process.stderr.write(
@@ -235,6 +251,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
             const safe = sanitizeKeySeq(text);
             if (!safe) return;
             provider.submitInject(ctx.ptyWriter, safe);
+            submitWatchdog.arm();
             process.stderr.write(
               `lictor: answered ask-marker question via text (qid=${questionId}, provider=${provider.name})\n`,
             );
@@ -467,6 +484,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       onQuestionResolved: (qid) => pendingQuestionGate.resolveQuestion(qid),
       askMarkerEnabled: askMarkerActive,
       pinnedTranscriptPath,
+      // `/clear` 等で claude session が新 JSONL にローテートしたら再 pin する入力源。
+      // SessionStart hook (lictor cli session-id-hook) が現 claude sid を書く。
+      // env は wrap の spawn env と同じものを渡し、 hook 側の解決と一致させる。
+      lictorSessionStatePath: claudeSessionStatePath(resolveActiveReposDir(env), concordia.id),
+      onUserMessage: () => submitWatchdog.noteUserMessage(),
       onAskMarkerPosted: (qid) => {
         // この id の回答は picker キー注入ではなくテキスト注入で返す。
         markerQuestionIds.add(qid);
@@ -542,6 +564,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     if (statTimer) clearInterval(statTimer);
     if (pollTimer) clearInterval(pollTimer);
     transcriptTail?.stop();
+    submitWatchdog.stop();
     // Drop any held injects rather than flushing them into a dying pty.
     pendingQuestionGate.forceClear();
     concordia?.liveness.close();

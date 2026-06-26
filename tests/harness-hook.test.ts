@@ -37,6 +37,15 @@ test("buildLictorHookSettings: guard 無しは既定 2 フックのみ", () => {
   assert.ok(!pre.some((m) => m.matcher === "Bash"));
 });
 
+test("buildLictorHookSettings: SessionStart に session-id-hook を注入する", () => {
+  const s = buildLictorHookSettings(null);
+  const ss = s.hooks.SessionStart;
+  assert.equal(ss.length, 1);
+  // 全 source (startup/clear/resume/compact) に効かせるため matcher は持たない。
+  assert.equal(ss[0].matcher, undefined);
+  assert.equal(ss[0].hooks[0].command, "lictor cli session-id-hook");
+});
+
 test("buildLictorHookSettings: guard ありは PreToolUse(Bash) を追加", () => {
   const s = buildLictorHookSettings("E:\\Document\\Ars\\.claude\\hooks\\harness-guard.mjs");
   const pre = s.hooks.PreToolUse;

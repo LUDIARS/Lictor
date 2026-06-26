@@ -3,6 +3,7 @@ import { runClient } from "./client.js";
 import { getProvider } from "./provider.js";
 import { runPermissionHook } from "./permission-hook.js";
 import { runAskQuestionHook } from "./ask-question-hook.js";
+import { runSessionIdHook } from "./session-id-hook.js";
 import { runLocalAgent } from "./local-agent/index.js";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 import { install as installVestigium } from "@ludiars/vestigium";
@@ -124,6 +125,12 @@ async function main() {
     // picker を絶対に止めない (内部で全エラーを飲み込み exit 0)。
     if (rest[0] === "ask-question-hook") {
       await runAskQuestionHook();
+      return;
+    }
+    // session-id-hook も同様に LICTOR_PORT を要求せず、 失敗しても起動を止めない
+    // (SessionStart hook)。 現 claude session_id を state ファイルに記録する。
+    if (rest[0] === "session-id-hook") {
+      await runSessionIdHook();
       return;
     }
     // `lictor local` provider が pty で起動する内部サブコマンド (= ローカル LLM REPL)。
