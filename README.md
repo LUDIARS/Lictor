@@ -140,7 +140,7 @@ stripped first).
 | Var | Default | Effect |
 |-----|---------|--------|
 | `CONCORDIA_HOST`             | `127.0.0.1` | Where Concordia listens |
-| `CONCORDIA_PORT`             | `17330`     | — |
+| `CONCORDIA_PORT`             | `11111`     | Concordia backend port (Concordia が spawn 時に注入。 env 無し起動時のみ既定が効く) |
 | `LICTOR_DISABLE_CONCORDIA`   | (unset)     | Set to `1` to skip Concordia registration entirely (v0.0 behavior) |
 | `LICTOR_PIN_TRANSCRIPT`      | (unset)     | Set to `1` to pin the session-id (`--session-id`) and export `LICTOR_TRANSCRIPT_FILE` to the child even when Concordia is disabled. For headless workers that need to read their own transcript |
 | `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Set by Concordia `/v1/delegation/invoke` to a rendered prompt file. Lictor reads it and pastes+submits it into the wrapped CLI once the TUI is up (delegation auto-inject) |

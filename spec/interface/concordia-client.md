@@ -1,6 +1,6 @@
 # Concordia クライアント契約
 
-Lictor は Concordia（loopback `127.0.0.1:17330`、`CONCORDIA_HOST`/`CONCORDIA_PORT`
+Lictor は Concordia（loopback `127.0.0.1:11111`、`CONCORDIA_HOST`/`CONCORDIA_PORT`
 で変更可）に対する **クライアント** として振る舞う。`LICTOR_DISABLE_CONCORDIA=1`
 で全連携を skip（v0.0 相当の単独動作）。呼び出しは best-effort で、失敗しても
 ラッパ本体は継続する。実装は [`../../src/concordia.ts`](../../src/concordia.ts)。

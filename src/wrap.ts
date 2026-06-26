@@ -474,7 +474,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // the wrapped session at all. Only meaningful when concordia is up.
   let transcriptTail: TranscriptTailHandle | null = null;
   if (concordia) {
-    const concordiaBaseUrl = `http://${process.env.CONCORDIA_HOST ?? "127.0.0.1"}:${process.env.CONCORDIA_PORT ?? "17330"}`;
+    // 接続先は ConcordiaClient の解決済み設定 (env + 既定 11111) を単一情報源にする。
+    const concordiaBaseUrl = concordia.client.cfg.baseUrl;
     transcriptTail = startTranscriptTail({
       cwd: meta.cwd,
       sessionId: concordia.id,
