@@ -288,6 +288,24 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     LICTOR_SESSION_START: meta.start_iso,
     LICTOR_PROVIDER: provider.name,
   };
+  // claude-desktop 由来の「子セッション」 マーカーを除去する (claude provider のみ)。
+  //
+  // Lictor が claude-desktop 経由のコンテキストから起動されると、 env に
+  // `CLAUDE_CODE_CHILD_SESSION=1` / `CLAUDE_CODE_ENTRYPOINT=claude-desktop` /
+  // `CLAUDE_CODE_SESSION_ID=<uuid>` が紛れ込み、 これらをそのまま wrapped claude へ
+  // 渡すと claude は **child / desktop-managed セッション** として起動し、 session
+  // transcript JSONL を `~/.claude/projects/<key>/` に **一切永続化しない** (desktop が
+  // 自前管理する前提のため)。 すると transcript-tail が tail する対象が生まれず、 地の文の
+  // 中継が完全に止まる (hook の transcript_path は報告されるが実体ゼロの phantom)。
+  //
+  // 実測 (隔離 cwd・confound-free): これらを env から strip すると claude は top-level
+  // セッションとして起動し `<key>/<uuid>.jsonl` を通常通り生成する。 残すと jsonl が一切
+  // 生成されない。 SessionStart hook の transcript_path 権威 (Option B) はこの実ファイルが
+  // 在って初めて機能するため、 この strip が中継成立の前提になる。
+  // (OAuth/exec 系 env は認証に必要なので strip しない。)
+  delete env.CLAUDE_CODE_CHILD_SESSION;
+  delete env.CLAUDE_CODE_ENTRYPOINT;
+  delete env.CLAUDE_CODE_SESSION_ID;
   if (concordia) {
     env.LICTOR_SESSION_ID = concordia.id;
     env.CONCORDIA_SESSION_ID = concordia.id;
