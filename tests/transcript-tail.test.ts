@@ -639,3 +639,55 @@ test("startTranscriptTail: hook 未発火でも computed pin で橋渡しし dec
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// pin 撤去後の本番フロー: wrap.ts は `--session-id` を渡さず pinnedTranscriptPath も指定
+// しない。 claude が session_id を自前採番し、 SessionStart hook がその実 transcript_path を
+// 報告する。 transcript-tail は hook 権威が設定済なら、 hook 報告までは mtime 推測に降りず
+// 待ち (= より新しい別セッションの decoy を掴まない)、 報告後に実ファイルを束縛する。
+test("startTranscriptTail: pin 無し + hook 権威で、 hook 未発火中は mtime に降りず、 報告後に実ファイルを束縛する", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-nopin-"));
+  try {
+    const sessionId = "lictor-nopin-session";
+    const statePath = claudeTranscriptStatePath(dir, sessionId);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    // より新しい mtime の decoy = 別セッションの jsonl。 mtime discover なら誤掴みする。
+    const decoyPath = join(dir, "aaaa1111-1111-4111-8111-111111111111.jsonl");
+    writeFileSync(decoyPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"decoy"}]}}\n');
+    const future = Date.now() / 1000 + 600;
+    utimesSync(decoyPath, future, future);
+
+    // claude が自前採番した実 transcript (hook がまだ報告していない、 decoy より古い mtime)。
+    const realUuid = "bbbb2222-2222-4222-8222-222222222222";
+    const realPath = join(dir, `${realUuid}.jsonl`);
+    writeFileSync(realPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"real"}]}}\n');
+
+    // pin 無し (pinnedTranscriptPath 未指定)、 hook 権威のみ。
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId,
+      concordiaBaseUrl: "http://127.0.0.1:1", // 到達不能 → postFrame / postDiagnostic は drop
+      provider,
+      lictorTranscriptStatePath: statePath,
+    });
+    try {
+      // hook 未発火 (state ファイル未作成) → mtime に降りず何も掴まない (decoy も real も)。
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), null, "hook 未発火中は mtime 推測せず待つ");
+      assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "より新しい decoy を mtime で掴まない");
+      assert.equal(existsSync(`${realPath}.lictor-claim`), false, "hook 未報告の実ファイルもまだ掴まない");
+
+      // hook が実 transcript_path を報告 → 実ファイルを束縛。
+      writeFileSync(statePath, realPath);
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), realPath, "hook 報告後は実ファイルを tail");
+      assert.equal(tail.getSessionUuid(), realUuid, "session uuid は実ファイルの uuid を返す");
+      assert.equal(existsSync(`${realPath}.lictor-claim`), true, "実ファイルを claim");
+      assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "decoy は最後まで掴まない");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
