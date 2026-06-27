@@ -21,12 +21,29 @@
  * 飲み込み常に exit 0 / stdout 無出力で抜ける。
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   claudeSessionStatePath,
   claudeTranscriptStatePath,
   resolveActiveReposDir,
 } from "./active-repos.js";
+
+/**
+ * 過剰ログ (verbose-logging-bootstrap): SessionStart hook が claude から実際に受け取った
+ * payload (session_id / transcript_path / source) と、 報告された transcript_path が
+ * ディスクに実在するかを `<stateDir>/lictor-hook-debug.log` へ追記する。 transcript が
+ * 永続化されない / phantom path が報告される現象を実セッションで裏取りするための入口。
+ * 安定後に撤去 PR で消す。 LICTOR_DEBUG_TRANSCRIPT=0 で無効化。
+ */
+function debugLog(stateDir: string, line: string): void {
+  if (process.env.LICTOR_DEBUG_TRANSCRIPT === "0") return;
+  try {
+    appendFileSync(join(stateDir, "lictor-hook-debug.log"), `${new Date().toISOString()} ${line}\n`);
+  } catch {
+    /* best-effort */
+  }
+}
 
 interface HookInput {
   session_id?: string;
@@ -76,6 +93,14 @@ export async function runSessionIdHook(): Promise<void> {
     if (transcriptPath) {
       writeFileSync(claudeTranscriptStatePath(stateDir, lictorId), transcriptPath, "utf8");
     }
+    // 過剰ログ: claude が報告した payload と、 報告 transcript_path の実在を裏取りする。
+    // 「transcript が永続化されない / phantom path 報告」 を実セッションで確認するための核心ログ。
+    debugLog(
+      stateDir,
+      `lictorId=${lictorId} source=${(input as { source?: string }).source ?? "?"} ` +
+        `session_id=${sid} transcript_path=${transcriptPath || "(none)"} ` +
+        `transcriptExists=${transcriptPath ? existsSync(transcriptPath) : "n/a"}`,
+    );
   } catch {
     // SessionStart hook は絶対に起動をブロックしない。
   }

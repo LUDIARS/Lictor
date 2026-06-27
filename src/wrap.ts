@@ -475,6 +475,24 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         }
         openMarkerQids.clear();
       },
+      onRelayStuck: (detail) => {
+        // transcript を束縛できず中継不能になった (= 地の文が一切 Discord に出ない) ことを、
+        // 「Lictor からのシステムメッセージ」 と明示して Discord セッションチャンネルへ投稿する。
+        // これでユーザは沈黙ではなく「中継が壊れている」 と気付ける (fail-loud を人間可視化)。
+        // best-effort — Concordia 不達でも主処理に波及させない。
+        void concordia.client
+          .chat({
+            channel: "system",
+            text:
+              `⚠️ **[Lictor system]** このセッションの作業内容を Discord に中継できていません。\n` +
+              `${detail}\n` +
+              `（claude が transcript を永続化していない可能性。Lictor 再起動で復旧する場合があります）`,
+            author_label: "⚙️ Lictor (system)",
+            session_id: concordia.id,
+            discord_channel_id: ctx.meta.discord?.session_channel_id ?? undefined,
+          })
+          .catch(() => {});
+      },
     });
     // active-repos watcher が transcript-tail 経由で session UUID を引けるよう
     // ctx に getter を差す. transcript-tail が JSONL を発見するまで null を返す.

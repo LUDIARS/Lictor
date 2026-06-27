@@ -185,6 +185,13 @@ export interface TranscriptTailOptions {
    * resume 系 flag 指定時)。
    */
   pinnedTranscriptPath?: string | null;
+  /**
+   * hook 権威が設定済なのに猶予 (TRANSCRIPT_RESOLVE_GRACE_MS) を超えても transcript を
+   * 束縛できず中継不能になったとき、 1 度だけ呼ぶ。 wrap.ts はこれを Concordia 経由の
+   * 「Lictor システムメッセージ」 として Discord セッションチャンネルへ投稿する配線に使う
+   * (= 中継が黙って止まったのをユーザが Discord 上で気付ける)。 detail は人間可読の説明。
+   */
+  onRelayStuck?: (detail: string) => void;
 }
 
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
@@ -335,6 +342,43 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       `${missing ? " [MISSING on disk]" : ""}`;
     try { process.stderr.write(`[lictor] ${detail}\n`); } catch { /* best-effort */ }
     void postDiagnostic(opts.concordiaBaseUrl, opts.sessionId, detail);
+    // wrap.ts 経由で Discord セッションチャンネルへ「Lictor システムメッセージ」 として明示投稿する。
+    try { opts.onRelayStuck?.(detail); } catch { /* best-effort */ }
+  };
+
+  // 過剰ログ (verbose-logging-bootstrap): バグ調査中、 transcript を束縛できず待機している間
+  // 「hook 報告パス・その実在・dir の jsonl 一覧 (mtime/claim)」 を throttle して吐く。
+  // 安定後に撤去 PR で消す。
+  let lastWaitLogAt = 0;
+  const logWaitingState = (): void => {
+    if (!CLAIM_DEBUG) return;
+    const now = Date.now();
+    if (now - lastWaitLogAt < 3000) return;
+    lastWaitLogAt = now;
+    const reported = opts.lictorTranscriptStatePath
+      ? readClaudeTranscriptPath(opts.lictorTranscriptStatePath)
+      : null;
+    const reportedExists = reported ? existsSync(reported) : null;
+    let dirList = "(dir missing)";
+    try {
+      if (dir) {
+        const entries = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+        dirList = entries
+          .slice(0, 15)
+          .map((f) => {
+            let mt = "?";
+            let claimed = "";
+            try { mt = new Date(statSync(join(dir, f)).mtimeMs).toISOString().slice(11, 19); } catch { /* gone */ }
+            try { if (existsSync(`${join(dir, f)}.lictor-claim`)) claimed = "*"; } catch { /* best-effort */ }
+            return `${f.slice(0, 8)}@${mt}${claimed}`;
+          })
+          .join(" ");
+      }
+    } catch { /* best-effort */ }
+    claimDbg(
+      `WAIT transcript: pinnedPath=${pinnedPath ?? "(none)"} hookReported=${reported ?? "(none)"} ` +
+        `reportedExists=${reportedExists} elapsedMs=${now - startedAt} dirJsonl=[${dirList}]`,
+    );
   };
 
   const pollOnce = async (): Promise<void> => {
@@ -343,9 +387,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     if (!jsonlPath) {
       jsonlPath = discover();
       if (!jsonlPath) {
+        logWaitingState();
         warnIfRelayUnresolved();
         return;
       }
+      claimDbg(`BOUND transcript: ${jsonlPath} (elapsedMs=${Date.now() - startedAt})`);
       offset = 0;
     }
     // active 中は claim の mtime を更新し続け、 stale (1h) 判定で他 wrapper に
