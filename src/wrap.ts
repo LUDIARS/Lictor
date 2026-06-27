@@ -172,6 +172,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // テキスト出力なので、回答は「キー注入」ではなく「テキスト注入」で返す
   // (単一/複数/自由文を全部テキスト返信に一本化)。組み込み AskUserQuestion 由来の
   // 質問 (= ここに無い id) は従来どおりキー注入の fallback に回す。
+  // このセッションで実際にターンが始まったか (ローカル発話の submit / リモート注入)。
+  // transcript-tail の fail-loud を「アイドルで未発話なだけ」 の誤検知から守るために使う。
+  let sawSessionTurn = false;
   const markerQuestionIds = new Set<number>();
   // まだローカル/リモートで解決していない marker 質問。ユーザが端末で返信したら
   // (transcript に user メッセージが出たら) resolve 通知して Discord ボタンを失効させる。
@@ -217,6 +220,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           const writer = ctx.ptyWriter;
           provider.submitInject(writer, safe);
           submitWatchdog.arm();
+          sawSessionTurn = true;
           // Telemetry breadcrumb — surface that the inject landed so the
           // user can see who pushed what without trawling Concordia logs.
           process.stderr.write(
@@ -225,6 +229,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         },
         onAnswerQuestion: ({ questionId, index, text }) => {
           if (!ctx.ptyWriter) return;
+          sawSessionTurn = true;
           // ask マーカー由来の質問は picker ではなくテキスト出力なので、回答は
           // 「テキスト + Enter」 を通常の inject 経路で返す (キー注入しない)。
           // answer_text は単一=ラベル / 複数=カンマ結合ラベル / Other=自由文。
@@ -493,24 +498,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         }
         openMarkerQids.clear();
       },
-      onRelayStuck: (detail) => {
-        // transcript を束縛できず中継不能になった (= 地の文が一切 Discord に出ない) ことを、
-        // 「Lictor からのシステムメッセージ」 と明示して Discord セッションチャンネルへ投稿する。
-        // これでユーザは沈黙ではなく「中継が壊れている」 と気付ける (fail-loud を人間可視化)。
-        // best-effort — Concordia 不達でも主処理に波及させない。
-        void concordia.client
-          .chat({
-            channel: "system",
-            text:
-              `⚠️ **[Lictor system]** このセッションの作業内容を Discord に中継できていません。\n` +
-              `${detail}\n` +
-              `（claude が transcript を永続化していない可能性。Lictor 再起動で復旧する場合があります）`,
-            author_label: "⚙️ Lictor (system)",
-            session_id: concordia.id,
-            discord_channel_id: ctx.meta.discord?.session_channel_id ?? undefined,
-          })
-          .catch(() => {});
-      },
+      // transcript は claude が初回ターンを受けてから書く。 無操作のアイドルセッションを
+      // 「中継不能」 と誤検知しないよう、 実際にターンが始まった (submit/inject があった)
+      // ときだけ stderr の fail-loud を出させる。
+      isSessionActive: () => sawSessionTurn,
     });
     // active-repos watcher が transcript-tail 経由で session UUID を引けるよう
     // ctx に getter を差す. transcript-tail が JSONL を発見するまで null を返す.
@@ -549,6 +540,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     }
   }
   const onStdin = (chunk: Buffer) => {
+    // ローカル端末で Enter (CR) を押した = ターンを submit した、 とみなす。
+    if (chunk.includes(0x0d)) sawSessionTurn = true;
     try {
       child.write(chunk.toString("utf8"));
     } catch {

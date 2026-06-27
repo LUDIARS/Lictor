@@ -191,7 +191,14 @@ export interface TranscriptTailOptions {
    * 「Lictor システムメッセージ」 として Discord セッションチャンネルへ投稿する配線に使う
    * (= 中継が黙って止まったのをユーザが Discord 上で気付ける)。 detail は人間可読の説明。
    */
-  onRelayStuck?: (detail: string) => void;
+  /**
+   * 「このセッションで実際にターンが始まったか (ユーザ発話 / リモート注入があったか)」 を返す。
+   * claude は **初回メッセージを受けてから** transcript JSONL を書く (SessionStart 時点では
+   * 未生成) ため、 無操作のアイドルセッションでは transcript が無いのが正常。 fail-loud は
+   * これが true のときだけ発火させ、 「まだ誰も話しかけていないだけ」 を中継不能と誤検知して
+   * Discord に誤投稿するのを防ぐ。 未指定なら常に true 扱い (従来動作)。
+   */
+  isSessionActive?: () => boolean;
 }
 
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
@@ -333,52 +340,22 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     if (relayUnresolvedWarned) return;
     if (!opts.lictorTranscriptStatePath) return;
     if (Date.now() - startedAt < TRANSCRIPT_RESOLVE_GRACE_MS) return;
+    // claude は **初回ターンを受けてから** transcript JSONL を書く (SessionStart 時点では
+    // 未生成) ため、 無操作のアイドルセッションでは未生成が正常。 実際にターンが始まった
+    // (submit/inject があった) ときだけ警告し、 「まだ誰も話しかけていないだけ」 を中継不能と
+    // 誤検知しない。
+    if (opts.isSessionActive && !opts.isSessionActive()) return;
     relayUnresolvedWarned = true;
     const reported = readClaudeTranscriptPath(opts.lictorTranscriptStatePath);
     const missing = reported ? !existsSync(reported) : false;
-    const detail =
-      `transcript unresolved ${Math.round((Date.now() - startedAt) / 1000)}s after start; ` +
-      `relay inactive (no frames flowing). hook transcript_path=${reported ?? "(none reported)"}` +
-      `${missing ? " [MISSING on disk]" : ""}`;
-    try { process.stderr.write(`[lictor] ${detail}\n`); } catch { /* best-effort */ }
-    void postDiagnostic(opts.concordiaBaseUrl, opts.sessionId, detail);
-    // wrap.ts 経由で Discord セッションチャンネルへ「Lictor システムメッセージ」 として明示投稿する。
-    try { opts.onRelayStuck?.(detail); } catch { /* best-effort */ }
-  };
-
-  // 過剰ログ (verbose-logging-bootstrap): バグ調査中、 transcript を束縛できず待機している間
-  // 「hook 報告パス・その実在・dir の jsonl 一覧 (mtime/claim)」 を throttle して吐く。
-  // 安定後に撤去 PR で消す。
-  let lastWaitLogAt = 0;
-  const logWaitingState = (): void => {
-    if (!CLAIM_DEBUG) return;
-    const now = Date.now();
-    if (now - lastWaitLogAt < 3000) return;
-    lastWaitLogAt = now;
-    const reported = opts.lictorTranscriptStatePath
-      ? readClaudeTranscriptPath(opts.lictorTranscriptStatePath)
-      : null;
-    const reportedExists = reported ? existsSync(reported) : null;
-    let dirList = "(dir missing)";
+    // 端末 (Lictor の stderr) にだけ 1 度出す (no-silent-fallback の最小担保)。 Discord へは
+    // 出さない (壊れたセッションに毎回ノイズを撒かない)。
     try {
-      if (dir) {
-        const entries = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
-        dirList = entries
-          .slice(0, 15)
-          .map((f) => {
-            let mt = "?";
-            let claimed = "";
-            try { mt = new Date(statSync(join(dir, f)).mtimeMs).toISOString().slice(11, 19); } catch { /* gone */ }
-            try { if (existsSync(`${join(dir, f)}.lictor-claim`)) claimed = "*"; } catch { /* best-effort */ }
-            return `${f.slice(0, 8)}@${mt}${claimed}`;
-          })
-          .join(" ");
-      }
+      process.stderr.write(
+        `lictor: transcript unresolved ${Math.round((Date.now() - startedAt) / 1000)}s after first turn; ` +
+          `relay inactive. hook transcript_path=${reported ?? "(none)"}${missing ? " [missing]" : ""}\n`,
+      );
     } catch { /* best-effort */ }
-    claimDbg(
-      `WAIT transcript: pinnedPath=${pinnedPath ?? "(none)"} hookReported=${reported ?? "(none)"} ` +
-        `reportedExists=${reportedExists} elapsedMs=${now - startedAt} dirJsonl=[${dirList}]`,
-    );
   };
 
   const pollOnce = async (): Promise<void> => {
@@ -387,11 +364,9 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     if (!jsonlPath) {
       jsonlPath = discover();
       if (!jsonlPath) {
-        logWaitingState();
         warnIfRelayUnresolved();
         return;
       }
-      claimDbg(`BOUND transcript: ${jsonlPath} (elapsedMs=${Date.now() - startedAt})`);
       offset = 0;
     }
     // active 中は claim の mtime を更新し続け、 stale (1h) 判定で他 wrapper に
@@ -844,29 +819,6 @@ async function postFrame(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ seq, kind, payload }),
-      signal: ctrl.signal,
-    });
-  } catch {
-    // best-effort
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * transcript が束縛できず中継不能になっている異常を Concordia の event エンドポイントへ
- * 1 度だけ通知する (fail-loud)。 best-effort — Concordia 不達でも主処理に波及させない。
- * stderr 出力と対で「中継が黙って止まったまま放置」 を防ぐ (feedback_no_silent_fallback)。
- */
-async function postDiagnostic(baseUrl: string, sessionId: string, message: string): Promise<void> {
-  const url = `${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/event`;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), POST_TIMEOUT_MS);
-  try {
-    await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind: "lictor.transcript.unresolved", payload: { message } }),
       signal: ctrl.signal,
     });
   } catch {
