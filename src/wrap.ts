@@ -60,23 +60,6 @@ function envInt(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-/**
- * ユーザ自身が「既存 session を開く / 再開する」 flag を渡しているか。
- * これらが在るときは Lictor が `--session-id` を固定すると意図 (resume 等) と
- * 衝突するため、 session-id 固定束縛を見送って従来の mtime discover に委譲する。
- */
-function hasSessionSelectingArg(args: readonly string[]): boolean {
-  return args.some(
-    (a) =>
-      a === "--session-id" ||
-      a === "--resume" ||
-      a === "-r" ||
-      a === "--continue" ||
-      a === "-c" ||
-      a === "--from-pr",
-  );
-}
-
 export async function runWrapped(args: string[], provider: ProviderConfig = PROVIDERS.claude): Promise<void> {
   const meta = gatherBaseMeta();
   meta.provider = provider.name;
@@ -339,42 +322,30 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   }
   if (extraSettingsPath) providerArgs.push("--settings", extraSettingsPath);
 
-  // セッション ID 固定束縛 (Discord セッション ↔ jsonl ↔ channel の取り違え防止)。
+  // セッション ID 固定束縛 (`--session-id <uuid>`) は撤去した。
   //
-  // wrapped CLI が session-id 固定に対応する (claude) なら、 ここで uuid を発番
-  // して `--session-id <uuid>` を spawn 引数に足し、 transcript-tail には
-  // 「その uuid の jsonl だけを claim せよ」 と固定 path を渡す。 これで
-  // transcript-tail の mtime 推測 discover を完全に廃し、
-  //   - 先に非 Lictor の claude を起動していた
-  //   - 同 cwd で別 wrapper が並走している
-  //   - context 要約で session が新 jsonl にローテートした
-  // のいずれでも、 自分以外の transcript を誤って掴む (= 投稿が 1 つズレて
-  // 別チャンネルに出る) crosstalk が構造的に起きなくなる。
+  // 旧実装は uuid を発番して `--session-id` で渡し、 transcript-tail に
+  // `<uuid>.jsonl` だけを claim させて crosstalk を防いでいた。 しかし
+  // claude-code 2.1.187 は渡した `--session-id` を **transcript ファイル名に
+  // 反映しなくなった**: 渡した uuid を logical session_id としては採用するが、
+  // transcript JSONL は自前採番の別 uuid (`<other>.jsonl`) に書き出す。 その結果、
+  // 計算 pin (`<uuid>.jsonl`) も、 SessionStart hook が報告する transcript_path
+  // (= 渡した `<session_id>.jsonl`) も、 実体の無い phantom を指し、 中継が一切
+  // 始まらなくなった (hook payload の transcript_path が pin uuid を返すのを実測)。
   //
-  // concordia 連携時 (= リモート中継対象) のほか、 LICTOR_PIN_TRANSCRIPT=1 が
-  // 明示指定されたときも固定する。 後者は Concordia を無効化して起動する常駐ワーカー
-  // (Discutere worker-pool 等) が transcript path を知りたいケース向け。 固定した
-  // path は LICTOR_TRANSCRIPT_FILE として wrapped CLI の env に公開し、 ワーカーが
-  // セッションの usage / token を transcript から回収できるようにする (Discutere #135)。
-  // ユーザが自分で --session-id / --resume / --continue / --from-pr を渡している場合は、
-  // 既存 session を開く意図なので固定せず従来 discover に委譲する。
-  const pinRequested = process.env.LICTOR_PIN_TRANSCRIPT === "1";
-  let pinnedTranscriptPath: string | null = null;
-  if (
-    (concordia || pinRequested) &&
-    provider.supportsSessionPin &&
-    provider.sessionPinArgs &&
-    provider.pinnedTranscriptFile &&
-    !hasSessionSelectingArg(args)
-  ) {
-    const pinnedUuid = randomUUID();
-    providerArgs.push(...provider.sessionPinArgs(pinnedUuid));
-    pinnedTranscriptPath = provider.pinnedTranscriptFile(meta.cwd, pinnedUuid);
-    if (pinnedTranscriptPath) env.LICTOR_TRANSCRIPT_FILE = pinnedTranscriptPath;
-    process.stderr.write(
-      `lictor: pinned ${provider.displayName} session-id ${pinnedUuid} (transcript claim 固定)\n`,
-    );
-  }
+  // 代わりに pin を渡さない。 すると claude が session_id を自前採番し、 SessionStart
+  // hook が報告する transcript_path は実ファイルを正しく指す (= transcript_path 権威が
+  // 真実になる)。 crosstalk は「mtime 推測をせず hook 報告の実パスだけを掴む」 で維持する
+  // (transcript-tail.discover は hook 権威が設定済なら実パス確定まで mtime に降りず待ち、
+  // 猶予を過ぎても解決しなければ fail-loud で表面化する)。 ユーザが自分で --resume /
+  // --continue / --from-pr / --session-id を渡している場合 (既存 session を開く意図) も
+  // 同様に hook 権威へ委ねる。
+  //
+  // NOTE: LICTOR_PIN_TRANSCRIPT=1 ワーカー (Discutere #135) が使っていた
+  // LICTOR_TRANSCRIPT_FILE は pin 撤去で起動時に先出しできなくなった。 ワーカーは
+  // `<stateDir>/claude-transcript-<lictorId>.txt` (SessionStart hook が書く実パス) を
+  // 読むこと。
+  const pinnedTranscriptPath: string | null = null;
 
   // ask マーカー ステアリング注入 (concordia 連携時のみ = リモート回答対象)。
   //   - claude: 共通マーカールール + 組み込み AskUserQuestion 禁止 を常時

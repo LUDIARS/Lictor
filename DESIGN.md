@@ -308,34 +308,39 @@ e.g. the smoke harness).
 
 ### Binding the right JSONL (`transcript_path` authority)
 
-For session-pin providers (claude) `wrap.ts` passes `--session-id <uuid>` and the
-tail binds to a single JSONL — never mtime-guessing, which is what kills crosstalk
-between parallel wrappers. Two failure modes complicate the naive "tail
-`<uuid>.jsonl`" approach, though:
+The tail binds to a single JSONL — never mtime-guessing, which is what kills
+crosstalk between parallel wrappers — using the SessionStart hook's
+**`transcript_path`** as the authoritative source.
 
-1. **Filename mismatch.** Current Claude Code does not always name the JSONL after
-   the `--session-id` uuid, so the *computed* pin (`<uuid>.jsonl`) may never appear
-   — and waiting on it alone means the relay never starts.
-2. **`/clear` rotation.** `/clear` rotates the conversation to a new session id, so
-   claude starts writing a *different* `<uuid>.jsonl` while the tail stays bound to
-   the dead one — the relay (and the submit watchdog's "did it fire?" signal)
-   silently goes quiet.
+**Why not `--session-id` pinning.** Lictor used to pass `--session-id <uuid>` and
+claim `<uuid>.jsonl`, but claude-code 2.1.187 **stopped reflecting `--session-id`
+in the transcript filename**: it adopts the passed uuid as the logical `session_id`
+yet writes the JSONL under a self-generated uuid (`<other>.jsonl`). The SessionStart
+hook then reports `transcript_path = <passed-session-id>.jsonl` (verified by dumping
+the hook payload) — a path that is never created. Both the computed pin and the
+hook authority pointed at that phantom, so the relay never started. The fix is to
+**not pass `--session-id`**: claude self-assigns `session_id`, the filename matches
+it, and the hook reports the *real* path.
 
-Both are solved by treating the SessionStart hook's **`transcript_path`** as the
-authoritative source. Lictor injects a SessionStart hook (`lictor cli
-session-id-hook`, added to the `--settings` file in `harness-hook.ts`) that fires
-on startup / `/clear` / resume / compact and writes the hook payload's real
-`transcript_path` to `<stateDir>/claude-transcript-<lictorId>.txt` (`active-repos.ts`
-owns the path; `stateDir` resolves the same way as the active-repos relay).
-`transcript-tail.ts`'s `maybeRebind()` reads that file each poll and, when the
-reported path differs from the one currently bound, releases the old claim and
-binds to the real file. Because the path comes straight from claude, it is correct
-even when the filename ≠ the pin uuid, and it tracks `/clear` rotations exactly —
-all without a single mtime comparison, so the crosstalk the pin prevents can never
-creep back in. The computed `pinnedTranscriptPath` still serves as a startup bridge
-until the hook first fires (it's a unique uuid, so it's crosstalk-safe too). `seq`
-stays monotonic so Concordia frame ordering survives the switch. Non-pin providers
-(codex/gemini don't fire claude hooks) fall back to mtime discover as before.
+Lictor injects a SessionStart hook (`lictor cli session-id-hook`, added to the
+`--settings` file in `harness-hook.ts`) that fires on startup / `/clear` / resume /
+compact and writes the hook payload's `transcript_path` to
+`<stateDir>/claude-transcript-<lictorId>.txt` (`active-repos.ts` owns the path;
+`stateDir` resolves the same way as the active-repos relay). `transcript-tail.ts`'s
+`maybeRebind()` reads that file each poll and, when the reported path differs from
+the one currently bound, releases the old claim and binds to the real file. Because
+the path comes straight from claude it is correct, and it tracks `/clear` rotations
+exactly — all without a single mtime comparison, so crosstalk cannot creep back in.
+
+Until the hook first fires, `discover()` **waits** (returns null) rather than
+mtime-guessing — the brief startup window is crosstalk-safe by construction. If the
+hook authority is configured but no transcript binds within
+`LICTOR_TRANSCRIPT_RESOLVE_GRACE_MS` (default 20s), the tail emits a one-shot
+**fail-loud** diagnostic to stderr *and* a `lictor.transcript.unresolved` Concordia
+event — a stuck relay is never silent. `seq` stays monotonic so Concordia frame
+ordering survives any rebind. Non-pin providers (codex/gemini don't fire claude
+hooks; their `lictorTranscriptStatePath` is unset) fall back to mtime discover as
+before.
 
 ### Submit watchdog (forced Enter)
 

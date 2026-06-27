@@ -51,6 +51,16 @@ const POST_TIMEOUT_MS = 2000;
 const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
 const STALE_CLAIM_MS = 60 * 60 * 1000; // 1h 経った claim は wrapper クラッシュ残骸とみなす
 
+// hook 権威 (lictorTranscriptStatePath) が設定済なのに transcript を束縛できないまま
+// 経過したとき、 中継を黙って止めず大きく表面化するための猶予 (ms)。 SessionStart hook は
+// 起動直後に発火するので通常は 1s 未満で解決する。 これを超えても解決しなければ「hook が
+// phantom path を報告した / claude が transcript を永続化していない」 等の異常とみなし、
+// stderr + Concordia event で可視化する (無言フォールバック禁止)。 env override 可。
+const TRANSCRIPT_RESOLVE_GRACE_MS = ((): number => {
+  const v = Number(process.env.LICTOR_TRANSCRIPT_RESOLVE_GRACE_MS ?? "20000");
+  return Number.isFinite(v) && v >= 0 ? v : 20000;
+})();
+
 // 別セッション誤投稿 (= 2 wrapper が同じ jsonl を tail) の原因特定用ログ.
 // 既定 ON。 安定確認後に撤去 PR で消す (verbose-logging-bootstrap)。CONCORDIA→Discord
 // で「別 channel に混在」 が出たらこのログで「同一 path を 2 owner が claim」 を確認する。
@@ -190,6 +200,9 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   let seq = 0;
   let pending = "";
   let stopped = false;
+  // hook 権威が設定済なのに猶予内に transcript を束縛できなかったとき、 1 度だけ
+  // fail-loud 警告を出すためのフラグ (沈黙死禁止)。
+  let relayUnresolvedWarned = false;
   const startedAt = Date.now();
   // AskUserQuestion の tool_use id → Concordia の question_id。picker がローカル回答で
   // 解決した（tool_result 検知）とき、Concordia に resolve 通知して古いボタンを失効させる。
@@ -241,8 +254,13 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       // 正しい実パスへ束縛を差し替えるので中継不能には陥らない。
       return null;
     }
-    // pinnedPath が null = pin 非対応 provider (codex/gemini/famulus) かつ hook 権威も
-    // 未取得。 従来の mtime discover に委譲する。
+    // pinnedPath が null = まだ束縛先が確定していない。
+    // hook 権威 (lictorTranscriptStatePath) が設定済なら、 maybeRebind が hook の実
+    // transcript_path を束縛するまで待つ。 mtime 推測は別セッションの JSONL を誤掴みする
+    // crosstalk 源なので一切しない (起動直後の hook 未発火の短い間だけここに来る)。 猶予を
+    // 過ぎても解決しなければ pollOnce が fail-loud で表面化する (無言フォールバック禁止)。
+    if (opts.lictorTranscriptStatePath) return null;
+    // hook 権威なし (SessionStart hook 非対応 provider: codex/gemini/famulus)。 従来の mtime discover。
     if (!existsSync(dir)) return null;
     type Candidate = { path: string; mtime: number };
     const candidates: Candidate[] = [];
@@ -299,12 +317,35 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     // seq は連続維持 (Concordia 側の frame 順序を壊さない)。
   };
 
+  // hook 権威が設定済なのに猶予を過ぎても transcript を束縛できないとき、 1 度だけ
+  // 大きく表面化する (沈黙死禁止: feedback_no_silent_fallback)。 「claude が transcript を
+  // 実ファイルとして永続化しない / hook が phantom path を報告する」 等の異常を、 中継が
+  // 黙って止まったまま放置せず stderr + Concordia event で可視化する。 hook 権威なし
+  // provider (codex/gemini) は対象外 (mtime discover に正当に委ねるため)。
+  const warnIfRelayUnresolved = (): void => {
+    if (relayUnresolvedWarned) return;
+    if (!opts.lictorTranscriptStatePath) return;
+    if (Date.now() - startedAt < TRANSCRIPT_RESOLVE_GRACE_MS) return;
+    relayUnresolvedWarned = true;
+    const reported = readClaudeTranscriptPath(opts.lictorTranscriptStatePath);
+    const missing = reported ? !existsSync(reported) : false;
+    const detail =
+      `transcript unresolved ${Math.round((Date.now() - startedAt) / 1000)}s after start; ` +
+      `relay inactive (no frames flowing). hook transcript_path=${reported ?? "(none reported)"}` +
+      `${missing ? " [MISSING on disk]" : ""}`;
+    try { process.stderr.write(`[lictor] ${detail}\n`); } catch { /* best-effort */ }
+    void postDiagnostic(opts.concordiaBaseUrl, opts.sessionId, detail);
+  };
+
   const pollOnce = async (): Promise<void> => {
     if (stopped) return;
     maybeRebind();
     if (!jsonlPath) {
       jsonlPath = discover();
-      if (!jsonlPath) return;
+      if (!jsonlPath) {
+        warnIfRelayUnresolved();
+        return;
+      }
       offset = 0;
     }
     // active 中は claim の mtime を更新し続け、 stale (1h) 判定で他 wrapper に
@@ -757,6 +798,29 @@ async function postFrame(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ seq, kind, payload }),
+      signal: ctrl.signal,
+    });
+  } catch {
+    // best-effort
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * transcript が束縛できず中継不能になっている異常を Concordia の event エンドポイントへ
+ * 1 度だけ通知する (fail-loud)。 best-effort — Concordia 不達でも主処理に波及させない。
+ * stderr 出力と対で「中継が黙って止まったまま放置」 を防ぐ (feedback_no_silent_fallback)。
+ */
+async function postDiagnostic(baseUrl: string, sessionId: string, message: string): Promise<void> {
+  const url = `${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/event`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), POST_TIMEOUT_MS);
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "lictor.transcript.unresolved", payload: { message } }),
       signal: ctrl.signal,
     });
   } catch {
