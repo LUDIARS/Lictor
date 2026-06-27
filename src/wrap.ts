@@ -61,20 +61,45 @@ function envInt(raw: string | undefined, fallback: number): number {
 }
 
 /**
- * ユーザ自身が「既存 session を開く / 再開する」 flag を渡しているか。
- * これらが在るときは Lictor が `--session-id` を固定すると意図 (resume 等) と
- * 衝突するため、 session-id 固定束縛を見送って従来の mtime discover に委譲する。
+ * claude-desktop 由来の「子セッション」 マーカー env キー。
+ *
+ * Lictor が claude-desktop 経由のコンテキストから起動されると、 env に
+ * `CLAUDE_CODE_CHILD_SESSION=1` / `CLAUDE_CODE_ENTRYPOINT=claude-desktop` /
+ * `CLAUDE_CODE_SESSION_ID=<uuid>` が紛れ込み、 これらをそのまま wrapped claude へ
+ * 渡すと claude は **child / desktop-managed セッション** として起動し、 session
+ * transcript JSONL を `~/.claude/projects/<key>/` に **一切永続化しない** (desktop が
+ * 自前管理する前提のため)。 すると transcript-tail が tail する対象が生まれず、 地の文の
+ * 中継が完全に止まる (hook の transcript_path は報告されるが実体ゼロの phantom)。
  */
-function hasSessionSelectingArg(args: readonly string[]): boolean {
-  return args.some(
-    (a) =>
-      a === "--session-id" ||
-      a === "--resume" ||
-      a === "-r" ||
-      a === "--continue" ||
-      a === "-c" ||
-      a === "--from-pr",
-  );
+export const CHILD_SESSION_ENV_KEYS = [
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SESSION_ID",
+] as const;
+
+/**
+ * wrapped 子プロセスへ渡す env から {@link CHILD_SESSION_ENV_KEYS} を除去する。
+ *
+ * strip するのは **claude provider のときだけ**。 この症状 (transcript 未永続化) は
+ * claude 固有で、 codex / gemini はこれらの env を読まないため残しても無害だが、
+ * 実証済みの provider にだけ手を入れる (コメントと実コードの整合を取り、 将来 provider
+ * 追加時の予期せぬ干渉を避ける)。 OAuth/exec 系 env は認証に必要なので strip しない。
+ *
+ * 入力 env は変更せず、 常に新しいオブジェクトを返す純関数 (回帰テスト可能)。
+ *
+ * 実測 (隔離 cwd・confound-free): これらを env から strip すると claude は top-level
+ * セッションとして起動し `<key>/<uuid>.jsonl` を通常通り生成する。 残すと jsonl が一切
+ * 生成されない。 SessionStart hook の transcript_path 権威 (Option B) はこの実ファイルが
+ * 在って初めて機能するため、 この strip が中継成立の前提になる。
+ */
+export function stripChildSessionEnv(
+  env: NodeJS.ProcessEnv,
+  provider: ProviderConfig,
+): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env };
+  if (provider.name !== "claude") return out;
+  for (const key of CHILD_SESSION_ENV_KEYS) delete out[key];
+  return out;
 }
 
 export async function runWrapped(args: string[], provider: ProviderConfig = PROVIDERS.claude): Promise<void> {
@@ -160,6 +185,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // Initial auto title (composed with conflict/notify marks once they exist).
   applyAutoTitle(ctx, gatherRepoStat(meta.cwd));
 
+  // このセッションで実際にターンが始まったか (ローカル発話の submit / リモート注入 /
+  // gate flush / delegation 自動注入)。 transcript-tail の fail-loud を「アイドルで未発話
+  // なだけ」 の誤検知から守るために使う。 ターン起点となる経路は全てここを true にする。
+  let sawSessionTurn = false;
+
   // 注入テキストが TUI の bracketed-paste で submit されず入力欄に溜まる事象の保険。
   // submitInject 後に arm し、 transcript に user フレーム (= submit 成立) が
   // LICTOR_SUBMIT_WATCHDOG_MS 以内に出なければ Enter を 1 回補う。0 で無効化。
@@ -180,6 +210,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       if (ctx.ptyWriter) {
         provider.submitInject(ctx.ptyWriter, text);
         submitWatchdog.arm();
+        // 保留していた inject が flush された = ターンが始まる。 fail-loud の
+        // 誤検知ガード (isSessionActive) に反映する。
+        sawSessionTurn = true;
       }
     },
     (msg) => process.stderr.write(`lictor: ${msg}\n`),
@@ -234,6 +267,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           const writer = ctx.ptyWriter;
           provider.submitInject(writer, safe);
           submitWatchdog.arm();
+          sawSessionTurn = true;
           // Telemetry breadcrumb — surface that the inject landed so the
           // user can see who pushed what without trawling Concordia logs.
           process.stderr.write(
@@ -242,6 +276,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         },
         onAnswerQuestion: ({ questionId, index, text }) => {
           if (!ctx.ptyWriter) return;
+          sawSessionTurn = true;
           // ask マーカー由来の質問は picker ではなくテキスト出力なので、回答は
           // 「テキスト + Enter」 を通常の inject 経路で返す (キー注入しない)。
           // answer_text は単一=ラベル / 複数=カンマ結合ラベル / Other=自由文。
@@ -298,13 +333,19 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     }\n`,
   );
 
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    LICTOR_PORT: String(sidecar.port),
-    LICTOR_PID: String(process.pid),
-    LICTOR_SESSION_START: meta.start_iso,
-    LICTOR_PROVIDER: provider.name,
-  };
+  // claude-desktop 由来の「子セッション」 マーカー (CHILD_SESSION_ENV_KEYS) を wrapped
+  // claude へ渡さない。 残すと claude が transcript JSONL を永続化せず中継が全停止する。
+  // claude provider 限定で strip する (詳細は stripChildSessionEnv の docstring)。
+  const env: NodeJS.ProcessEnv = stripChildSessionEnv(
+    {
+      ...process.env,
+      LICTOR_PORT: String(sidecar.port),
+      LICTOR_PID: String(process.pid),
+      LICTOR_SESSION_START: meta.start_iso,
+      LICTOR_PROVIDER: provider.name,
+    },
+    provider,
+  );
   if (concordia) {
     env.LICTOR_SESSION_ID = concordia.id;
     env.CONCORDIA_SESSION_ID = concordia.id;
@@ -339,42 +380,30 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   }
   if (extraSettingsPath) providerArgs.push("--settings", extraSettingsPath);
 
-  // セッション ID 固定束縛 (Discord セッション ↔ jsonl ↔ channel の取り違え防止)。
+  // セッション ID 固定束縛 (`--session-id <uuid>`) は撤去した。
   //
-  // wrapped CLI が session-id 固定に対応する (claude) なら、 ここで uuid を発番
-  // して `--session-id <uuid>` を spawn 引数に足し、 transcript-tail には
-  // 「その uuid の jsonl だけを claim せよ」 と固定 path を渡す。 これで
-  // transcript-tail の mtime 推測 discover を完全に廃し、
-  //   - 先に非 Lictor の claude を起動していた
-  //   - 同 cwd で別 wrapper が並走している
-  //   - context 要約で session が新 jsonl にローテートした
-  // のいずれでも、 自分以外の transcript を誤って掴む (= 投稿が 1 つズレて
-  // 別チャンネルに出る) crosstalk が構造的に起きなくなる。
+  // 旧実装は uuid を発番して `--session-id` で渡し、 transcript-tail に
+  // `<uuid>.jsonl` だけを claim させて crosstalk を防いでいた。 しかし
+  // claude-code 2.1.187 は渡した `--session-id` を **transcript ファイル名に
+  // 反映しなくなった**: 渡した uuid を logical session_id としては採用するが、
+  // transcript JSONL は自前採番の別 uuid (`<other>.jsonl`) に書き出す。 その結果、
+  // 計算 pin (`<uuid>.jsonl`) も、 SessionStart hook が報告する transcript_path
+  // (= 渡した `<session_id>.jsonl`) も、 実体の無い phantom を指し、 中継が一切
+  // 始まらなくなった (hook payload の transcript_path が pin uuid を返すのを実測)。
   //
-  // concordia 連携時 (= リモート中継対象) のほか、 LICTOR_PIN_TRANSCRIPT=1 が
-  // 明示指定されたときも固定する。 後者は Concordia を無効化して起動する常駐ワーカー
-  // (Discutere worker-pool 等) が transcript path を知りたいケース向け。 固定した
-  // path は LICTOR_TRANSCRIPT_FILE として wrapped CLI の env に公開し、 ワーカーが
-  // セッションの usage / token を transcript から回収できるようにする (Discutere #135)。
-  // ユーザが自分で --session-id / --resume / --continue / --from-pr を渡している場合は、
-  // 既存 session を開く意図なので固定せず従来 discover に委譲する。
-  const pinRequested = process.env.LICTOR_PIN_TRANSCRIPT === "1";
-  let pinnedTranscriptPath: string | null = null;
-  if (
-    (concordia || pinRequested) &&
-    provider.supportsSessionPin &&
-    provider.sessionPinArgs &&
-    provider.pinnedTranscriptFile &&
-    !hasSessionSelectingArg(args)
-  ) {
-    const pinnedUuid = randomUUID();
-    providerArgs.push(...provider.sessionPinArgs(pinnedUuid));
-    pinnedTranscriptPath = provider.pinnedTranscriptFile(meta.cwd, pinnedUuid);
-    if (pinnedTranscriptPath) env.LICTOR_TRANSCRIPT_FILE = pinnedTranscriptPath;
-    process.stderr.write(
-      `lictor: pinned ${provider.displayName} session-id ${pinnedUuid} (transcript claim 固定)\n`,
-    );
-  }
+  // 代わりに pin を渡さない。 すると claude が session_id を自前採番し、 SessionStart
+  // hook が報告する transcript_path は実ファイルを正しく指す (= transcript_path 権威が
+  // 真実になる)。 crosstalk は「mtime 推測をせず hook 報告の実パスだけを掴む」 で維持する
+  // (transcript-tail.discover は hook 権威が設定済なら実パス確定まで mtime に降りず待ち、
+  // 猶予を過ぎても解決しなければ fail-loud で表面化する)。 ユーザが自分で --resume /
+  // --continue / --from-pr / --session-id を渡している場合 (既存 session を開く意図) も
+  // 同様に hook 権威へ委ねる。
+  //
+  // NOTE: LICTOR_PIN_TRANSCRIPT=1 ワーカー (Discutere #135) が使っていた
+  // LICTOR_TRANSCRIPT_FILE は pin 撤去で起動時に先出しできなくなった。 ワーカーは
+  // `<stateDir>/claude-transcript-<lictorId>.txt` (SessionStart hook が書く実パス) を
+  // 読むこと。
+  const pinnedTranscriptPath: string | null = null;
 
   // ask マーカー ステアリング注入 (concordia 連携時のみ = リモート回答対象)。
   //   - claude: 共通マーカールール + 組み込み AskUserQuestion 禁止 を常時
@@ -463,7 +492,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   if (delegationPrompt) {
     delegationInjector = createDelegationInjector({
       prompt: delegationPrompt,
-      submit: (text) => provider.submitInject((d) => child.write(d), text),
+      submit: (text) => {
+        provider.submitInject((d) => child.write(d), text);
+        // delegation プロンプトの自動注入 = このセッションの最初のターン。
+        sawSessionTurn = true;
+      },
       delayMs: delegationInjectDelayMs(env),
     });
   }
@@ -504,6 +537,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         }
         openMarkerQids.clear();
       },
+      // transcript は claude が初回ターンを受けてから書く。 無操作のアイドルセッションを
+      // 「中継不能」 と誤検知しないよう、 実際にターンが始まった (submit/inject があった)
+      // ときだけ stderr の fail-loud を出させる。
+      isSessionActive: () => sawSessionTurn,
     });
     // active-repos watcher が transcript-tail 経由で session UUID を引けるよう
     // ctx に getter を差す. transcript-tail が JSONL を発見するまで null を返す.
@@ -542,6 +579,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     }
   }
   const onStdin = (chunk: Buffer) => {
+    // ローカル端末で Enter (CR) を押した = ターンを submit した、 とみなす。
+    if (chunk.includes(0x0d)) sawSessionTurn = true;
     try {
       child.write(chunk.toString("utf8"));
     } catch {
