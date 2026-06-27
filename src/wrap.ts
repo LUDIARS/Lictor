@@ -60,6 +60,48 @@ function envInt(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/**
+ * claude-desktop 由来の「子セッション」 マーカー env キー。
+ *
+ * Lictor が claude-desktop 経由のコンテキストから起動されると、 env に
+ * `CLAUDE_CODE_CHILD_SESSION=1` / `CLAUDE_CODE_ENTRYPOINT=claude-desktop` /
+ * `CLAUDE_CODE_SESSION_ID=<uuid>` が紛れ込み、 これらをそのまま wrapped claude へ
+ * 渡すと claude は **child / desktop-managed セッション** として起動し、 session
+ * transcript JSONL を `~/.claude/projects/<key>/` に **一切永続化しない** (desktop が
+ * 自前管理する前提のため)。 すると transcript-tail が tail する対象が生まれず、 地の文の
+ * 中継が完全に止まる (hook の transcript_path は報告されるが実体ゼロの phantom)。
+ */
+export const CHILD_SESSION_ENV_KEYS = [
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SESSION_ID",
+] as const;
+
+/**
+ * wrapped 子プロセスへ渡す env から {@link CHILD_SESSION_ENV_KEYS} を除去する。
+ *
+ * strip するのは **claude provider のときだけ**。 この症状 (transcript 未永続化) は
+ * claude 固有で、 codex / gemini はこれらの env を読まないため残しても無害だが、
+ * 実証済みの provider にだけ手を入れる (コメントと実コードの整合を取り、 将来 provider
+ * 追加時の予期せぬ干渉を避ける)。 OAuth/exec 系 env は認証に必要なので strip しない。
+ *
+ * 入力 env は変更せず、 常に新しいオブジェクトを返す純関数 (回帰テスト可能)。
+ *
+ * 実測 (隔離 cwd・confound-free): これらを env から strip すると claude は top-level
+ * セッションとして起動し `<key>/<uuid>.jsonl` を通常通り生成する。 残すと jsonl が一切
+ * 生成されない。 SessionStart hook の transcript_path 権威 (Option B) はこの実ファイルが
+ * 在って初めて機能するため、 この strip が中継成立の前提になる。
+ */
+export function stripChildSessionEnv(
+  env: NodeJS.ProcessEnv,
+  provider: ProviderConfig,
+): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env };
+  if (provider.name !== "claude") return out;
+  for (const key of CHILD_SESSION_ENV_KEYS) delete out[key];
+  return out;
+}
+
 export async function runWrapped(args: string[], provider: ProviderConfig = PROVIDERS.claude): Promise<void> {
   const meta = gatherBaseMeta();
   meta.provider = provider.name;
@@ -143,6 +185,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // Initial auto title (composed with conflict/notify marks once they exist).
   applyAutoTitle(ctx, gatherRepoStat(meta.cwd));
 
+  // このセッションで実際にターンが始まったか (ローカル発話の submit / リモート注入 /
+  // gate flush / delegation 自動注入)。 transcript-tail の fail-loud を「アイドルで未発話
+  // なだけ」 の誤検知から守るために使う。 ターン起点となる経路は全てここを true にする。
+  let sawSessionTurn = false;
+
   // 注入テキストが TUI の bracketed-paste で submit されず入力欄に溜まる事象の保険。
   // submitInject 後に arm し、 transcript に user フレーム (= submit 成立) が
   // LICTOR_SUBMIT_WATCHDOG_MS 以内に出なければ Enter を 1 回補う。0 で無効化。
@@ -163,6 +210,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       if (ctx.ptyWriter) {
         provider.submitInject(ctx.ptyWriter, text);
         submitWatchdog.arm();
+        // 保留していた inject が flush された = ターンが始まる。 fail-loud の
+        // 誤検知ガード (isSessionActive) に反映する。
+        sawSessionTurn = true;
       }
     },
     (msg) => process.stderr.write(`lictor: ${msg}\n`),
@@ -172,9 +222,6 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // テキスト出力なので、回答は「キー注入」ではなく「テキスト注入」で返す
   // (単一/複数/自由文を全部テキスト返信に一本化)。組み込み AskUserQuestion 由来の
   // 質問 (= ここに無い id) は従来どおりキー注入の fallback に回す。
-  // このセッションで実際にターンが始まったか (ローカル発話の submit / リモート注入)。
-  // transcript-tail の fail-loud を「アイドルで未発話なだけ」 の誤検知から守るために使う。
-  let sawSessionTurn = false;
   const markerQuestionIds = new Set<number>();
   // まだローカル/リモートで解決していない marker 質問。ユーザが端末で返信したら
   // (transcript に user メッセージが出たら) resolve 通知して Discord ボタンを失効させる。
@@ -286,31 +333,19 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     }\n`,
   );
 
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    LICTOR_PORT: String(sidecar.port),
-    LICTOR_PID: String(process.pid),
-    LICTOR_SESSION_START: meta.start_iso,
-    LICTOR_PROVIDER: provider.name,
-  };
-  // claude-desktop 由来の「子セッション」 マーカーを除去する (claude provider のみ)。
-  //
-  // Lictor が claude-desktop 経由のコンテキストから起動されると、 env に
-  // `CLAUDE_CODE_CHILD_SESSION=1` / `CLAUDE_CODE_ENTRYPOINT=claude-desktop` /
-  // `CLAUDE_CODE_SESSION_ID=<uuid>` が紛れ込み、 これらをそのまま wrapped claude へ
-  // 渡すと claude は **child / desktop-managed セッション** として起動し、 session
-  // transcript JSONL を `~/.claude/projects/<key>/` に **一切永続化しない** (desktop が
-  // 自前管理する前提のため)。 すると transcript-tail が tail する対象が生まれず、 地の文の
-  // 中継が完全に止まる (hook の transcript_path は報告されるが実体ゼロの phantom)。
-  //
-  // 実測 (隔離 cwd・confound-free): これらを env から strip すると claude は top-level
-  // セッションとして起動し `<key>/<uuid>.jsonl` を通常通り生成する。 残すと jsonl が一切
-  // 生成されない。 SessionStart hook の transcript_path 権威 (Option B) はこの実ファイルが
-  // 在って初めて機能するため、 この strip が中継成立の前提になる。
-  // (OAuth/exec 系 env は認証に必要なので strip しない。)
-  delete env.CLAUDE_CODE_CHILD_SESSION;
-  delete env.CLAUDE_CODE_ENTRYPOINT;
-  delete env.CLAUDE_CODE_SESSION_ID;
+  // claude-desktop 由来の「子セッション」 マーカー (CHILD_SESSION_ENV_KEYS) を wrapped
+  // claude へ渡さない。 残すと claude が transcript JSONL を永続化せず中継が全停止する。
+  // claude provider 限定で strip する (詳細は stripChildSessionEnv の docstring)。
+  const env: NodeJS.ProcessEnv = stripChildSessionEnv(
+    {
+      ...process.env,
+      LICTOR_PORT: String(sidecar.port),
+      LICTOR_PID: String(process.pid),
+      LICTOR_SESSION_START: meta.start_iso,
+      LICTOR_PROVIDER: provider.name,
+    },
+    provider,
+  );
   if (concordia) {
     env.LICTOR_SESSION_ID = concordia.id;
     env.CONCORDIA_SESSION_ID = concordia.id;
@@ -457,7 +492,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   if (delegationPrompt) {
     delegationInjector = createDelegationInjector({
       prompt: delegationPrompt,
-      submit: (text) => provider.submitInject((d) => child.write(d), text),
+      submit: (text) => {
+        provider.submitInject((d) => child.write(d), text);
+        // delegation プロンプトの自動注入 = このセッションの最初のターン。
+        sawSessionTurn = true;
+      },
       delayMs: delegationInjectDelayMs(env),
     });
   }
