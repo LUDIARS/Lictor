@@ -220,12 +220,17 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
 
   // ask マーカー由来の pending-question id を覚えておく。これらは picker ではなく
   // テキスト出力なので、回答は「キー注入」ではなく「テキスト注入」で返す
-  // (単一/複数/自由文を全部テキスト返信に一本化)。組み込み AskUserQuestion 由来の
-  // 質問 (= ここに無い id) は従来どおりキー注入の fallback に回す。
+  // (単一/複数/自由文を全部テキスト返信に一本化)。
   const markerQuestionIds = new Set<number>();
   // まだローカル/リモートで解決していない marker 質問。ユーザが端末で返信したら
   // (transcript に user メッセージが出たら) resolve 通知して Discord ボタンを失効させる。
   const openMarkerQids = new Set<number>();
+  // 組み込み AskUserQuestion picker が Concordia に登録された question_id。
+  // transcript-tail が AskUserQuestion tool_use を検出し Concordia に POST した後に
+  // 登録される。onAnswerQuestion で markerQuestionIds にも無い id が来たとき、
+  // ここにあれば picker キーストローク経路、無ければ Concordia 独自起源として
+  // テキスト注入経路に振る（三分岐判定）。
+  const pickerQuestionIds = new Set<number>();
 
   // WS reactor — attach AFTER ctx so the dispatcher can read live state.
   if (concordia) {
@@ -277,9 +282,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         onAnswerQuestion: ({ questionId, index, text }) => {
           if (!ctx.ptyWriter) return;
           sawSessionTurn = true;
-          // ask マーカー由来の質問は picker ではなくテキスト出力なので、回答は
-          // 「テキスト + Enter」 を通常の inject 経路で返す (キー注入しない)。
-          // answer_text は単一=ラベル / 複数=カンマ結合ラベル / Other=自由文。
+          // 三分岐: ask-marker / 組み込み picker / Concordia 独自起源。
+          //
+          // 1. ask マーカー由来: picker ではなくテキスト出力なので「テキスト + Enter」。
+          //    answer_text は単一=ラベル / 複数=カンマ結合ラベル / Other=自由文。
           if (markerQuestionIds.has(questionId)) {
             markerQuestionIds.delete(questionId);
             openMarkerQids.delete(questionId);
@@ -292,20 +298,35 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
             );
             return;
           }
-          // fallback: 組み込み AskUserQuestion picker。Concordia carries 0-based
-          // answer_index; buildAnswerSequence is 1-based ([1, 50]). Clamp the
-          // upper bound so a malformed event can't push the picker past option 50.
-          const choice = index + 1;
-          if (choice < 1 || choice > 50) return;
-          let seq: string;
-          try {
-            seq = buildAnswerSequence(choice);
-          } catch {
+          // 2. 組み込み AskUserQuestion picker: transcript-tail が tool_use を検出し
+          //    Concordia に登録した question_id。Down×N + Enter でローカル picker を確定。
+          //    Concordia carries 0-based answer_index; buildAnswerSequence is 1-based ([1, 50]).
+          if (pickerQuestionIds.has(questionId)) {
+            pickerQuestionIds.delete(questionId);
+            const choice = index + 1;
+            if (choice < 1 || choice > 50) return;
+            let seq: string;
+            try {
+              seq = buildAnswerSequence(choice);
+            } catch {
+              return;
+            }
+            ctx.ptyWriter(seq);
+            process.stderr.write(
+              `lictor: confirmed AskUserQuestion picker via Concordia (answer_index=${index}, provider=${provider.name})\n`,
+            );
             return;
           }
-          ctx.ptyWriter(seq);
+          // 3. Concordia 独自起源の質問 (INITIAL_WORK_QUESTION 等): Lictor は tool_use を
+          //    transcript で見ていないので picker は開いていない。「テキスト + Enter」 で
+          //    pty に流す。キーストローク注入は picker が無い空プロンプトに Down+Enter を
+          //    打つだけで no-op になるため使わない。
+          const safe = sanitizeKeySeq(text);
+          if (!safe) return;
+          provider.submitInject(ctx.ptyWriter, safe);
+          submitWatchdog.arm();
           process.stderr.write(
-            `lictor: confirmed AskUserQuestion picker via Concordia (answer_index=${index}, provider=${provider.name})\n`,
+            `lictor: answered Concordia-originated question via text (qid=${questionId}, provider=${provider.name})\n`,
           );
         },
       }),
@@ -525,6 +546,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       // 同じものを渡し、 hook 側の state dir 解決と一致させる。
       lictorTranscriptStatePath: claudeTranscriptStatePath(resolveActiveReposDir(env), concordia.id),
       onUserMessage: () => submitWatchdog.noteUserMessage(),
+      onPickerQuestionRegistered: (qid) => {
+        // 組み込み AskUserQuestion picker が Concordia に登録された。
+        // onAnswerQuestion の三分岐判定で「picker キーストローク経路」として識別するために控える。
+        pickerQuestionIds.add(qid);
+      },
       onAskMarkerPosted: (qid) => {
         // この id の回答は picker キー注入ではなくテキスト注入で返す。
         markerQuestionIds.add(qid);

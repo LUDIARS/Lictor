@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -689,5 +690,70 @@ test("startTranscriptTail: pin 無し + hook 権威で、 hook 未発火中は m
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ─── onPickerQuestionRegistered: AskUserQuestion 登録後のコールバック ─────────
+// transcript-tail が AskUserQuestion tool_use を検出して Concordia に POST し、
+// question_id が返ったとき onPickerQuestionRegistered が呼ばれることを確認する。
+// wrap.ts はこの id を pickerQuestionIds に追加し onAnswerQuestion の三分岐で使う。
+test("startTranscriptTail: AskUserQuestion 検出後に onPickerQuestionRegistered(qid) を呼ぶ", async () => {
+  // mock Concordia: POST pending-question → { question_id: 99 }
+  const server = createServer((req, res) => {
+    if (req.method === "POST" && req.url?.includes("pending-question")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ question_id: 99 }));
+    } else {
+      res.writeHead(204);
+      res.end();
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  const concordiaBaseUrl = `http://127.0.0.1:${port}`;
+
+  const dir = mkdtempSync(join(tmpdir(), "lictor-picker-"));
+  const pickerQids: number[] = [];
+  try {
+    const ownUuid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const pinnedPath = join(dir, `${ownUuid}.jsonl`);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-picker-session",
+      concordiaBaseUrl,
+      provider,
+      pinnedTranscriptPath: pinnedPath,
+      onPickerQuestionRegistered: (qid) => pickerQids.push(qid),
+    });
+    try {
+      // AskUserQuestion tool_use を含む JSONL を書き込む。
+      const line = JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_picker01",
+              name: "AskUserQuestion",
+              input: {
+                questions: [{ question: "続けますか?", options: [{ label: "はい" }, { label: "いいえ" }] }],
+              },
+            },
+          ],
+        },
+      });
+      writeFileSync(pinnedPath, line + "\n", "utf8");
+
+      // poll が検出 → HTTP POST → .then → callback まで待つ。
+      await sleep(1200);
+      assert.deepEqual(pickerQids, [99], "AskUserQuestion 登録後に question_id=99 で呼ばれる");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
