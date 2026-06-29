@@ -8,3 +8,6 @@ dist/
 
 # ローカル review/ は中央 Review/<repo>/ に集約する (per-repo review/ は追跡しない)
 review/
+
+# ローカル依存ライブラリ (git submodule update --init でセットアップ)
+/lib/
