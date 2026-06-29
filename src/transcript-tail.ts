@@ -145,6 +145,12 @@ export interface TranscriptTailOptions {
    */
   onAskMarkerPosted?: (questionId: number) => void;
   /**
+   * AskUserQuestion (組み込み picker) が Concordia に pending-question として登録され
+   * question_id が返ったとき呼ぶ。wrap.ts はこの id を「picker キーストローク回答」集合に
+   * 記録し、Concordia 独自起源の質問 (どちらにも属さない) との三分岐を実現する。
+   */
+  onPickerQuestionRegistered?: (questionId: number) => void;
+  /**
    * transcript に user メッセージ (端末でのローカル返信) が現れたとき呼ぶ。
    * 開いている ask マーカー質問をローカル解決扱いにして Discord ボタンを失効させる。
    * askMarkerEnabled のときのみ発火する (ask マーカー専用)。
@@ -400,8 +406,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
         const pqs = detectAskUserQuestion(line);
         for (const pq of pqs) {
           // question_id を控えて tool_use id と紐付ける（後で local-resolve 通知に使う）。
+          // 登録成功後に onPickerQuestionRegistered を呼び、wrap.ts が「picker 既知 qid」
+          // 集合に追加できるようにする（Concordia 起源の質問との三分岐判定に使う）。
           void postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, pq).then((qid) => {
             if (qid != null && pq.id) questionIdByToolUse.set(pq.id, qid);
+            if (qid != null) opts.onPickerQuestionRegistered?.(qid);
           });
           opts.onQuestionOpen?.(pq.id);
         }
