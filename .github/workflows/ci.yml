@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -35,6 +37,10 @@ jobs:
           git config --global url."https://github.com/".insteadOf "git@github.com:"
 
       - name: Install deps
+      - name: Build submodules
+        run: |
+          cd lib/vestigium && npm install --ignore-scripts && npm run build && cd ../..
+
         run: npm ci
 
       # ビルドチェック: tsc で dist/ を生成できること
