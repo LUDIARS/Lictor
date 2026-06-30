@@ -20,8 +20,21 @@ import { join } from "node:path";
 /**
  * State dir の解決. 優先順:
  *  1. env `LICTOR_ACTIVE_REPOS_DIR`
- *  2. env `CLAUDE_PROJECT_DIR/.claude/state` (Claude Code が export する変数)
- *  3. ハードコード `E:\Document\Ars\.claude\state` (本リポ運用の既定値)
+ *  2. env `CLAUDE_PROJECT_DIR/.claude/state` (Claude Code が hook 実行時に export する変数)
+ *  3. env `LUDIARS_ROOT/.claude/state` (Excubitor が注入するワークスペース root)
+ *  4. `process.cwd()/.claude/state` (ポータブル最終手段)
+ *
+ * これは `.claude/hooks/track-active-repo.sh` がスクリプト相対で書き出す
+ * `<workspace-root>/.claude/state` と一致させる必要がある (= Lictor の SessionStart
+ * hook が書く transcript ポインタを、 wrap 側 transcript-tail が同じ場所から読むため)。
+ * このワークスペースではセッション cwd が常に workspace root なので `process.cwd()`
+ * 由来で shell hook と同じ正本に収束する。
+ *
+ * 旧実装は最終フォールバックが `E:\Document\Ars\.claude\state` のハードコードだった
+ * (個人パス直書き)。 E: ドライブが無い環境 (例 D:\LUDIARS 運用) では存在しないドライブ
+ * を指し、 SessionStart hook の `claude-transcript-<lictorId>.txt` 書き込みが沈黙失敗
+ * → hook 権威モードの transcript-tail が永久に束縛できず中継ゼロ (本番実害 2026-07-01)。
+ * org 全体の「E: 直書き廃止・LUDIARS_ROOT / cwd 由来」 移行に合わせて撤廃した。
  *
  * 該当 dir が存在しなくても文字列はそのまま返す (呼び出し側で existsSync 判定).
  */
@@ -32,7 +45,10 @@ export function resolveActiveReposDir(env: NodeJS.ProcessEnv = process.env): str
   if (env.CLAUDE_PROJECT_DIR && env.CLAUDE_PROJECT_DIR.trim()) {
     return join(env.CLAUDE_PROJECT_DIR.trim(), ".claude", "state");
   }
-  return "E:\\Document\\Ars\\.claude\\state";
+  if (env.LUDIARS_ROOT && env.LUDIARS_ROOT.trim()) {
+    return join(env.LUDIARS_ROOT.trim(), ".claude", "state");
+  }
+  return join(process.cwd(), ".claude", "state");
 }
 
 /** state file の絶対パスを返す. SID は Claude session UUID. */
