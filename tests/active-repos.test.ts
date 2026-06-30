@@ -45,9 +45,18 @@ test("resolveActiveReposDir falls back to CLAUDE_PROJECT_DIR/.claude/state", () 
   assert.ok(dir.startsWith("E:"), `unexpected: ${dir}`);
 });
 
-test("resolveActiveReposDir hardcoded fallback when env empty", () => {
+test("resolveActiveReposDir falls back to LUDIARS_ROOT/.claude/state", () => {
+  const dir = resolveActiveReposDir({ LUDIARS_ROOT: "D:/LUDIARS" } as NodeJS.ProcessEnv);
+  assert.ok(dir.endsWith(".claude/state") || dir.endsWith(".claude\\state"), `unexpected: ${dir}`);
+  assert.ok(dir.startsWith("D:"), `unexpected: ${dir}`);
+});
+
+test("resolveActiveReposDir falls back to process.cwd()/.claude/state when env empty (no E: hardcode)", () => {
   const dir = resolveActiveReposDir({} as NodeJS.ProcessEnv);
-  assert.ok(dir.includes(".claude"));
+  // 旧実装の個人パス直書き (E:\Document\Ars\.claude\state) を返さないこと。
+  assert.ok(!/^E:/i.test(dir), `must not hardcode E: drive: ${dir}`);
+  assert.ok(dir.endsWith(".claude/state") || dir.endsWith(".claude\\state"), `unexpected: ${dir}`);
+  assert.ok(dir.startsWith(process.cwd()), `should derive from cwd: ${dir}`);
 });
 
 test("activeReposPath composes <dir>/active-repos-<sid>.txt", () => {
