@@ -534,6 +534,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   if (concordia) {
     // 接続先は ConcordiaClient の解決済み設定 (env + 既定 11111) を単一情報源にする。
     const concordiaBaseUrl = concordia.client.cfg.baseUrl;
+    const lictorTranscriptStatePath =
+      provider.name === "claude"
+        ? claudeTranscriptStatePath(resolveActiveReposDir(env), concordia.id)
+        : null;
     transcriptTail = startTranscriptTail({
       cwd: meta.cwd,
       sessionId: concordia.id,
@@ -548,7 +552,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       // 実ファイル名が不一致でも実ファイルを掴め、 /clear ローテートも追従し、 mtime 推測を
       // 排除して別セッション混入 (crosstalk) を構造的に防ぐ。 env は wrap の spawn env と
       // 同じものを渡し、 hook 側の state dir 解決と一致させる。
-      lictorTranscriptStatePath: claudeTranscriptStatePath(resolveActiveReposDir(env), concordia.id),
+      lictorTranscriptStatePath,
       onUserMessage: () => submitWatchdog.noteUserMessage(),
       onPickerQuestionRegistered: (qid) => {
         // 組み込み AskUserQuestion picker が Concordia に登録された。
