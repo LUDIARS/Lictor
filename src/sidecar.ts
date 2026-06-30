@@ -75,6 +75,12 @@ export interface SidecarContext {
    */
   getTranscript: ((limit: number, raw: boolean) => TranscriptReadResult) | null;
   /**
+   * `POST /v1/repin` の実体。 transcript-tail handle の forceRediscover を束ねて差す。
+   * /clear なしで relay を生 transcript へ束縛し直す (stall からの手動復帰 / Concordia の
+   * re-pin Reaction-Workflow から叩かれる)。 transcript-tail 未起動なら null → 503。
+   */
+  repinTranscript: (() => { ok: boolean; path: string | null }) | null;
+  /**
    * ラップ中の AI プロセス (node-pty child) を強制終了するコールバック。
    * wrap.ts が pty spawn 後にセットする。pty 無し harness では null。
    * Concordia の session DELETE が force-exit を要求したときに使う。
@@ -467,6 +473,19 @@ async function handle(
     const rawParam = u.searchParams.get("raw");
     const raw = rawParam === "1" || rawParam === "true";
     writeJson(res, 200, ctx.getTranscript(limit, raw));
+    return;
+  }
+
+  // POST /v1/repin — /clear なしで relay を生 transcript へ束縛し直す (stall 手動復帰)。
+  // Concordia の re-pin Reaction-Workflow / 運用者が叩く。 transcript-tail 未起動なら 503。
+  if (method === "POST" && url === "/v1/repin") {
+    if (!ctx.repinTranscript) {
+      return writeJson(res, 503, {
+        error: "transcript tail not available (no Concordia / no pty for this session)",
+      });
+    }
+    const r = ctx.repinTranscript();
+    writeJson(res, r.ok ? 200 : 409, { ok: r.ok, path: r.path });
     return;
   }
 

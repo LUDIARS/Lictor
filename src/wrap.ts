@@ -153,6 +153,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     activeRepoState: { lastActive: null, lastList: [] },
     getClaudeSessionId: null,
     getTranscript: null,
+    repinTranscript: null,
     forceExit: null,
     requestGracefulExit: null,
   };
@@ -584,6 +585,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     ctx.getClaudeSessionId = () => tail.getSessionUuid();
     // `GET /v1/transcript` の読み出し口. transcript-tail handle に委譲.
     ctx.getTranscript = (limit, raw) => tail.readRecent(limit, { raw });
+    // `POST /v1/repin` の実体. /clear なしで relay を生 transcript へ束縛し直す.
+    ctx.repinTranscript = () => tail.forceRediscover();
   }
 
   // pty → real terminal stdout.

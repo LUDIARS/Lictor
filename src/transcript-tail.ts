@@ -51,6 +51,16 @@ const POST_TIMEOUT_MS = 2000;
 const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
 const STALE_CLAIM_MS = 60 * 60 * 1000; // 1h 経った claim は wrapper クラッシュ残骸とみなす
 
+// relay スタール検知 watchdog の猶予。 セッションが active なのにこの時間を超えて
+// frame を 1 つも送れない (= 束縛先が見失われた / ローテートで死んだファイルを掴み続け
+// ている) とき、 claim ガード付き mtime discover で生 transcript を取り直して re-pin する。
+// /clear 不要で中継を自動復帰させる。 Concordia の再起動連打等で maybeRebind が phantom
+// パスへ束縛して停止する既知のスタール (本番実害 2026-06-30) への自己修復。 env override 可。
+const STALL_RECOVERY_MS = ((): number => {
+  const v = Number(process.env.LICTOR_TRANSCRIPT_STALL_RECOVERY_MS ?? "30000");
+  return Number.isFinite(v) && v >= 0 ? v : 30000;
+})();
+
 // hook 権威 (lictorTranscriptStatePath) が設定済なのに transcript を束縛できないまま
 // 経過したとき、 中継を黙って止めず大きく表面化するための猶予 (ms)。 SessionStart hook は
 // 起動直後に発火するので通常は 1s 未満で解決する。 これを超えても解決しなければ「hook が
@@ -99,6 +109,13 @@ export interface TranscriptTailHandle {
    * パース済の生 JSONL オブジェクトを返す.
    */
   readRecent: (limit: number, opts?: { raw?: boolean }) => TranscriptReadResult;
+  /**
+   * 束縛中の transcript を強制的に取り直して re-pin する (手動 /v1/repin の実体)。
+   * /clear なしで relay スタールを復帰させる: 現束縛 (死んだ/誤った JSONL) の claim を
+   * 解放し、 claim ガード付き mtime discover で自分の最新 transcript を掴み直す。
+   * 戻り値は新たに束縛したパス (取り直せなければ ok=false + 現状パス)。
+   */
+  forceRediscover: () => { ok: boolean; path: string | null };
 }
 
 /** `readRecent` / `readRecentFromFile` の戻り値. */
@@ -224,6 +241,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // fail-loud 警告を出すためのフラグ (沈黙死禁止)。
   let relayUnresolvedWarned = false;
   const startedAt = Date.now();
+  // watchdog: 最後に「束縛できた / 新バイトを読めた」 時刻。 これが STALL_RECOVERY_MS
+  // 以上更新されず、 かつ session active なら relay スタールとみなして mtime 再発見する。
+  let lastProgressAt = Date.now();
+  // 再発見の連打を防ぐ throttle (候補ゼロのときに毎 poll で dir 全 walk しないため)。
+  let lastRecoveryAt = 0;
   // AskUserQuestion の tool_use id → Concordia の question_id。picker がローカル回答で
   // 解決した（tool_result 検知）とき、Concordia に resolve 通知して古いボタンを失効させる。
   const questionIdByToolUse = new Map<string, number>();
@@ -241,6 +263,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       getClaudeSessionId: () => null,
       getTranscriptPath: () => null,
       readRecent: (limit, opts) => readRecentFromFile(null, limit, opts?.raw ?? false),
+      forceRediscover: () => ({ ok: false, path: null }),
     };
   }
 
@@ -319,6 +342,14 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     const want = readClaudeTranscriptPath(opts.lictorTranscriptStatePath);
     if (!want) return; // SessionStart hook 未発火 — 起動直後は computed pin で橋渡し
     if (want === pinnedPath) return; // 変化なし
+    // 報告パスがまだ実在しないなら束縛を差し替えない。 旧実装は phantom / 生成前パスへ
+    // 無条件に rebind して jsonlPath=null のまま discover が掴めず中継が黙って停止した
+    // (本番実害 2026-06-30)。 実在するまでは現束縛 (旧 JSONL) を tail し続け、 ファイルが
+    // 現れた瞬間に乗り換える。 これで /clear ローテートの取りこぼしも無くなる。
+    if (!existsSync(want)) {
+      claimDbg(`rebind deferred: reported transcript_path not yet present want=${want}`);
+      return;
+    }
     claimDbg(`rebind: authoritative transcript_path ${pinnedPath ?? "?"} -> ${want}`);
     // 旧 JSONL の claim を解放し (computed pin の誤ファイル or ローテート前の死ファイル)、
     // 新ファイルを次の discover で掴む。
@@ -364,6 +395,51 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     } catch { /* best-effort */ }
   };
 
+  // watchdog 本体: claim ガード付き mtime discover で生 transcript を取り直して re-pin。
+  // hook 権威があっても (= 通常は mtime 推測を避ける) 、 stall 時の last-resort としてのみ走る。
+  // claim が anti-crosstalk を担保するので、 他 wrapper が active に掴んでいる JSONL は避け、
+  // 自分の cwd 配下で最も新しい未claim ファイル (= /clear 後の生 transcript or 起動後の実体) を掴む。
+  // force=true (手動 /v1/repin) では throttle と grace を無視して即取り直す。
+  const recoverByMtime = (force = false): { ok: boolean; path: string | null } => {
+    if (!dir || !existsSync(dir)) return { ok: false, path: jsonlPath };
+    const now = Date.now();
+    if (!force && now - lastRecoveryAt < STALL_RECOVERY_MS) return { ok: false, path: jsonlPath };
+    lastRecoveryAt = now;
+    let curMtime = 0;
+    if (jsonlPath) {
+      try { curMtime = statSync(jsonlPath).mtimeMs; } catch { curMtime = 0; }
+    }
+    const files: { path: string; mtime: number }[] = [];
+    walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => files.push({ path: p, mtime: st.mtimeMs }));
+    const candidates = chooseRecoveryCandidates(files, {
+      currentPath: jsonlPath,
+      currentMtime: curMtime,
+      startedAt,
+    });
+    for (const c of candidates) {
+      const cp = tryClaimJsonl(c.path, STALE_CLAIM_MS, opts.sessionId);
+      if (!cp) continue;
+      if (claimPath) { try { unlinkSync(claimPath); } catch { /* best-effort */ } }
+      claimPath = cp;
+      pinnedPath = c.path; // 以後の権威。 hook が実在パスを再報告すれば maybeRebind が更に乗り換える。
+      jsonlPath = c.path;
+      offset = 0;
+      pending = "";
+      lastProgressAt = Date.now();
+      claimDbg(`stall-recovery rebind to ${c.path} owner=${opts.sessionId} force=${force}`);
+      return { ok: true, path: c.path };
+    }
+    return { ok: false, path: jsonlPath };
+  };
+
+  // poll から呼ぶ自動 watchdog: session active かつ STALL_RECOVERY_MS 進捗ゼロなら再発見。
+  const maybeRecover = (): void => {
+    const active = opts.isSessionActive ? opts.isSessionActive() : true;
+    if (!active) return; // まだ誰も話しかけていないアイドルは正常 (transcript 未生成)。
+    if (Date.now() - lastProgressAt < STALL_RECOVERY_MS) return;
+    recoverByMtime(false);
+  };
+
   const pollOnce = async (): Promise<void> => {
     if (stopped) return;
     maybeRebind();
@@ -371,9 +447,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       jsonlPath = discover();
       if (!jsonlPath) {
         warnIfRelayUnresolved();
+        maybeRecover(); // hook 権威でも active なら mtime で取り直す (/clear 不要の自己修復)。
         return;
       }
       offset = 0;
+      lastProgressAt = Date.now();
     }
     // active 中は claim の mtime を更新し続け、 stale (1h) 判定で他 wrapper に
     // 剥がされて「同じ jsonl を 2 wrapper が tail → 別 channel 誤投稿」 になるのを防ぐ。
@@ -384,7 +462,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     } catch {
       return; // file went away
     }
-    if (size <= offset) return;
+    if (size <= offset) {
+      // 束縛済だが伸びていない。 単なるアイドルなら正常だが、 active なのに長時間ゼロ進捗なら
+      // ローテートで死んだファイルを掴み続けている可能性 → watchdog で生 transcript を取り直す。
+      maybeRecover();
+      return;
+    }
     let chunk: Buffer;
     try {
       const fd = readFileSync(jsonlPath); // small per-poll; OK in v1
@@ -393,6 +476,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       return;
     }
     offset = size;
+    lastProgressAt = Date.now(); // 新バイトを読めた = relay 生存。 watchdog の grace をリセット。
     pending += chunk.toString("utf8");
     const lines = pending.split("\n");
     pending = lines.pop() ?? "";
@@ -501,7 +585,31 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     getClaudeSessionId: getSessionUuid,
     getTranscriptPath: () => jsonlPath,
     readRecent: (limit, opts) => readRecentFromFile(jsonlPath, limit, opts?.raw ?? false),
+    forceRediscover: () => recoverByMtime(true),
   };
+}
+
+/**
+ * stall-recovery / 手動 repin の候補選定 (純関数, test 対象)。
+ * 与えられた JSONL 一覧から、 取り直し対象を「新しい順」で返す:
+ *   - lictor 起動より前 (startedAt-5s) のファイルは過去セッションなので除外。
+ *   - 現束縛中のファイル自身は除外 (それを掴み続けても進まないため)。
+ *   - 現束縛がある (bound) ときは、 それより厳密に新しいものだけ (アイドル中の正しい束縛を
+ *     古いファイルへ巻き戻さない)。 未束縛 (currentPath=null) のときは全ての候補を許可。
+ * 実際の claim 取得は呼び出し側 (tryClaimJsonl) が anti-crosstalk ガードとして行う。
+ */
+export function chooseRecoveryCandidates(
+  files: { path: string; mtime: number }[],
+  opts: { currentPath: string | null; currentMtime: number; startedAt: number },
+): { path: string; mtime: number }[] {
+  return files
+    .filter((f) => {
+      if (f.mtime < opts.startedAt - 5_000) return false;
+      if (f.path === opts.currentPath) return false;
+      if (opts.currentPath && f.mtime <= opts.currentMtime) return false;
+      return true;
+    })
+    .sort((a, b) => b.mtime - a.mtime);
 }
 
 /**
