@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, statSync } from "node:fs";
 import * as pty from "node-pty";
 import { buildAnswerSequence, sanitizeKeySeq, startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
 import { gatherBaseMeta, type Meta } from "./meta.js";
@@ -8,6 +8,7 @@ import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./con
 import { gatherRepoStat } from "./stat.js";
 import { renderSkillMd, SkillInjector } from "./skill-injector.js";
 import { findRepoMemories, memoryDirForCwd, renderMemoryDigest, repoLeafFromCwd } from "./memory-loader.js";
+import { buildLictorHookSettings, resolveHarnessGuard } from "./harness-hook.js";
 import {
   applyTitleWithMarks,
   isNotifyStale,
@@ -23,8 +24,9 @@ import {
   SESSION_END_SKILL_DESCRIPTION,
   SESSION_END_SKILL_NAME,
 } from "./session-end-skill.js";
-import { type ProviderConfig, PROVIDERS } from "./provider.js";
+import { type ProviderConfig, PROVIDERS, resolveBinary } from "./provider.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
+import { scheduleGracefulExit, type GracefulExitHandle } from "./graceful-exit.js";
 import { PendingQuestionGate } from "./pending-question-gate.js";
 import {
   createDelegationInjector,
@@ -34,10 +36,12 @@ import {
 } from "./delegation-inject.js";
 import {
   activeReposPath,
+  claudeTranscriptStatePath,
   pickActiveRepo,
   readActiveRepos,
   resolveActiveReposDir,
 } from "./active-repos.js";
+import { createSubmitWatchdog } from "./submit-watchdog.js";
 import {
   ASK_MARKER_SKILL_BODY,
   ASK_MARKER_SKILL_DESCRIPTION,
@@ -49,21 +53,53 @@ import { postResolveQuestion } from "./ask-question-relay.js";
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
 
+/** Parse a positive-int env var, falling back to `fallback` when unset/invalid. */
+function envInt(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 /**
- * ユーザ自身が「既存 session を開く / 再開する」 flag を渡しているか。
- * これらが在るときは Lictor が `--session-id` を固定すると意図 (resume 等) と
- * 衝突するため、 session-id 固定束縛を見送って従来の mtime discover に委譲する。
+ * claude-desktop 由来の「子セッション」 マーカー env キー。
+ *
+ * Lictor が claude-desktop 経由のコンテキストから起動されると、 env に
+ * `CLAUDE_CODE_CHILD_SESSION=1` / `CLAUDE_CODE_ENTRYPOINT=claude-desktop` /
+ * `CLAUDE_CODE_SESSION_ID=<uuid>` が紛れ込み、 これらをそのまま wrapped claude へ
+ * 渡すと claude は **child / desktop-managed セッション** として起動し、 session
+ * transcript JSONL を `~/.claude/projects/<key>/` に **一切永続化しない** (desktop が
+ * 自前管理する前提のため)。 すると transcript-tail が tail する対象が生まれず、 地の文の
+ * 中継が完全に止まる (hook の transcript_path は報告されるが実体ゼロの phantom)。
  */
-function hasSessionSelectingArg(args: readonly string[]): boolean {
-  return args.some(
-    (a) =>
-      a === "--session-id" ||
-      a === "--resume" ||
-      a === "-r" ||
-      a === "--continue" ||
-      a === "-c" ||
-      a === "--from-pr",
-  );
+export const CHILD_SESSION_ENV_KEYS = [
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SESSION_ID",
+] as const;
+
+/**
+ * wrapped 子プロセスへ渡す env から {@link CHILD_SESSION_ENV_KEYS} を除去する。
+ *
+ * strip するのは **claude provider のときだけ**。 この症状 (transcript 未永続化) は
+ * claude 固有で、 codex / gemini はこれらの env を読まないため残しても無害だが、
+ * 実証済みの provider にだけ手を入れる (コメントと実コードの整合を取り、 将来 provider
+ * 追加時の予期せぬ干渉を避ける)。 OAuth/exec 系 env は認証に必要なので strip しない。
+ *
+ * 入力 env は変更せず、 常に新しいオブジェクトを返す純関数 (回帰テスト可能)。
+ *
+ * 実測 (隔離 cwd・confound-free): これらを env から strip すると claude は top-level
+ * セッションとして起動し `<key>/<uuid>.jsonl` を通常通り生成する。 残すと jsonl が一切
+ * 生成されない。 SessionStart hook の transcript_path 権威 (Option B) はこの実ファイルが
+ * 在って初めて機能するため、 この strip が中継成立の前提になる。
+ */
+export function stripChildSessionEnv(
+  env: NodeJS.ProcessEnv,
+  provider: ProviderConfig,
+): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env };
+  if (provider.name !== "claude") return out;
+  for (const key of CHILD_SESSION_ENV_KEYS) delete out[key];
+  return out;
 }
 
 export async function runWrapped(args: string[], provider: ProviderConfig = PROVIDERS.claude): Promise<void> {
@@ -117,7 +153,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     activeRepoState: { lastActive: null, lastList: [] },
     getClaudeSessionId: null,
     getTranscript: null,
+    repinTranscript: null,
     forceExit: null,
+    requestGracefulExit: null,
   };
 
   const sidecar = await startSidecar(ctx);
@@ -148,6 +186,21 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // Initial auto title (composed with conflict/notify marks once they exist).
   applyAutoTitle(ctx, gatherRepoStat(meta.cwd));
 
+  // このセッションで実際にターンが始まったか (ローカル発話の submit / リモート注入 /
+  // gate flush / delegation 自動注入)。 transcript-tail の fail-loud を「アイドルで未発話
+  // なだけ」 の誤検知から守るために使う。 ターン起点となる経路は全てここを true にする。
+  let sawSessionTurn = false;
+
+  // 注入テキストが TUI の bracketed-paste で submit されず入力欄に溜まる事象の保険。
+  // submitInject 後に arm し、 transcript に user フレーム (= submit 成立) が
+  // LICTOR_SUBMIT_WATCHDOG_MS 以内に出なければ Enter を 1 回補う。0 で無効化。
+  // 発火先は ctx.ptyWriter (pty spawn 後に差さる) を実行時評価する。
+  const submitWatchdog = createSubmitWatchdog({
+    write: (d) => ctx.ptyWriter?.(d),
+    timeoutMs: envInt(process.env.LICTOR_SUBMIT_WATCHDOG_MS, 2000),
+    log: (m) => process.stderr.write(`lictor: ${m}\n`),
+  });
+
   // Holds ordinary pty injects while an AskUserQuestion picker is open, so a
   // stray Discord message / `/enter` / Codex submit-fallback can't commit the
   // picker's default option before the user actually answers. Opened/closed by
@@ -155,19 +208,30 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // onAnswerQuestion. See pending-question-gate.ts.
   const pendingQuestionGate = new PendingQuestionGate(
     (text) => {
-      if (ctx.ptyWriter) provider.submitInject(ctx.ptyWriter, text);
+      if (ctx.ptyWriter) {
+        provider.submitInject(ctx.ptyWriter, text);
+        submitWatchdog.arm();
+        // 保留していた inject が flush された = ターンが始まる。 fail-loud の
+        // 誤検知ガード (isSessionActive) に反映する。
+        sawSessionTurn = true;
+      }
     },
     (msg) => process.stderr.write(`lictor: ${msg}\n`),
   );
 
   // ask マーカー由来の pending-question id を覚えておく。これらは picker ではなく
   // テキスト出力なので、回答は「キー注入」ではなく「テキスト注入」で返す
-  // (単一/複数/自由文を全部テキスト返信に一本化)。組み込み AskUserQuestion 由来の
-  // 質問 (= ここに無い id) は従来どおりキー注入の fallback に回す。
+  // (単一/複数/自由文を全部テキスト返信に一本化)。
   const markerQuestionIds = new Set<number>();
   // まだローカル/リモートで解決していない marker 質問。ユーザが端末で返信したら
   // (transcript に user メッセージが出たら) resolve 通知して Discord ボタンを失効させる。
   const openMarkerQids = new Set<number>();
+  // 組み込み AskUserQuestion picker が Concordia に登録された question_id。
+  // transcript-tail が AskUserQuestion tool_use を検出し Concordia に POST した後に
+  // 登録される。onAnswerQuestion で markerQuestionIds にも無い id が来たとき、
+  // ここにあれば picker キーストローク経路、無ければ Concordia 独自起源として
+  // テキスト注入経路に振る（三分岐判定）。
+  const pickerQuestionIds = new Set<number>();
 
   // WS reactor — attach AFTER ctx so the dispatcher can read live state.
   if (concordia) {
@@ -208,6 +272,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           }
           const writer = ctx.ptyWriter;
           provider.submitInject(writer, safe);
+          submitWatchdog.arm();
+          sawSessionTurn = true;
           // Telemetry breadcrumb — surface that the inject landed so the
           // user can see who pushed what without trawling Concordia logs.
           process.stderr.write(
@@ -216,34 +282,52 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         },
         onAnswerQuestion: ({ questionId, index, text }) => {
           if (!ctx.ptyWriter) return;
-          // ask マーカー由来の質問は picker ではなくテキスト出力なので、回答は
-          // 「テキスト + Enter」 を通常の inject 経路で返す (キー注入しない)。
-          // answer_text は単一=ラベル / 複数=カンマ結合ラベル / Other=自由文。
+          sawSessionTurn = true;
+          // 三分岐: ask-marker / 組み込み picker / Concordia 独自起源。
+          //
+          // 1. ask マーカー由来: picker ではなくテキスト出力なので「テキスト + Enter」。
+          //    answer_text は単一=ラベル / 複数=カンマ結合ラベル / Other=自由文。
           if (markerQuestionIds.has(questionId)) {
             markerQuestionIds.delete(questionId);
             openMarkerQids.delete(questionId);
             const safe = sanitizeKeySeq(text);
             if (!safe) return;
             provider.submitInject(ctx.ptyWriter, safe);
+            submitWatchdog.arm();
             process.stderr.write(
               `lictor: answered ask-marker question via text (qid=${questionId}, provider=${provider.name})\n`,
             );
             return;
           }
-          // fallback: 組み込み AskUserQuestion picker。Concordia carries 0-based
-          // answer_index; buildAnswerSequence is 1-based ([1, 50]). Clamp the
-          // upper bound so a malformed event can't push the picker past option 50.
-          const choice = index + 1;
-          if (choice < 1 || choice > 50) return;
-          let seq: string;
-          try {
-            seq = buildAnswerSequence(choice);
-          } catch {
+          // 2. 組み込み AskUserQuestion picker: transcript-tail が tool_use を検出し
+          //    Concordia に登録した question_id。Down×N + Enter でローカル picker を確定。
+          //    Concordia carries 0-based answer_index; buildAnswerSequence is 1-based ([1, 50]).
+          if (pickerQuestionIds.has(questionId)) {
+            pickerQuestionIds.delete(questionId);
+            const choice = index + 1;
+            if (choice < 1 || choice > 50) return;
+            let seq: string;
+            try {
+              seq = buildAnswerSequence(choice);
+            } catch {
+              return;
+            }
+            ctx.ptyWriter(seq);
+            process.stderr.write(
+              `lictor: confirmed AskUserQuestion picker via Concordia (answer_index=${index}, provider=${provider.name})\n`,
+            );
             return;
           }
-          ctx.ptyWriter(seq);
+          // 3. Concordia 独自起源の質問 (INITIAL_WORK_QUESTION 等): Lictor は tool_use を
+          //    transcript で見ていないので picker は開いていない。「テキスト + Enter」 で
+          //    pty に流す。キーストローク注入は picker が無い空プロンプトに Down+Enter を
+          //    打つだけで no-op になるため使わない。
+          const safe = sanitizeKeySeq(text);
+          if (!safe) return;
+          provider.submitInject(ctx.ptyWriter, safe);
+          submitWatchdog.arm();
           process.stderr.write(
-            `lictor: confirmed AskUserQuestion picker via Concordia (answer_index=${index}, provider=${provider.name})\n`,
+            `lictor: answered Concordia-originated question via text (qid=${questionId}, provider=${provider.name})\n`,
           );
         },
       }),
@@ -265,19 +349,29 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   pollTimer?.unref?.();
   if (concordia) pollLiveState(ctx).catch(() => {});
 
+  // spawn する実バイナリ。 binaryEnvVar (例: gemma4-12 の LICTOR_FAMULUS_BIN) が
+  // 設定されていれば PATH 既定を上書きする。 log / spawn で同じ値を使う。
+  const effectiveBinary = resolveBinary(provider);
+
   process.stderr.write(
-    `lictor: wrapping ${provider.displayName} (${provider.binary})${
+    `lictor: wrapping ${provider.displayName} (${effectiveBinary})${
       concordia ? `, Concordia session ${concordia.id}` : ""
     }\n`,
   );
 
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    LICTOR_PORT: String(sidecar.port),
-    LICTOR_PID: String(process.pid),
-    LICTOR_SESSION_START: meta.start_iso,
-    LICTOR_PROVIDER: provider.name,
-  };
+  // claude-desktop 由来の「子セッション」 マーカー (CHILD_SESSION_ENV_KEYS) を wrapped
+  // claude へ渡さない。 残すと claude が transcript JSONL を永続化せず中継が全停止する。
+  // claude provider 限定で strip する (詳細は stripChildSessionEnv の docstring)。
+  const env: NodeJS.ProcessEnv = stripChildSessionEnv(
+    {
+      ...process.env,
+      LICTOR_PORT: String(sidecar.port),
+      LICTOR_PID: String(process.pid),
+      LICTOR_SESSION_START: meta.start_iso,
+      LICTOR_PROVIDER: provider.name,
+    },
+    provider,
+  );
   if (concordia) {
     env.LICTOR_SESSION_ID = concordia.id;
     env.CONCORDIA_SESSION_ID = concordia.id;
@@ -303,7 +397,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   let extraSettingsPath: string | null = null;
   if (concordia && injector && provider.name === "claude") {
     try {
-      extraSettingsPath = writePermissionHookSettings(injector.sessionDir);
+      extraSettingsPath = writePermissionHookSettings(injector.sessionDir, meta.cwd);
     } catch (err) {
       process.stderr.write(
         `lictor: permission-hook settings write failed: ${(err as Error).message}\n`,
@@ -312,42 +406,30 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   }
   if (extraSettingsPath) providerArgs.push("--settings", extraSettingsPath);
 
-  // セッション ID 固定束縛 (Discord セッション ↔ jsonl ↔ channel の取り違え防止)。
+  // セッション ID 固定束縛 (`--session-id <uuid>`) は撤去した。
   //
-  // wrapped CLI が session-id 固定に対応する (claude) なら、 ここで uuid を発番
-  // して `--session-id <uuid>` を spawn 引数に足し、 transcript-tail には
-  // 「その uuid の jsonl だけを claim せよ」 と固定 path を渡す。 これで
-  // transcript-tail の mtime 推測 discover を完全に廃し、
-  //   - 先に非 Lictor の claude を起動していた
-  //   - 同 cwd で別 wrapper が並走している
-  //   - context 要約で session が新 jsonl にローテートした
-  // のいずれでも、 自分以外の transcript を誤って掴む (= 投稿が 1 つズレて
-  // 別チャンネルに出る) crosstalk が構造的に起きなくなる。
+  // 旧実装は uuid を発番して `--session-id` で渡し、 transcript-tail に
+  // `<uuid>.jsonl` だけを claim させて crosstalk を防いでいた。 しかし
+  // claude-code 2.1.187 は渡した `--session-id` を **transcript ファイル名に
+  // 反映しなくなった**: 渡した uuid を logical session_id としては採用するが、
+  // transcript JSONL は自前採番の別 uuid (`<other>.jsonl`) に書き出す。 その結果、
+  // 計算 pin (`<uuid>.jsonl`) も、 SessionStart hook が報告する transcript_path
+  // (= 渡した `<session_id>.jsonl`) も、 実体の無い phantom を指し、 中継が一切
+  // 始まらなくなった (hook payload の transcript_path が pin uuid を返すのを実測)。
   //
-  // concordia 連携時 (= リモート中継対象) のほか、 LICTOR_PIN_TRANSCRIPT=1 が
-  // 明示指定されたときも固定する。 後者は Concordia を無効化して起動する常駐ワーカー
-  // (Discutere worker-pool 等) が transcript path を知りたいケース向け。 固定した
-  // path は LICTOR_TRANSCRIPT_FILE として wrapped CLI の env に公開し、 ワーカーが
-  // セッションの usage / token を transcript から回収できるようにする (Discutere #135)。
-  // ユーザが自分で --session-id / --resume / --continue / --from-pr を渡している場合は、
-  // 既存 session を開く意図なので固定せず従来 discover に委譲する。
-  const pinRequested = process.env.LICTOR_PIN_TRANSCRIPT === "1";
-  let pinnedTranscriptPath: string | null = null;
-  if (
-    (concordia || pinRequested) &&
-    provider.supportsSessionPin &&
-    provider.sessionPinArgs &&
-    provider.pinnedTranscriptFile &&
-    !hasSessionSelectingArg(args)
-  ) {
-    const pinnedUuid = randomUUID();
-    providerArgs.push(...provider.sessionPinArgs(pinnedUuid));
-    pinnedTranscriptPath = provider.pinnedTranscriptFile(meta.cwd, pinnedUuid);
-    if (pinnedTranscriptPath) env.LICTOR_TRANSCRIPT_FILE = pinnedTranscriptPath;
-    process.stderr.write(
-      `lictor: pinned ${provider.displayName} session-id ${pinnedUuid} (transcript claim 固定)\n`,
-    );
-  }
+  // 代わりに pin を渡さない。 すると claude が session_id を自前採番し、 SessionStart
+  // hook が報告する transcript_path は実ファイルを正しく指す (= transcript_path 権威が
+  // 真実になる)。 crosstalk は「mtime 推測をせず hook 報告の実パスだけを掴む」 で維持する
+  // (transcript-tail.discover は hook 権威が設定済なら実パス確定まで mtime に降りず待ち、
+  // 猶予を過ぎても解決しなければ fail-loud で表面化する)。 ユーザが自分で --resume /
+  // --continue / --from-pr / --session-id を渡している場合 (既存 session を開く意図) も
+  // 同様に hook 権威へ委ねる。
+  //
+  // NOTE: LICTOR_PIN_TRANSCRIPT=1 ワーカー (Discutere #135) が使っていた
+  // LICTOR_TRANSCRIPT_FILE は pin 撤去で起動時に先出しできなくなった。 ワーカーは
+  // `<stateDir>/claude-transcript-<lictorId>.txt` (SessionStart hook が書く実パス) を
+  // 読むこと。
+  const pinnedTranscriptPath: string | null = null;
 
   // ask マーカー ステアリング注入 (concordia 連携時のみ = リモート回答対象)。
   //   - claude: 共通マーカールール + 組み込み AskUserQuestion 禁止 を常時
@@ -390,8 +472,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // extensions. CLI bins ship as `<name>.cmd` in npm global bin, so wrap via
   // cmd.exe; on POSIX, spawn the binary directly.
   const isWindows = process.platform === "win32";
-  const ptyFile = isWindows ? process.env.ComSpec ?? "cmd.exe" : provider.binary;
-  const ptyArgs = isWindows ? ["/d", "/s", "/c", provider.binary, ...providerArgs] : providerArgs;
+  const ptyFile = isWindows ? process.env.ComSpec ?? "cmd.exe" : effectiveBinary;
+  const ptyArgs = isWindows ? ["/d", "/s", "/c", effectiveBinary, ...providerArgs] : providerArgs;
 
   const { cols, rows } = currentSize();
   const child = pty.spawn(ptyFile, ptyArgs, {
@@ -406,6 +488,26 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
 
   ctx.ptyWriter = (data: string) => child.write(data);
   ctx.forceExit = () => { child.kill("SIGTERM"); };
+  // session-end の session-log 保存を途中で殺さないため、force-exit は既定で
+  // 「猶予付き」: transcript が一定時間無活動になってから kill する。
+  let gracefulExit: GracefulExitHandle | null = null;
+  ctx.requestGracefulExit = (gopts) => {
+    if (gopts?.immediate) { gracefulExit?.cancel(); child.kill("SIGTERM"); return; }
+    if (gracefulExit) return; // 既にスケジュール済 (idempotent)
+    gracefulExit = scheduleGracefulExit({
+      // transcript JSONL の mtime = 最終書き込み時刻 = 活動シグナル。
+      lastActivityMs: () => {
+        const p = transcriptTail?.getTranscriptPath() ?? null;
+        if (!p) return null;
+        try { return statSync(p).mtimeMs; } catch { return null; }
+      },
+      kill: () => child.kill("SIGTERM"),
+      idleMs: envInt(env.LICTOR_SESSION_END_IDLE_KILL_MS, 300_000),
+      maxWaitMs: envInt(env.LICTOR_SESSION_END_MAX_WAIT_MS, 1_800_000),
+      checkMs: envInt(env.LICTOR_SESSION_END_CHECK_MS, 30_000),
+      log: (m) => process.stderr.write(`lictor: ${m}\n`),
+    });
+  };
 
   // Delegation prompt auto-inject — when Concordia spawned us via
   // /v1/delegation/invoke, env CONCORDIA_DELEGATION_PROMPT_FILE points at the
@@ -416,7 +518,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   if (delegationPrompt) {
     delegationInjector = createDelegationInjector({
       prompt: delegationPrompt,
-      submit: (text) => provider.submitInject((d) => child.write(d), text),
+      submit: (text) => {
+        provider.submitInject((d) => child.write(d), text);
+        // delegation プロンプトの自動注入 = このセッションの最初のターン。
+        sawSessionTurn = true;
+      },
       delayMs: delegationInjectDelayMs(env),
     });
   }
@@ -427,7 +533,12 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // the wrapped session at all. Only meaningful when concordia is up.
   let transcriptTail: TranscriptTailHandle | null = null;
   if (concordia) {
-    const concordiaBaseUrl = `http://${process.env.CONCORDIA_HOST ?? "127.0.0.1"}:${process.env.CONCORDIA_PORT ?? "17330"}`;
+    // 接続先は ConcordiaClient の解決済み設定 (env + 既定 11111) を単一情報源にする。
+    const concordiaBaseUrl = concordia.client.cfg.baseUrl;
+    const lictorTranscriptStatePath =
+      provider.name === "claude"
+        ? claudeTranscriptStatePath(resolveActiveReposDir(env), concordia.id)
+        : null;
     transcriptTail = startTranscriptTail({
       cwd: meta.cwd,
       sessionId: concordia.id,
@@ -437,6 +548,18 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       onQuestionResolved: (qid) => pendingQuestionGate.resolveQuestion(qid),
       askMarkerEnabled: askMarkerActive,
       pinnedTranscriptPath,
+      // tail 対象を束縛する権威ソース。 SessionStart hook (lictor cli session-id-hook) が
+      // claude の実 transcript_path をこのファイルへ書く。 これにより --session-id uuid と
+      // 実ファイル名が不一致でも実ファイルを掴め、 /clear ローテートも追従し、 mtime 推測を
+      // 排除して別セッション混入 (crosstalk) を構造的に防ぐ。 env は wrap の spawn env と
+      // 同じものを渡し、 hook 側の state dir 解決と一致させる。
+      lictorTranscriptStatePath,
+      onUserMessage: () => submitWatchdog.noteUserMessage(),
+      onPickerQuestionRegistered: (qid) => {
+        // 組み込み AskUserQuestion picker が Concordia に登録された。
+        // onAnswerQuestion の三分岐判定で「picker キーストローク経路」として識別するために控える。
+        pickerQuestionIds.add(qid);
+      },
       onAskMarkerPosted: (qid) => {
         // この id の回答は picker キー注入ではなくテキスト注入で返す。
         markerQuestionIds.add(qid);
@@ -449,6 +572,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         }
         openMarkerQids.clear();
       },
+      // transcript は claude が初回ターンを受けてから書く。 無操作のアイドルセッションを
+      // 「中継不能」 と誤検知しないよう、 実際にターンが始まった (submit/inject があった)
+      // ときだけ stderr の fail-loud を出させる。
+      isSessionActive: () => sawSessionTurn,
     });
     // active-repos watcher が transcript-tail 経由で session UUID を引けるよう
     // ctx に getter を差す. transcript-tail が JSONL を発見するまで null を返す.
@@ -458,6 +585,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     ctx.getClaudeSessionId = () => tail.getSessionUuid();
     // `GET /v1/transcript` の読み出し口. transcript-tail handle に委譲.
     ctx.getTranscript = (limit, raw) => tail.readRecent(limit, { raw });
+    // `POST /v1/repin` の実体. /clear なしで relay を生 transcript へ束縛し直す.
+    ctx.repinTranscript = () => tail.forceRediscover();
   }
 
   // pty → real terminal stdout.
@@ -487,6 +616,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     }
   }
   const onStdin = (chunk: Buffer) => {
+    // ローカル端末で Enter (CR) を押した = ターンを submit した、 とみなす。
+    if (chunk.includes(0x0d)) sawSessionTurn = true;
     try {
       child.write(chunk.toString("utf8"));
     } catch {
@@ -512,6 +643,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     if (statTimer) clearInterval(statTimer);
     if (pollTimer) clearInterval(pollTimer);
     transcriptTail?.stop();
+    submitWatchdog.stop();
     // Drop any held injects rather than flushing them into a dying pty.
     pendingQuestionGate.forceClear();
     concordia?.liveness.close();
@@ -588,38 +720,12 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
  * `mcp__`. Read-only tools (Read/Glob/Grep) are intentionally NOT gated
  * — they would explode the modal count and add no value.
  */
-function writePermissionHookSettings(sessionDir: string): string {
+function writePermissionHookSettings(sessionDir: string, cwd: string): string {
   const path = `${sessionDir}/lictor-hook-settings.json`;
-  const content = JSON.stringify({
-    hooks: {
-      PreToolUse: [
-        {
-          matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__.*",
-          hooks: [
-            {
-              type: "command",
-              command: "lictor cli permission-hook",
-              timeout: 65,
-            },
-          ],
-        },
-        {
-          // AskUserQuestion を picker-open 時に検知して Concordia へ早期投稿する
-          // (回答前に Discord へ出すため)。 これは権限ゲートではなく、 decision を
-          // 返さず picker をそのまま開かせる。 src/ask-question-hook.ts 参照。
-          matcher: "AskUserQuestion",
-          hooks: [
-            {
-              type: "command",
-              command: "lictor cli ask-question-hook",
-              timeout: 10,
-            },
-          ],
-        },
-      ],
-    },
-  }, null, 2);
-  writeFileSync(path, content, "utf8");
+  // cwd から上位を辿って .claude/hooks/harness-guard.mjs を見つけたら PreToolUse(Bash)
+  // に注入する (HARNESS §4 の地雷を着手前に止める)。無ければ従来どおり 2 フックのみ。
+  const settings = buildLictorHookSettings(resolveHarnessGuard(cwd));
+  writeFileSync(path, JSON.stringify(settings, null, 2), "utf8");
   return path;
 }
 

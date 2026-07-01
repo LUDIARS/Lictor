@@ -5,8 +5,8 @@ import { loadConcordiaConfig } from "../src/concordia.js";
 test("loadConcordiaConfig defaults", () => {
   const cfg = loadConcordiaConfig({});
   assert.equal(cfg.host, "127.0.0.1");
-  assert.equal(cfg.port, 17330);
-  assert.equal(cfg.baseUrl, "http://127.0.0.1:17330");
+  assert.equal(cfg.port, 11111);
+  assert.equal(cfg.baseUrl, "http://127.0.0.1:11111");
   assert.equal(cfg.enabled, true);
 });
 

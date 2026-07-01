@@ -34,6 +34,23 @@ provider 設定 (`src/provider.ts`):
 
 ## 設定 (env)
 
+> **改版メモ (2026-06-10〜)**: REPL 本体は別リポ Famulus (`@ludiars/famulus`) に
+> 載せ替え済。 下表 `LICTOR_LOCAL_*` は旧内蔵 agent (`lictor cli local-agent`) の
+> 設定で、 現在は Famulus 側の env に対応する。 **Lictor が spawn 時に参照するのは
+> 下記の famulus バイナリ解決だけ**。
+
+### Lictor 側 spawn 設定 (`src/provider.ts` / `resolveBinary`)
+
+`gemma4-12` provider は `famulus run` を pty 起動するが、 Famulus は Lictor の依存
+ではなく各マシンに別途入る外部 CLI。 既定では `famulus` を PATH から引く
+(Windows は `cmd /c famulus`)。
+
+| env | 既定 | 意味 |
+|---|---|---|
+| `LICTOR_FAMULUS_BIN` | `famulus` (PATH) | famulus バイナリの所在。 PATH に無い / フルパス指定したい場合に上書き。 空・未設定なら PATH 既定。 |
+
+### (旧) 内蔵 local-agent の設定 — 現 Famulus 側
+
 | env | 既定 | 意味 |
 |---|---|---|
 | `LICTOR_LOCAL_BASE_URL` | `http://127.0.0.1:11434/v1` | OpenAI 互換エンドポイント (Ollama) |

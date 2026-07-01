@@ -306,6 +306,60 @@ and frame/raw shaping are unit-tested without spinning up a poll loop.
 Returns 503 when transcript-tail never started (no Concordia, or no pty —
 e.g. the smoke harness).
 
+### Binding the right JSONL (`transcript_path` authority)
+
+The tail binds to a single JSONL — never mtime-guessing, which is what kills
+crosstalk between parallel wrappers — using the SessionStart hook's
+**`transcript_path`** as the authoritative source.
+
+**Why not `--session-id` pinning.** Lictor used to pass `--session-id <uuid>` and
+claim `<uuid>.jsonl`, but claude-code 2.1.187 **stopped reflecting `--session-id`
+in the transcript filename**: it adopts the passed uuid as the logical `session_id`
+yet writes the JSONL under a self-generated uuid (`<other>.jsonl`). The SessionStart
+hook then reports `transcript_path = <passed-session-id>.jsonl` (verified by dumping
+the hook payload) — a path that is never created. Both the computed pin and the
+hook authority pointed at that phantom, so the relay never started. The fix is to
+**not pass `--session-id`**: claude self-assigns `session_id`, the filename matches
+it, and the hook reports the *real* path.
+
+Lictor injects a SessionStart hook (`lictor cli session-id-hook`, added to the
+`--settings` file in `harness-hook.ts`) that fires on startup / `/clear` / resume /
+compact and writes the hook payload's `transcript_path` to
+`<stateDir>/claude-transcript-<lictorId>.txt` (`active-repos.ts` owns the path;
+`stateDir` resolves the same way as the active-repos relay). `transcript-tail.ts`'s
+`maybeRebind()` reads that file each poll and, when the reported path differs from
+the one currently bound, releases the old claim and binds to the real file. Because
+the path comes straight from claude it is correct, and it tracks `/clear` rotations
+exactly — all without a single mtime comparison, so crosstalk cannot creep back in.
+
+Until the hook first fires, `discover()` **waits** (returns null) rather than
+mtime-guessing — the brief startup window is crosstalk-safe by construction. If the
+hook authority is configured but no transcript binds within
+`LICTOR_TRANSCRIPT_RESOLVE_GRACE_MS` (default 20s), the tail emits a one-shot
+**fail-loud** diagnostic to stderr *and* a `lictor.transcript.unresolved` Concordia
+event — a stuck relay is never silent. `seq` stays monotonic so Concordia frame
+ordering survives any rebind. Non-pin providers (codex/gemini don't fire claude
+hooks; their `lictorTranscriptStatePath` is unset) fall back to mtime discover as
+before.
+
+### Submit watchdog (forced Enter)
+
+Lictor's text injection is one-shot: `provider.submitInject` writes `text + \r`
+(claude/gemini) or text→delay→`\r` (codex). When the TUI treats the burst as a
+bracketed paste the `\r` becomes a literal newline and the text sits unsent in
+the input box — the turn never fires. `src/submit-watchdog.ts` is the safety net:
+every relay submit path in `wrap.ts` (Concordia `onInject`, ask-marker answer,
+pending-question-gate flush) calls `submitWatchdog.arm()` after injecting. A
+successful submit makes claude write a `user` message to the JSONL, which
+`transcript-tail` surfaces via the generic `onUserMessage` callback →
+`noteUserMessage()` disarms the timer. If no user frame arrives within
+`LICTOR_SUBMIT_WATCHDOG_MS` (default 2000; `0` disables), the watchdog writes a
+lone `\r` once to force submission. It is **not** armed for picker key sequences
+(those produce a `tool_result`, not a user frame). This relies on the
+`transcript_path` rebinding above: if the tail were stuck on a stale JSONL
+post-`/clear`, the user frame would never be seen and every inject would
+spuriously force Enter.
+
 ## Delegation prompt auto-inject
 
 When Concordia spawns a lictor-wrapped agent via `POST /v1/delegation/invoke`,
