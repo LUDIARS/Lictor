@@ -37,6 +37,17 @@ export interface ProviderConfig {
   /** Binary to spawn. Resolved via PATH (with shell:true on Windows for .cmd). */
   binary: string;
   /**
+   * 任意。 設定されていれば、 この環境変数の値で {@link binary} を上書きする
+   * (空文字・未設定なら {@link binary} のまま)。 binary が PATH 上に無い /
+   * 別名でインストールされている環境向けに、 spawn 先を差し替える唯一のスロット。
+   *
+   * 例: `gemma4-12` は別リポ Famulus (`@ludiars/famulus`) の `famulus` CLI を
+   * 起動するが、 これは Lictor の依存ではなく各マシンに別途入る。 PATH に居ない /
+   * フルパス指定したい場合に `LICTOR_FAMULUS_BIN` で所在を渡す。 解決は
+   * {@link resolveBinary} に集約する (wrap が spawn 前に必ず通す)。
+   */
+  binaryEnvVar?: string;
+  /**
    * binary に対して **ユーザ args の前に** 必ず差し込む固定 args。
    * `local` provider が `binary = "lictor"` を自分自身 (`lictor cli local-agent`)
    * として再起動するために使う。未指定なら何も差さない (claude/codex/gemini)。
@@ -279,6 +290,9 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // エイリアスで引き続き起動可。
     name: "gemma4-12",
     binary: "famulus",
+    // Famulus は Lictor の依存ではなく各マシンに別途入る外部 CLI。 PATH に居ない /
+    // 別所に入れた場合は `LICTOR_FAMULUS_BIN` で spawn 先を差し替える (PATH fallback)。
+    binaryEnvVar: "LICTOR_FAMULUS_BIN",
     spawnArgs: ["run"],
     // 会話ログ・compaction・hook は Famulus の REPL が持つ。Lictor の SKILL 注入は使わない。
     skillStrategy: "none",
@@ -305,4 +319,24 @@ const PROVIDER_ALIASES: Record<string, string> = {
 
 export function getProvider(name: string): ProviderConfig | null {
   return PROVIDERS[name] ?? PROVIDERS[PROVIDER_ALIASES[name] ?? ""] ?? null;
+}
+
+/**
+ * spawn する実バイナリを解決する。 provider が {@link ProviderConfig.binaryEnvVar}
+ * を持ち、 その env が非空に設定されていれば trim した値で {@link ProviderConfig.binary}
+ * を上書きする。 未設定 / 空白のみなら既定の binary をそのまま返す。
+ *
+ * wrap が pty.spawn の直前に必ず通すことで、 「famulus が PATH に居ない」 等の
+ * 環境差を一箇所で吸収する。 純粋関数 (env を引数で受ける) なのでテスト可能。
+ */
+export function resolveBinary(
+  provider: ProviderConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const key = provider.binaryEnvVar;
+  if (key) {
+    const override = (env[key] ?? "").trim();
+    if (override) return override;
+  }
+  return provider.binary;
 }

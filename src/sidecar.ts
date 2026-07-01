@@ -75,11 +75,23 @@ export interface SidecarContext {
    */
   getTranscript: ((limit: number, raw: boolean) => TranscriptReadResult) | null;
   /**
+   * `POST /v1/repin` の実体。 transcript-tail handle の forceRediscover を束ねて差す。
+   * /clear なしで relay を生 transcript へ束縛し直す (stall からの手動復帰 / Concordia の
+   * re-pin Reaction-Workflow から叩かれる)。 transcript-tail 未起動なら null → 503。
+   */
+  repinTranscript: (() => { ok: boolean; path: string | null }) | null;
+  /**
    * ラップ中の AI プロセス (node-pty child) を強制終了するコールバック。
    * wrap.ts が pty spawn 後にセットする。pty 無し harness では null。
    * Concordia の session DELETE が force-exit を要求したときに使う。
    */
   forceExit: (() => void) | null;
+  /**
+   * session-end 後の「猶予付き終了」。即 kill せず、transcript が idleMs 無活動に
+   * なってから kill する (= session-log 保存の途中で殺さない)。wrap.ts がセット。
+   * `immediate: true` で従来の即時 kill。pty 無し harness では null。
+   */
+  requestGracefulExit: ((opts?: { immediate?: boolean }) => void) | null;
 }
 
 export interface Sidecar {
@@ -464,6 +476,19 @@ async function handle(
     return;
   }
 
+  // POST /v1/repin — /clear なしで relay を生 transcript へ束縛し直す (stall 手動復帰)。
+  // Concordia の re-pin Reaction-Workflow / 運用者が叩く。 transcript-tail 未起動なら 503。
+  if (method === "POST" && url === "/v1/repin") {
+    if (!ctx.repinTranscript) {
+      return writeJson(res, 503, {
+        error: "transcript tail not available (no Concordia / no pty for this session)",
+      });
+    }
+    const r = ctx.repinTranscript();
+    writeJson(res, r.ok ? 200 : 409, { ok: r.ok, path: r.path });
+    return;
+  }
+
   // Filesystem RPC — cwd-confined. Concordia proxies through these.
   if (method === "GET" && url.startsWith("/v1/fs/read")) {
     const u = new URL(url, "http://localhost");
@@ -599,13 +624,23 @@ async function handle(
   }
 
   // Concordia の session DELETE 後に呼ばれ、ラップ中の AI プロセスを終了させる。
+  // 既定は「猶予付き終了」: session-end の session-log 保存を途中で殺さないよう、
+  // transcript が一定時間 (既定 5 分) 無活動になってから kill する。
+  // body `{ "immediate": true }` で従来の即時 kill (外部からの強制停止用)。
   // Lictor の cleanup() が onExit で走るので Concordia への unregister も後続する。
   if (method === "POST" && url === "/v1/internal/force-exit") {
+    const body = await readJson(req);
+    const immediate = body.ok && (body.value as { immediate?: unknown })?.immediate === true;
+    if (ctx.requestGracefulExit) {
+      ctx.requestGracefulExit({ immediate });
+      return writeJson(res, 200, { ok: true, mode: immediate ? "immediate" : "graceful" });
+    }
+    // 後方互換: graceful 未配線でも即時 kill は使えるように。
     if (!ctx.forceExit) {
       return writeJson(res, 503, { error: "force-exit not available (no pty)" });
     }
     ctx.forceExit();
-    writeJson(res, 200, { ok: true });
+    writeJson(res, 200, { ok: true, mode: "immediate" });
     return;
   }
 

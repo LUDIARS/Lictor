@@ -35,6 +35,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { ProviderConfig } from "./provider.js";
+import { readClaudeTranscriptPath } from "./active-repos.js";
 import {
   detectAnsweredQuestionIds,
   detectAskUserQuestion,
@@ -49,6 +50,31 @@ const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
 const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
 const STALE_CLAIM_MS = 60 * 60 * 1000; // 1h 経った claim は wrapper クラッシュ残骸とみなす
+
+// relay スタール検知 watchdog の猶予。 セッションが active なのにこの時間を超えて
+// frame を 1 つも送れない (= 束縛先が見失われた / ローテートで死んだファイルを掴み続け
+// ている) とき、 transcript を取り直して re-pin する (/clear 不要の自動復帰)。 取り直し
+// 方式は hook 権威の有無で分かれる (recoverRelay):
+//   - hook 権威あり (claude): 権威 transcript_path のみへ束縛し直す。 mtime 推測はしない。
+//   - hook 権威なし (codex 等): claim ガード付き mtime discover で生 transcript を掴む。
+// Concordia の再起動連打等で maybeRebind が phantom パスへ束縛して停止する既知のスタール
+// (本番実害 2026-06-30) への自己修復。 同時に、 mtime 復帰が共有 projects/<cwd> で別セッション
+// の JSONL を誤掴みする crosstalk (本番実害 2026-06-30) を hook 権威ありでは構造的に排除する。
+// env override 可。
+const STALL_RECOVERY_MS = ((): number => {
+  const v = Number(process.env.LICTOR_TRANSCRIPT_STALL_RECOVERY_MS ?? "30000");
+  return Number.isFinite(v) && v >= 0 ? v : 30000;
+})();
+
+// hook 権威 (lictorTranscriptStatePath) が設定済なのに transcript を束縛できないまま
+// 経過したとき、 中継を黙って止めず大きく表面化するための猶予 (ms)。 SessionStart hook は
+// 起動直後に発火するので通常は 1s 未満で解決する。 これを超えても解決しなければ「hook が
+// phantom path を報告した / claude が transcript を永続化していない」 等の異常とみなし、
+// stderr + Concordia event で可視化する (無言フォールバック禁止)。 env override 可。
+const TRANSCRIPT_RESOLVE_GRACE_MS = ((): number => {
+  const v = Number(process.env.LICTOR_TRANSCRIPT_RESOLVE_GRACE_MS ?? "20000");
+  return Number.isFinite(v) && v >= 0 ? v : 20000;
+})();
 
 // 別セッション誤投稿 (= 2 wrapper が同じ jsonl を tail) の原因特定用ログ.
 // 既定 ON。 安定確認後に撤去 PR で消す (verbose-logging-bootstrap)。CONCORDIA→Discord
@@ -88,6 +114,13 @@ export interface TranscriptTailHandle {
    * パース済の生 JSONL オブジェクトを返す.
    */
   readRecent: (limit: number, opts?: { raw?: boolean }) => TranscriptReadResult;
+  /**
+   * 束縛中の transcript を強制的に取り直して re-pin する (手動 /v1/repin の実体)。
+   * /clear なしで relay スタールを復帰させる: 現束縛 (死んだ/誤った JSONL) の claim を
+   * 解放し、 claim ガード付き mtime discover で自分の最新 transcript を掴み直す。
+   * 戻り値は新たに束縛したパス (取り直せなければ ok=false + 現状パス)。
+   */
+  forceRediscover: () => { ok: boolean; path: string | null };
 }
 
 /** `readRecent` / `readRecentFromFile` の戻り値. */
@@ -134,35 +167,90 @@ export interface TranscriptTailOptions {
    */
   onAskMarkerPosted?: (questionId: number) => void;
   /**
+   * AskUserQuestion (組み込み picker) が Concordia に pending-question として登録され
+   * question_id が返ったとき呼ぶ。wrap.ts はこの id を「picker キーストローク回答」集合に
+   * 記録し、Concordia 独自起源の質問 (どちらにも属さない) との三分岐を実現する。
+   */
+  onPickerQuestionRegistered?: (questionId: number) => void;
+  /**
    * transcript に user メッセージ (端末でのローカル返信) が現れたとき呼ぶ。
    * 開いている ask マーカー質問をローカル解決扱いにして Discord ボタンを失効させる。
+   * askMarkerEnabled のときのみ発火する (ask マーカー専用)。
    */
   onUserReply?: () => void;
   /**
-   * spawn 時に `--session-id <uuid>` で固定した transcript JSONL の絶対パス。
+   * transcript に user ロールのメッセージフレームが現れるたびに呼ぶ汎用シグナル
+   * (askMarkerEnabled に依らず常時発火)。 submit-watchdog が「注入テキストが実際に
+   * submit されて LLM ターンが始まったか」 を判定するのに使う。
+   */
+  onUserMessage?: () => void;
+  /**
+   * 「現在の Claude transcript JSONL 実パス」 追跡ファイルの絶対パス
+   * (`<stateDir>/claude-transcript-<lictorId>.txt`、 SessionStart hook が書く)。
    *
-   * 指定があると mtime ベースの discover を **完全にバイパス** し、 このパスが
-   * 生成され次第そのファイルだけを claim/tail する。 uuid は wrapper が発番した
-   * 一意値なので、 同 cwd で別 wrapper が並走していても・先に非 Lictor の同
-   * provider を起動していても・context 要約で別 session に jsonl がローテート
-   * しても、 自分以外の transcript を誤って掴む (= 投稿が 1 つズレて別チャンネル
-   * に出る crosstalk) ことが構造的に起きない。
+   * これは「どの JSONL を tail すべきか」 の **権威ソース**。 指定があり poll ごとに
+   * このファイルが claude の実 transcript_path を報告していれば、 現在束縛中の JSONL と
+   * 変わったとき (= 起動直後の確定 / `/clear` 等でローテート) 新しい実パスへ束縛し直して
+   * 中継を継続する。 `--session-id` で渡した uuid と実ファイル名が一致しなくても、 hook が
+   * 実パスを報告するので正しく掴める (mtime 推測を一切しないので crosstalk が起きない)。
+   * null/未指定なら hook 由来の束縛更新はしない (従来の computed pin / mtime discover)。
+   */
+  lictorTranscriptStatePath?: string | null;
+  /**
+   * spawn 時に `--session-id <uuid>` で固定した transcript JSONL の **計算上の** 絶対パス
+   * (`<cwdKey>/<uuid>.jsonl`)。
    *
-   * null/未指定なら従来どおり mtime discover にフォールバックする
-   * (session-id 固定非対応 provider、 または resume 系 flag 指定時)。
+   * 指定があると mtime ベースの discover を **完全にバイパス** し、 このパスだけを
+   * claim/tail する。 uuid は wrapper が発番した一意値なので、 同 cwd で別 wrapper が
+   * 並走していても・先に非 Lictor の同 provider を起動していても・context 要約で別
+   * session に jsonl がローテートしても、 自分以外の transcript を誤って掴む (= 投稿が
+   * 1 つズレて別チャンネルに出る crosstalk) ことが構造的に起きない。
+   *
+   * これは SessionStart hook が実 transcript_path ({@link lictorTranscriptStatePath}) を
+   * 報告するまでの **起動直後ブリッジ** として働く。 ファイル名が一致する通常ケースでは
+   * これだけで中継が即始まり、 一致しないケースでも hook 報告後に正しい実パスへ束縛が
+   * 差し替わる。 null/未指定なら mtime discover に委譲する (pin 非対応 provider /
+   * resume 系 flag 指定時)。
    */
   pinnedTranscriptPath?: string | null;
+  /**
+   * hook 権威が設定済なのに猶予 (TRANSCRIPT_RESOLVE_GRACE_MS) を超えても transcript を
+   * 束縛できず中継不能になったとき、 1 度だけ呼ぶ。 wrap.ts はこれを Concordia 経由の
+   * 「Lictor システムメッセージ」 として Discord セッションチャンネルへ投稿する配線に使う
+   * (= 中継が黙って止まったのをユーザが Discord 上で気付ける)。 detail は人間可読の説明。
+   */
+  /**
+   * 「このセッションで実際にターンが始まったか (ユーザ発話 / リモート注入があったか)」 を返す。
+   * claude は **初回メッセージを受けてから** transcript JSONL を書く (SessionStart 時点では
+   * 未生成) ため、 無操作のアイドルセッションでは transcript が無いのが正常。 fail-loud は
+   * これが true のときだけ発火させ、 「まだ誰も話しかけていないだけ」 を中継不能と誤検知して
+   * Discord に誤投稿するのを防ぐ。 未指定なら常に true 扱い (従来動作)。
+   */
+  isSessionActive?: () => boolean;
 }
 
 export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTailHandle {
   const dir = opts.provider.transcriptDir(opts.cwd);
   let jsonlPath: string | null = null;
+  // 現在 tail 対象として束縛している実 transcript JSONL パス. 起動時は opts 由来の
+  // computed pin (`<uuid>.jsonl`、 非 pin provider では null)。 SessionStart hook が
+  // 実 transcript_path を報告したら maybeRebind がそちらへ差し替える (権威ソース)。
+  // `/clear` 等でローテートしても hook 再報告で追従する。
+  let pinnedPath: string | null = opts.pinnedTranscriptPath ?? null;
   let claimPath: string | null = null;
   let offset = 0;
   let seq = 0;
   let pending = "";
   let stopped = false;
+  // hook 権威が設定済なのに猶予内に transcript を束縛できなかったとき、 1 度だけ
+  // fail-loud 警告を出すためのフラグ (沈黙死禁止)。
+  let relayUnresolvedWarned = false;
   const startedAt = Date.now();
+  // watchdog: 最後に「束縛できた / 新バイトを読めた」 時刻。 これが STALL_RECOVERY_MS
+  // 以上更新されず、 かつ session active なら relay スタールとみなして mtime 再発見する。
+  let lastProgressAt = Date.now();
+  // 再発見の連打を防ぐ throttle (候補ゼロのときに毎 poll で dir 全 walk しないため)。
+  let lastRecoveryAt = 0;
   // AskUserQuestion の tool_use id → Concordia の question_id。picker がローカル回答で
   // 解決した（tool_result 検知）とき、Concordia に resolve 通知して古いボタンを失効させる。
   const questionIdByToolUse = new Map<string, number>();
@@ -180,6 +268,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       getClaudeSessionId: () => null,
       getTranscriptPath: () => null,
       readRecent: (limit, opts) => readRecentFromFile(null, limit, opts?.raw ?? false),
+      forceRediscover: () => ({ ok: false, path: null }),
     };
   }
 
@@ -191,19 +280,35 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // 取れた wrapper だけがその jsonl を tail する. 取れなかった候補は次点を試す.
   // 自分の jsonl がまだ作成されていない場合は null で抜けて、 次回 poll で再 discover.
   const discover = (): string | null => {
-    // session-id 固定束縛が効いている場合は mtime 推測を一切せず、 固定 path のみ。
-    // wrapper が発番した一意 uuid のファイルなので claim 競合は構造的に起きないが、
-    // stale-claim 剥がし等の共通ロジックを通すため tryClaimJsonl は経由する。
-    if (opts.pinnedTranscriptPath) {
-      if (!existsSync(opts.pinnedTranscriptPath)) return null; // claude が生成するまで待つ
-      const cp = tryClaimJsonl(opts.pinnedTranscriptPath, STALE_CLAIM_MS, opts.sessionId);
-      if (cp) {
-        claimPath = cp;
-        claimDbg(`pinned transcript claimed path=${opts.pinnedTranscriptPath} owner=${opts.sessionId}`);
-        return opts.pinnedTranscriptPath;
+    // 束縛先 (pinnedPath) が決まっている場合は mtime 推測を一切せず、 その path のみ。
+    // pinnedPath は (a) wrapper が発番した一意 uuid の computed pin、 または
+    // (b) SessionStart hook が報告した実 transcript_path (maybeRebind が差し替え済) の
+    // どちらか。 いずれも自分のセッション固有のファイルなので、 別セッションの JSONL を
+    // 誤掴みする crosstalk が構造的に起きない。 stale-claim 剥がし等の共通ロジックを
+    // 通すため tryClaimJsonl は経由する。
+    if (pinnedPath) {
+      if (existsSync(pinnedPath)) {
+        const cp = tryClaimJsonl(pinnedPath, STALE_CLAIM_MS, opts.sessionId);
+        if (cp) {
+          claimPath = cp;
+          claimDbg(`pinned transcript claimed path=${pinnedPath} owner=${opts.sessionId}`);
+          return pinnedPath;
+        }
+        return null; // 一意 uuid / 実パスのため通常起き得ない; 万一 claim 済なら次 poll で再試行
       }
-      return null; // 一意 uuid のため通常起き得ない; 万一 claim 済なら次 poll で再試行
+      // pinned path がまだ現れない。 mtime 推測にフォールバックすると別セッションの JSONL を
+      // 誤掴みして crosstalk が再発するため、 ここでは待つだけ。 computed pin のファイル名が
+      // 実体と不一致でも、 SessionStart hook が実 transcript_path を報告し次第 maybeRebind が
+      // 正しい実パスへ束縛を差し替えるので中継不能には陥らない。
+      return null;
     }
+    // pinnedPath が null = まだ束縛先が確定していない。
+    // hook 権威 (lictorTranscriptStatePath) が設定済なら、 maybeRebind が hook の実
+    // transcript_path を束縛するまで待つ。 mtime 推測は別セッションの JSONL を誤掴みする
+    // crosstalk 源なので一切しない (起動直後の hook 未発火の短い間だけここに来る)。 猶予を
+    // 過ぎても解決しなければ pollOnce が fail-loud で表面化する (無言フォールバック禁止)。
+    if (opts.lictorTranscriptStatePath) return null;
+    // hook 権威なし (SessionStart hook 非対応 provider: codex/gemini/famulus)。 従来の mtime discover。
     if (!existsSync(dir)) return null;
     type Candidate = { path: string; mtime: number };
     const candidates: Candidate[] = [];
@@ -232,12 +337,178 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     return null;
   };
 
+  // SessionStart hook (起動 / `/clear` / resume / compact で発火) が報告する実
+  // transcript_path を権威ソースとして、 tail 対象の束縛先を最新に保つ。 これにより:
+  //   - `--session-id` uuid と実ファイル名が不一致でも実ファイルを掴める (中継不能の解消)
+  //   - `/clear` で別 JSONL にローテートしても新ファイルへ追従する
+  //   - mtime 推測を一切しないので別セッションの JSONL を誤掴みしない (crosstalk 構造排除)
+  const maybeRebind = (): void => {
+    if (!opts.lictorTranscriptStatePath) return; // hook 由来の権威更新なし (従来動作)
+    const want = readClaudeTranscriptPath(opts.lictorTranscriptStatePath);
+    if (!want) return; // SessionStart hook 未発火 — 起動直後は computed pin で橋渡し
+    if (want === pinnedPath) return; // 変化なし
+    // 報告パスがまだ実在しないなら束縛を差し替えない。 旧実装は phantom / 生成前パスへ
+    // 無条件に rebind して jsonlPath=null のまま discover が掴めず中継が黙って停止した
+    // (本番実害 2026-06-30)。 実在するまでは現束縛 (旧 JSONL) を tail し続け、 ファイルが
+    // 現れた瞬間に乗り換える。 これで /clear ローテートの取りこぼしも無くなる。
+    if (!existsSync(want)) {
+      claimDbg(`rebind deferred: reported transcript_path not yet present want=${want}`);
+      return;
+    }
+    claimDbg(`rebind: authoritative transcript_path ${pinnedPath ?? "?"} -> ${want}`);
+    // 旧 JSONL の claim を解放し (computed pin の誤ファイル or ローテート前の死ファイル)、
+    // 新ファイルを次の discover で掴む。
+    if (claimPath) {
+      try {
+        unlinkSync(claimPath);
+      } catch {
+        /* best-effort */
+      }
+      claimPath = null;
+    }
+    pinnedPath = want;
+    jsonlPath = null;
+    offset = 0;
+    pending = "";
+    // seq は連続維持 (Concordia 側の frame 順序を壊さない)。
+  };
+
+  // hook 権威が設定済なのに猶予を過ぎても transcript を束縛できないとき、 1 度だけ
+  // 大きく表面化する (沈黙死禁止: feedback_no_silent_fallback)。 「claude が transcript を
+  // 実ファイルとして永続化しない / hook が phantom path を報告する」 等の異常を、 中継が
+  // 黙って止まったまま放置せず stderr + Concordia event で可視化する。 hook 権威なし
+  // provider (codex/gemini) は対象外 (mtime discover に正当に委ねるため)。
+  const warnIfRelayUnresolved = (): void => {
+    if (relayUnresolvedWarned) return;
+    if (!opts.lictorTranscriptStatePath) return;
+    if (Date.now() - startedAt < TRANSCRIPT_RESOLVE_GRACE_MS) return;
+    // claude は **初回ターンを受けてから** transcript JSONL を書く (SessionStart 時点では
+    // 未生成) ため、 無操作のアイドルセッションでは未生成が正常。 実際にターンが始まった
+    // (submit/inject があった) ときだけ警告し、 「まだ誰も話しかけていないだけ」 を中継不能と
+    // 誤検知しない。
+    if (opts.isSessionActive && !opts.isSessionActive()) return;
+    relayUnresolvedWarned = true;
+    const reported = readClaudeTranscriptPath(opts.lictorTranscriptStatePath);
+    const missing = reported ? !existsSync(reported) : false;
+    // 端末 (Lictor の stderr) にだけ 1 度出す (no-silent-fallback の最小担保)。 Discord へは
+    // 出さない (壊れたセッションに毎回ノイズを撒かない)。
+    try {
+      process.stderr.write(
+        `lictor: transcript unresolved ${Math.round((Date.now() - startedAt) / 1000)}s after first turn; ` +
+          `relay inactive. hook transcript_path=${reported ?? "(none)"}${missing ? " [missing]" : ""}\n`,
+      );
+    } catch { /* best-effort */ }
+  };
+
+  // stall 復帰 / 手動 repin のディスパッチャ。 hook 権威 (claude) と mtime discover
+  // (権威なし provider: codex/gemini/famulus) で経路を分ける。
+  //
+  //   - hook 権威あり: 権威 transcript_path を真として束縛し直す (recoverByAuthority)。
+  //     mtime 推測は **絶対にしない**。 共有 projects/<cwd> で複数セッションが同居する環境
+  //     (= 親ディレクトリ一括 wrap) では、 mtime 最新の未claim JSONL が「自分のもの」 とは
+  //     限らない。 Concordia の再起動連打で全セッションの relay が同時 stall すると、 各々が
+  //     復帰時に自分の claim を一旦解放してから取り直すため claim の空き窓が生まれ、 newest
+  //     unclaimed を奪い合って **他セッションの生 transcript を自分の session_id で中継** して
+  //     しまう (= 別 channel に発話が混在する crosstalk、 本番実害 2026-06-30 の再発経路)。
+  //     権威パスは「このセッションの実ファイル」 を一意に指すので、 これだけに束縛すれば
+  //     mass-stall でも誤掴みが構造的に起きない。 maybeRebind の existsSync ガードで phantom
+  //     束縛による停止も既に塞いであるため、 mtime last-resort は claude には不要かつ有害。
+  //
+  //   - hook 権威なし: 従来の claim ガード付き mtime discover (recoverByMtime)。
+  //     codex/gemini/famulus は SessionStart hook の transcript_path 報告機構を持たないため、
+  //     stall 復帰は mtime に頼らざるを得ない (claim が唯一の anti-crosstalk ガード)。
+  const recoverRelay = (force = false): { ok: boolean; path: string | null } => {
+    if (opts.lictorTranscriptStatePath) return recoverByAuthority();
+    return recoverByMtime(force);
+  };
+
+  // hook 権威ありの stall 復帰: 権威 transcript_path (SessionStart hook が書く実パス) を
+  // 読み直し、 実在し現束縛と異なればそこへ re-pin する。 mtime には一切降りない。
+  //   - 権威が未報告 / 実在しない: 「別セッションの JSONL を掴む」 より 「束縛しない」 を選ぶ。
+  //     hook が実在パスを報告し次第 maybeRebind / discover が拾うので中継不能には陥らない。
+  //   - 権威 == 現束縛: 既に正しいファイル。 中継側で直す対象は無い (stall は Concordia 不達
+  //     等の外的要因)。 watchdog の連打を避けるため進捗時刻だけ進めて抜ける。
+  const recoverByAuthority = (): { ok: boolean; path: string | null } => {
+    const statePath = opts.lictorTranscriptStatePath;
+    if (!statePath) return { ok: false, path: jsonlPath };
+    const want = readClaudeTranscriptPath(statePath);
+    if (!want || !existsSync(want)) return { ok: false, path: jsonlPath };
+    if (want === jsonlPath) {
+      lastProgressAt = Date.now();
+      return { ok: false, path: jsonlPath };
+    }
+    const cp = tryClaimJsonl(want, STALE_CLAIM_MS, opts.sessionId);
+    if (!cp) return { ok: false, path: jsonlPath };
+    if (claimPath) { try { unlinkSync(claimPath); } catch { /* best-effort */ } }
+    claimPath = cp;
+    pinnedPath = want; // 以後の権威。 hook が別の実在パスを報告すれば maybeRebind が更に追従。
+    jsonlPath = want;
+    offset = 0;
+    pending = "";
+    lastProgressAt = Date.now();
+    claimDbg(`stall-recovery (authority) rebind to ${want} owner=${opts.sessionId}`);
+    return { ok: true, path: want };
+  };
+
+  // watchdog 本体 (hook 権威なし provider 専用): claim ガード付き mtime discover で生
+  // transcript を取り直して re-pin。 claim が anti-crosstalk を担保するので、 他 wrapper が
+  // active に掴んでいる JSONL は避け、 自分の cwd 配下で最も新しい未claim ファイル
+  // (= /clear 後の生 transcript or 起動後の実体) を掴む。 force=true (手動 /v1/repin) では
+  // throttle と grace を無視して即取り直す。 hook 権威あり provider はここを通らない
+  // (recoverByAuthority 経由。 mtime 誤掴みによる crosstalk を避けるため)。
+  const recoverByMtime = (force = false): { ok: boolean; path: string | null } => {
+    if (!dir || !existsSync(dir)) return { ok: false, path: jsonlPath };
+    const now = Date.now();
+    if (!force && now - lastRecoveryAt < STALL_RECOVERY_MS) return { ok: false, path: jsonlPath };
+    lastRecoveryAt = now;
+    let curMtime = 0;
+    if (jsonlPath) {
+      try { curMtime = statSync(jsonlPath).mtimeMs; } catch { curMtime = 0; }
+    }
+    const files: { path: string; mtime: number }[] = [];
+    walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => files.push({ path: p, mtime: st.mtimeMs }));
+    const candidates = chooseRecoveryCandidates(files, {
+      currentPath: jsonlPath,
+      currentMtime: curMtime,
+      startedAt,
+    });
+    for (const c of candidates) {
+      const cp = tryClaimJsonl(c.path, STALE_CLAIM_MS, opts.sessionId);
+      if (!cp) continue;
+      if (claimPath) { try { unlinkSync(claimPath); } catch { /* best-effort */ } }
+      claimPath = cp;
+      pinnedPath = c.path; // 以後の権威。 hook が実在パスを再報告すれば maybeRebind が更に乗り換える。
+      jsonlPath = c.path;
+      offset = 0;
+      pending = "";
+      lastProgressAt = Date.now();
+      claimDbg(`stall-recovery rebind to ${c.path} owner=${opts.sessionId} force=${force}`);
+      return { ok: true, path: c.path };
+    }
+    return { ok: false, path: jsonlPath };
+  };
+
+  // poll から呼ぶ自動 watchdog: session active かつ STALL_RECOVERY_MS 進捗ゼロなら再束縛。
+  // 経路は recoverRelay が hook 権威の有無で分岐する (claude は権威パスのみ、 mtime は使わない)。
+  const maybeRecover = (): void => {
+    const active = opts.isSessionActive ? opts.isSessionActive() : true;
+    if (!active) return; // まだ誰も話しかけていないアイドルは正常 (transcript 未生成)。
+    if (Date.now() - lastProgressAt < STALL_RECOVERY_MS) return;
+    recoverRelay(false);
+  };
+
   const pollOnce = async (): Promise<void> => {
     if (stopped) return;
+    maybeRebind();
     if (!jsonlPath) {
       jsonlPath = discover();
-      if (!jsonlPath) return;
+      if (!jsonlPath) {
+        warnIfRelayUnresolved();
+        maybeRecover(); // hook 権威でも active なら mtime で取り直す (/clear 不要の自己修復)。
+        return;
+      }
       offset = 0;
+      lastProgressAt = Date.now();
     }
     // active 中は claim の mtime を更新し続け、 stale (1h) 判定で他 wrapper に
     // 剥がされて「同じ jsonl を 2 wrapper が tail → 別 channel 誤投稿」 になるのを防ぐ。
@@ -248,7 +519,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     } catch {
       return; // file went away
     }
-    if (size <= offset) return;
+    if (size <= offset) {
+      // 束縛済だが伸びていない。 単なるアイドルなら正常だが、 active なのに長時間ゼロ進捗なら
+      // ローテートで死んだファイルを掴み続けている可能性 → watchdog で生 transcript を取り直す。
+      maybeRecover();
+      return;
+    }
     let chunk: Buffer;
     try {
       const fd = readFileSync(jsonlPath); // small per-poll; OK in v1
@@ -257,6 +533,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       return;
     }
     offset = size;
+    lastProgressAt = Date.now(); // 新バイトを読めた = relay 生存。 watchdog の grace をリセット。
     pending += chunk.toString("utf8");
     const lines = pending.split("\n");
     pending = lines.pop() ?? "";
@@ -270,8 +547,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
         const pqs = detectAskUserQuestion(line);
         for (const pq of pqs) {
           // question_id を控えて tool_use id と紐付ける（後で local-resolve 通知に使う）。
+          // 登録成功後に onPickerQuestionRegistered を呼び、wrap.ts が「picker 既知 qid」
+          // 集合に追加できるようにする（Concordia 起源の質問との三分岐判定に使う）。
           void postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, pq).then((qid) => {
             if (qid != null && pq.id) questionIdByToolUse.set(pq.id, qid);
+            if (qid != null) opts.onPickerQuestionRegistered?.(qid);
           });
           opts.onQuestionOpen?.(pq.id);
         }
@@ -288,6 +568,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       }
       const frame = lineToFrame(line);
       if (!frame) continue;
+      // user ロールのメッセージが出た = 端末入力 or 注入テキストが submit されて
+      // LLM ターンが始まった汎用シグナル。 submit-watchdog の武装解除に使う
+      // (askMarkerEnabled に依らず常時発火)。
+      if (frame.kind === "text" && (frame.payload as { role?: unknown }).role === "user") {
+        opts.onUserMessage?.();
+      }
       // ask マーカー: assistant テキスト中の ```ask ブロックを pending-question へ。
       // provider 非依存 — lineToFrame が Claude/Codex の assistant テキストを正規化済。
       //
@@ -356,7 +642,31 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     getClaudeSessionId: getSessionUuid,
     getTranscriptPath: () => jsonlPath,
     readRecent: (limit, opts) => readRecentFromFile(jsonlPath, limit, opts?.raw ?? false),
+    forceRediscover: () => recoverRelay(true),
   };
+}
+
+/**
+ * stall-recovery / 手動 repin の候補選定 (純関数, test 対象)。
+ * 与えられた JSONL 一覧から、 取り直し対象を「新しい順」で返す:
+ *   - lictor 起動より前 (startedAt-5s) のファイルは過去セッションなので除外。
+ *   - 現束縛中のファイル自身は除外 (それを掴み続けても進まないため)。
+ *   - 現束縛がある (bound) ときは、 それより厳密に新しいものだけ (アイドル中の正しい束縛を
+ *     古いファイルへ巻き戻さない)。 未束縛 (currentPath=null) のときは全ての候補を許可。
+ * 実際の claim 取得は呼び出し側 (tryClaimJsonl) が anti-crosstalk ガードとして行う。
+ */
+export function chooseRecoveryCandidates(
+  files: { path: string; mtime: number }[],
+  opts: { currentPath: string | null; currentMtime: number; startedAt: number },
+): { path: string; mtime: number }[] {
+  return files
+    .filter((f) => {
+      if (f.mtime < opts.startedAt - 5_000) return false;
+      if (f.path === opts.currentPath) return false;
+      if (opts.currentPath && f.mtime <= opts.currentMtime) return false;
+      return true;
+    })
+    .sort((a, b) => b.mtime - a.mtime);
 }
 
 /**

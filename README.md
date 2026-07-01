@@ -24,17 +24,20 @@ skill-injection paths differ. Codex's own `--add-dir` widens the writable
 sandbox but doesn't trigger skill scanning, so `/v1/skill` returns 503 for
 Codex sessions.
 
-`lictor gemma4-12` (旧名 `lictor local` も alias で可) is different: it does
-**not** wrap an external CLI. It spawns
-Lictor itself (`lictor cli local-agent`) as a built-in lightweight chat agent
-that talks to a local OpenAI-compatible endpoint (Ollama, default
-`http://127.0.0.1:11434/v1`, model `gemma4:12b`). It is a light stand-in for
-the codex shell when you just want a **context-keeping local LLM session** (no
-tool-use / file-editing). Features: conversation-log persistence (resumable
-JSONL), context-size **compaction** (summarize-and-fold past the threshold,
-done by the local LLM itself — zero cloud), and lifecycle **hooks**
-(SessionStart / UserPromptSubmit / Stop). Config via `LICTOR_LOCAL_*` env.
-Design: `spec/local-llm-agent.md`.
+`lictor gemma4-12` (旧名 `lictor local` も alias で可) is different: it wraps
+**Famulus** (`@ludiars/famulus`, `famulus run`), a separate local-LLM spawner
+CLI, instead of a cloud agent. Famulus is a light stand-in for the codex shell
+when you just want a **context-keeping local LLM session** (no tool-use /
+file-editing): conversation-log persistence (resumable JSONL), context-size
+**compaction**, and lifecycle **hooks**. It talks to a local
+OpenAI-compatible endpoint (Ollama, default `http://127.0.0.1:11434/v1`, model
+`gemma4:12b`).
+
+> Famulus is **not** a Lictor dependency — install it separately on each
+> machine. By default Lictor spawns `famulus` from `PATH`; if it lives
+> elsewhere, point Lictor at it with **`LICTOR_FAMULUS_BIN`** (full path or
+> alternate name). Famulus' own runtime is configured via `LICTOR_LOCAL_*` env.
+> Design: `spec/local-llm-agent.md`.
 
 ## Why
 
@@ -115,7 +118,8 @@ lictor cli conflicts                  # other sessions on the same repo
 | POST   | `/v1/lictor/task`          | `{branch?, desc?}`                     | PATCH Concordia session + emit event + refresh `lictor-current-task` skill |
 | GET    | `/v1/lictor/state`         | —                                      | `{notify, conflict, task}` snapshot for dashboards |
 | GET    | `/v1/transcript`           | `?limit=N&raw=0\|1`                     | Read the wrapped agent's recent transcript (Claude / Codex JSONL). `limit` 1–500 (default 50). `raw=1` returns parsed JSONL objects, else slim `lineToFrame` frames. Returns `{path, available, total_lines, returned, frames\|lines}`. 503 when transcript-tail is inactive (no Concordia / no pty). |
-| POST   | `/v1/internal/force-exit`  | —                                      | Kill the wrapped AI process (SIGTERM). Called by Concordia after session DELETE. 503 if sidecar is not wrapping a pty (e.g. smoke harness). |
+| POST   | `/v1/repin`                | —                                      | Re-pin the transcript relay **without `/clear`**: releases the current (dead/rotated) JSONL claim and re-discovers the live transcript via claim-guarded mtime. Recovers a stalled relay (e.g. after Concordia restarts severed the binding). Returns `{ok, path}` (200 on rebind, 409 if no fresh transcript found). 503 when transcript-tail is inactive. Called by Concordia's re-pin Reaction-Workflow or an operator. |
+| POST   | `/v1/internal/force-exit`  | `{ "immediate"?: bool }`               | Terminate the wrapped AI process. Called by Concordia after session DELETE. **Default is graceful**: waits until the transcript has been idle (`LICTOR_SESSION_END_IDLE_KILL_MS`, default 5 min) so `session-end`'s log save isn't truncated mid-write, with a hard cap (`LICTOR_SESSION_END_MAX_WAIT_MS`, default 30 min). `{"immediate":true}` kills now (SIGTERM). 503 only if sidecar is not wrapping a pty (e.g. smoke harness). |
 
 All requests must originate from `127.0.0.1` / `::1`. The port is bound on
 `127.0.0.1:0` (ephemeral) and exported as `$LICTOR_PORT` to the wrapped
@@ -140,11 +144,33 @@ stripped first).
 | Var | Default | Effect |
 |-----|---------|--------|
 | `CONCORDIA_HOST`             | `127.0.0.1` | Where Concordia listens |
-| `CONCORDIA_PORT`             | `17330`     | — |
+| `CONCORDIA_PORT`             | `11111`     | Concordia backend port (Concordia が spawn 時に注入。 env 無し起動時のみ既定が効く) |
 | `LICTOR_DISABLE_CONCORDIA`   | (unset)     | Set to `1` to skip Concordia registration entirely (v0.0 behavior) |
 | `LICTOR_PIN_TRANSCRIPT`      | (unset)     | Set to `1` to pin the session-id (`--session-id`) and export `LICTOR_TRANSCRIPT_FILE` to the child even when Concordia is disabled. For headless workers that need to read their own transcript |
 | `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Set by Concordia `/v1/delegation/invoke` to a rendered prompt file. Lictor reads it and pastes+submits it into the wrapped CLI once the TUI is up (delegation auto-inject) |
 | `LICTOR_DELEGATION_INJECT_DELAY_MS` | `2500` | Delay after first pty output before the delegation prompt is injected (lets the TUI finish drawing) |
+| `LICTOR_SUBMIT_WATCHDOG_MS`  | `2000`      | After a relay text inject (`submitInject`), if no `user` frame appears in the transcript within this many ms, force a single `\r` to submit (bracketed-paste fallback). `0` disables. See DESIGN "Submit watchdog" |
+
+### Following `/clear` (transcript re-pin)
+
+For session-pin providers (claude), `/clear` rotates to a new session-id /
+JSONL while the tail stays pinned to the old one — so the transcript relay goes
+quiet. Lictor injects a **SessionStart hook** (`lictor cli session-id-hook`) that
+records the current claude `session_id` to
+`<stateDir>/claude-session-<lictorId>.txt`; `transcript-tail` polls it and
+re-pins to the new JSONL on rotation. Deterministic (no mtime guessing), so the
+anti-crosstalk pin invariant is preserved. See DESIGN "Following `/clear`".
+
+### harness-guard injection
+
+When a claude session is wrapped, Lictor walks up from the session cwd looking
+for `.claude/hooks/harness-guard.mjs` (it lives at the workspace root, so any
+repo under it resolves the same file). If found, Lictor adds it as a
+`PreToolUse(Bash)` hook in the session `--settings`, so every spawned/delegated
+session blocks HARNESS §4 landmines (`git reset --hard`, SQLite `cp`, `gh pr
+merge` from a worktree, `rm -rf …backup`) before they run. No env or config —
+it's automatic when the workspace ships the hook. Not found ⇒ the usual two
+hooks only. Claude-only (the `--settings` path is not portable to Codex/Gemini).
 
 ## Concordia integration
 

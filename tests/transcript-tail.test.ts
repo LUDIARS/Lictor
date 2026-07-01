@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { lineToFrame, tryClaimJsonl, refreshClaim, readRecentFromFile, startTranscriptTail } from "../src/transcript-tail.js";
+import { lineToFrame, tryClaimJsonl, refreshClaim, readRecentFromFile, startTranscriptTail, chooseRecoveryCandidates } from "../src/transcript-tail.js";
 import { PROVIDERS } from "../src/provider.js";
+import { claudeTranscriptStatePath } from "../src/active-repos.js";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
@@ -492,6 +494,493 @@ test("startTranscriptTail: pinnedTranscriptPath は自分の jsonl だけを cla
       assert.equal(existsSync(`${pinnedPath}.lictor-claim`), true, "固定 path を claim する");
       assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "より新しい decoy は最後まで掴まない");
       assert.equal(tail.getSessionUuid(), ownUuid, "session uuid は固定 uuid を返す");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// `/clear` 後の束縛し直し: SessionStart hook が state ファイルに書いた実 transcript_path を
+// transcript-tail が権威ソースとして読み、 起動時の computed pin (旧 JSONL) から新しい実
+// JSONL へ追従する。 これをしないと `/clear` 後に中継 (transcript-frame) が止まる。
+test("startTranscriptTail: hook の transcript_path 変化で実 JSONL へ束縛し直す", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-rebind-"));
+  try {
+    const sessionId = "lictor-rebind-session";
+    const statePath = claudeTranscriptStatePath(dir, sessionId);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    const uuidA = "33333333-3333-4333-8333-333333333333";
+    const pathA = join(dir, `${uuidA}.jsonl`);
+    const uuidB = "44444444-4444-4444-8444-444444444444";
+    const pathB = join(dir, `${uuidB}.jsonl`);
+
+    // 起動時の computed pin = A。 hook も実 transcript_path として A を報告。
+    writeFileSync(statePath, pathA);
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId,
+      concordiaBaseUrl: "http://127.0.0.1:1", // 到達不能 → drop
+      provider,
+      pinnedTranscriptPath: pathA,
+      lictorTranscriptStatePath: statePath,
+    });
+    try {
+      writeFileSync(pathA, '{"type":"assistant","message":{"content":[{"type":"text","text":"A"}]}}\n');
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), pathA, "起動時は A を tail");
+      assert.equal(existsSync(`${pathA}.lictor-claim`), true, "A を claim");
+
+      // `/clear`: SessionStart hook が新 transcript_path=B を state ファイルへ書き、
+      // claude が B.jsonl を作る。
+      writeFileSync(pathB, '{"type":"assistant","message":{"content":[{"type":"text","text":"B"}]}}\n');
+      writeFileSync(statePath, pathB);
+      await sleep(900);
+
+      assert.equal(tail.getTranscriptPath(), pathB, "/clear 後は B へ束縛し直して tail");
+      assert.equal(tail.getSessionUuid(), uuidB, "session uuid も B を返す");
+      assert.equal(existsSync(`${pathB}.lictor-claim`), true, "B を claim");
+      assert.equal(existsSync(`${pathA}.lictor-claim`), false, "旧 A の claim は解放する");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 現行 Claude Code は --session-id で渡した uuid と、 実際に書く transcript JSONL の
+// ファイル名 uuid が一致しないことがある。 その場合 computed pin (`<uuid>.jsonl`) は
+// 永遠に現れないが、 SessionStart hook が報告する実 transcript_path を権威ソースに実
+// ファイルを束縛する。 mtime 推測には一切降りないので、 同 dir に「より新しい別セッション
+// の decoy」 があっても掴まない (= crosstalk が構造的に起きない)。
+test("startTranscriptTail: pin ファイル名不一致でも hook の transcript_path で実ファイルを束縛し decoy を掴まない", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-authority-"));
+  try {
+    const sessionId = "lictor-authority-session";
+
+    // より新しい mtime の decoy = 別セッションの jsonl。 mtime discover なら誤掴みする。
+    const decoyUuid = "99999999-9999-4999-8999-999999999999";
+    const decoyPath = join(dir, `${decoyUuid}.jsonl`);
+    writeFileSync(decoyPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"decoy"}]}}\n');
+    const future = Date.now() / 1000 + 600;
+    utimesSync(decoyPath, future, future);
+
+    // Lictor が --session-id で渡した uuid。 claude はこの名前の jsonl を書かない。
+    const pinnedUuid = "55555555-5555-4555-8555-555555555555";
+    const pinnedPath = join(dir, `${pinnedUuid}.jsonl`); // ← 一生作られない
+    // claude が実際に書く transcript (別 uuid、 decoy より古い mtime)。
+    const realUuid = "66666666-6666-4666-8666-666666666666";
+    const realPath = join(dir, `${realUuid}.jsonl`);
+    writeFileSync(realPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"real"}]}}\n');
+
+    // SessionStart hook は実 transcript_path (= realPath) を報告する。
+    const statePath = claudeTranscriptStatePath(dir, sessionId);
+    writeFileSync(statePath, realPath);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId,
+      concordiaBaseUrl: "http://127.0.0.1:1", // 到達不能 → postFrame は黙って drop
+      provider,
+      pinnedTranscriptPath: pinnedPath,
+      lictorTranscriptStatePath: statePath,
+    });
+    try {
+      await sleep(900);
+      assert.equal(tail.getTranscriptPath(), realPath, "hook 報告の実ファイルを tail");
+      assert.equal(tail.getSessionUuid(), realUuid, "session uuid は実ファイルの uuid を返す");
+      assert.equal(existsSync(`${realPath}.lictor-claim`), true, "実ファイルを claim");
+      assert.equal(existsSync(`${pinnedPath}.lictor-claim`), false, "存在しない computed pin は claim しない");
+      assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "より新しい decoy は最後まで掴まない (mtime 推測しない)");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// hook 未発火 (state ファイル未作成) の起動直後は、 computed pin (一意 uuid) で橋渡しして
+// 中継を即始める。 より新しい decoy があっても掴まない (crosstalk 防護を維持)。
+test("startTranscriptTail: hook 未発火でも computed pin で橋渡しし decoy を掴まない", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-bridge-"));
+  try {
+    const decoyPath = join(dir, "77777777-7777-4777-8777-777777777777.jsonl");
+    writeFileSync(decoyPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"decoy"}]}}\n');
+    const future = Date.now() / 1000 + 600;
+    utimesSync(decoyPath, future, future); // decoy を mtime 最新にする
+
+    const ownUuid = "88888888-8888-4888-8888-888888888888";
+    const pinnedPath = join(dir, `${ownUuid}.jsonl`);
+    writeFileSync(pinnedPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"mine"}]}}\n');
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    // lictorTranscriptStatePath は渡すが state ファイルは未作成 (hook 未発火相当)。
+    const statePath = claudeTranscriptStatePath(dir, "lictor-bridge-session");
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-bridge-session",
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+      pinnedTranscriptPath: pinnedPath,
+      lictorTranscriptStatePath: statePath,
+    });
+    try {
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), pinnedPath, "hook 未発火でも computed pin を tail");
+      assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "より新しい decoy は掴まない");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// pin 撤去後の本番フロー: wrap.ts は `--session-id` を渡さず pinnedTranscriptPath も指定
+// しない。 claude が session_id を自前採番し、 SessionStart hook がその実 transcript_path を
+// 報告する。 transcript-tail は hook 権威が設定済なら、 hook 報告までは mtime 推測に降りず
+// 待ち (= より新しい別セッションの decoy を掴まない)、 報告後に実ファイルを束縛する。
+test("startTranscriptTail: pin 無し + hook 権威で、 hook 未発火中は mtime に降りず、 報告後に実ファイルを束縛する", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-nopin-"));
+  try {
+    const sessionId = "lictor-nopin-session";
+    const statePath = claudeTranscriptStatePath(dir, sessionId);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    // より新しい mtime の decoy = 別セッションの jsonl。 mtime discover なら誤掴みする。
+    const decoyPath = join(dir, "aaaa1111-1111-4111-8111-111111111111.jsonl");
+    writeFileSync(decoyPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"decoy"}]}}\n');
+    const future = Date.now() / 1000 + 600;
+    utimesSync(decoyPath, future, future);
+
+    // claude が自前採番した実 transcript (hook がまだ報告していない、 decoy より古い mtime)。
+    const realUuid = "bbbb2222-2222-4222-8222-222222222222";
+    const realPath = join(dir, `${realUuid}.jsonl`);
+    writeFileSync(realPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"real"}]}}\n');
+
+    // pin 無し (pinnedTranscriptPath 未指定)、 hook 権威のみ。
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId,
+      concordiaBaseUrl: "http://127.0.0.1:1", // 到達不能 → postFrame / postDiagnostic は drop
+      provider,
+      lictorTranscriptStatePath: statePath,
+    });
+    try {
+      // hook 未発火 (state ファイル未作成) → mtime に降りず何も掴まない (decoy も real も)。
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), null, "hook 未発火中は mtime 推測せず待つ");
+      assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "より新しい decoy を mtime で掴まない");
+      assert.equal(existsSync(`${realPath}.lictor-claim`), false, "hook 未報告の実ファイルもまだ掴まない");
+
+      // hook が実 transcript_path を報告 → 実ファイルを束縛。
+      writeFileSync(statePath, realPath);
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), realPath, "hook 報告後は実ファイルを tail");
+      assert.equal(tail.getSessionUuid(), realUuid, "session uuid は実ファイルの uuid を返す");
+      assert.equal(existsSync(`${realPath}.lictor-claim`), true, "実ファイルを claim");
+      assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "decoy は最後まで掴まない");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// hook 権威ありのとき、 stall 復帰 / 手動 repin は mtime 推測に降りず権威 transcript_path
+// だけを真とする。 共有 projects/<cwd> に「より新しい別セッションの生 JSONL (decoy)」 が
+// あっても絶対に掴まない (= Concordia 再起動連打で全セッション同時 stall したとき、 newest
+// unclaimed を奪い合って他セッションの transcript を自分の session_id で中継してしまう
+// crosstalk を構造的に排除する。 本番実害 2026-06-30 の再発経路)。 forceRediscover は
+// throttle/grace を無視して即実行するので、 mtime 経路に降りていれば decoy を掴むはず。
+test("startTranscriptTail: hook 権威ありなら forceRediscover は mtime 最新 decoy を掴まず権威に留まる (crosstalk 防止)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-authority-recover-"));
+  try {
+    const sessionId = "lictor-authority-recover-session";
+    const statePath = claudeTranscriptStatePath(dir, sessionId);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    const realUuid = "dddd1111-1111-4111-8111-111111111111";
+    const realPath = join(dir, `${realUuid}.jsonl`);
+    writeFileSync(realPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"real"}]}}\n');
+    writeFileSync(statePath, realPath); // hook 権威 = realPath
+
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId,
+      concordiaBaseUrl: "http://127.0.0.1:1", // 到達不能 → postFrame は drop
+      provider,
+      pinnedTranscriptPath: realPath,
+      lictorTranscriptStatePath: statePath,
+    });
+    try {
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), realPath, "起動時は権威 realPath を tail");
+
+      // 別セッションの「より新しい」 生 JSONL。 mtime recovery なら誤掴みする decoy。
+      const decoyPath = join(dir, "dddd9999-9999-4999-8999-999999999999.jsonl");
+      writeFileSync(decoyPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"decoy"}]}}\n');
+      const future = Date.now() / 1000 + 600;
+      utimesSync(decoyPath, future, future);
+
+      const r = tail.forceRediscover();
+      assert.notEqual(r.path, decoyPath, "decoy へは re-pin しない");
+      assert.equal(tail.getTranscriptPath(), realPath, "権威パスに留まる");
+      assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "より新しい decoy は掴まない (mtime 推測しない)");
+      assert.equal(existsSync(`${realPath}.lictor-claim`), true, "権威パスの claim は維持");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// hook 権威ありの stall 復帰は、 権威 transcript_path が現束縛と異なる実在パスを指したとき
+// (= 束縛が死んだ後に hook が別の実ファイルを報告) はそこへ re-pin する。 ただし対象は常に
+// 権威パスであって、 mtime 最新の decoy ではない。
+test("startTranscriptTail: hook 権威ありで forceRediscover は権威が指す実ファイルへ re-pin する (decoy ではなく)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-authority-repin-"));
+  try {
+    const sessionId = "lictor-authority-repin-session";
+    const statePath = claudeTranscriptStatePath(dir, sessionId);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    const realUuid = "eeee1111-1111-4111-8111-111111111111";
+    const realPath = join(dir, `${realUuid}.jsonl`);
+    writeFileSync(realPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"real"}]}}\n');
+    writeFileSync(statePath, realPath);
+
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId,
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+      pinnedTranscriptPath: realPath,
+      lictorTranscriptStatePath: statePath,
+    });
+    try {
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), realPath, "起動時は realPath を tail");
+
+      // decoy: mtime 最新の別セッション JSONL (権威ではない)。
+      const decoyPath = join(dir, "eeee9999-9999-4999-8999-999999999999.jsonl");
+      writeFileSync(decoyPath, '{"type":"assistant","message":{"content":[{"type":"text","text":"decoy"}]}}\n');
+      const future = Date.now() / 1000 + 600;
+      utimesSync(decoyPath, future, future);
+
+      // hook が新しい実ファイル real2 を報告 (decoy より古い mtime)。 権威の乗り換え先。
+      const real2Uuid = "eeee2222-2222-4222-8222-222222222222";
+      const real2Path = join(dir, `${real2Uuid}.jsonl`);
+      writeFileSync(real2Path, '{"type":"assistant","message":{"content":[{"type":"text","text":"real2"}]}}\n');
+      writeFileSync(statePath, real2Path);
+
+      // maybeRebind が先に乗り換えても良いが、 いずれにせよ着地は権威 real2 で decoy ではない。
+      const r = tail.forceRediscover();
+      assert.equal(tail.getTranscriptPath(), real2Path, "権威が指す real2 へ束縛 (decoy ではない)");
+      assert.notEqual(r.path, decoyPath);
+      assert.equal(existsSync(`${decoyPath}.lictor-claim`), false, "より新しい decoy は掴まない");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ─── onPickerQuestionRegistered: AskUserQuestion 登録後のコールバック ─────────
+// transcript-tail が AskUserQuestion tool_use を検出して Concordia に POST し、
+// question_id が返ったとき onPickerQuestionRegistered が呼ばれることを確認する。
+// wrap.ts はこの id を pickerQuestionIds に追加し onAnswerQuestion の三分岐で使う。
+test("startTranscriptTail: AskUserQuestion 検出後に onPickerQuestionRegistered(qid) を呼ぶ", async () => {
+  // mock Concordia: POST pending-question → { question_id: 99 }
+  const server = createServer((req, res) => {
+    if (req.method === "POST" && req.url?.includes("pending-question")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ question_id: 99 }));
+    } else {
+      res.writeHead(204);
+      res.end();
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  const concordiaBaseUrl = `http://127.0.0.1:${port}`;
+
+  const dir = mkdtempSync(join(tmpdir(), "lictor-picker-"));
+  const pickerQids: number[] = [];
+  try {
+    const ownUuid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const pinnedPath = join(dir, `${ownUuid}.jsonl`);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-picker-session",
+      concordiaBaseUrl,
+      provider,
+      pinnedTranscriptPath: pinnedPath,
+      onPickerQuestionRegistered: (qid) => pickerQids.push(qid),
+    });
+    try {
+      // AskUserQuestion tool_use を含む JSONL を書き込む。
+      const line = JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_picker01",
+              name: "AskUserQuestion",
+              input: {
+                questions: [{ question: "続けますか?", options: [{ label: "はい" }, { label: "いいえ" }] }],
+              },
+            },
+          ],
+        },
+      });
+      writeFileSync(pinnedPath, line + "\n", "utf8");
+
+      // poll が検出 → HTTP POST → .then → callback まで待つ。
+      await sleep(1200);
+      assert.deepEqual(pickerQids, [99], "AskUserQuestion 登録後に question_id=99 で呼ばれる");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+// ─── stall watchdog / 手動 repin の候補選定 (chooseRecoveryCandidates) ───────────
+test("chooseRecoveryCandidates: 起動前のファイルを除外し新しい順に並べる", () => {
+  const startedAt = 100_000;
+  const out = chooseRecoveryCandidates(
+    [
+      { path: "/old", mtime: startedAt - 10_000 }, // 起動より前 → 除外
+      { path: "/a", mtime: startedAt + 1_000 },
+      { path: "/b", mtime: startedAt + 5_000 },
+    ],
+    { currentPath: null, currentMtime: 0, startedAt },
+  );
+  assert.deepEqual(out.map((c) => c.path), ["/b", "/a"]);
+});
+
+test("chooseRecoveryCandidates: 現束縛中ファイル自身は除外", () => {
+  const startedAt = 0;
+  const out = chooseRecoveryCandidates(
+    [
+      { path: "/cur", mtime: 9_000 },
+      { path: "/new", mtime: 10_000 },
+    ],
+    { currentPath: "/cur", currentMtime: 9_000, startedAt },
+  );
+  assert.deepEqual(out.map((c) => c.path), ["/new"]);
+});
+
+test("chooseRecoveryCandidates: 束縛中は厳密に新しいものだけ (古いファイルへ巻き戻さない)", () => {
+  const startedAt = 0;
+  const out = chooseRecoveryCandidates(
+    [
+      { path: "/older", mtime: 5_000 }, // currentMtime 以下 → 除外
+      { path: "/same", mtime: 8_000 }, // == currentMtime → 除外
+      { path: "/newer", mtime: 9_000 },
+    ],
+    { currentPath: "/cur", currentMtime: 8_000, startedAt },
+  );
+  assert.deepEqual(out.map((c) => c.path), ["/newer"]);
+});
+
+test("chooseRecoveryCandidates: 未束縛 (null) のときは currentMtime ガードを掛けない", () => {
+  const startedAt = 0;
+  const out = chooseRecoveryCandidates(
+    [{ path: "/a", mtime: 1_000 }, { path: "/b", mtime: 2_000 }],
+    { currentPath: null, currentMtime: 0, startedAt },
+  );
+  assert.deepEqual(out.map((c) => c.path), ["/b", "/a"]);
+});
+
+// maybeRebind の existsSync ガード: hook が報告したパスがまだ実在しない間は、 現束縛を
+// 維持して中継を止めない (phantom/生成前パスへ rebind して stall する本番バグの修正)。
+test("startTranscriptTail: hook 報告パスが未実在の間は rebind せず旧 JSONL の tail を継続する", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-defer-"));
+  try {
+    const sessionId = "lictor-defer-session";
+    const statePath = claudeTranscriptStatePath(dir, sessionId);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+    const uuidA = "55555555-5555-4555-8555-555555555555";
+    const pathA = join(dir, `${uuidA}.jsonl`);
+    const pathGhost = join(dir, "99999999-9999-4999-8999-999999999999.jsonl"); // 作らない
+
+    writeFileSync(statePath, pathA);
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId,
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+      pinnedTranscriptPath: pathA,
+      lictorTranscriptStatePath: statePath,
+    });
+    try {
+      writeFileSync(pathA, '{"type":"assistant","message":{"content":[{"type":"text","text":"A"}]}}\n');
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), pathA, "起動時は A を tail");
+
+      // hook が未実在パス (ghost) を報告 → 旧実装は jsonlPath=null で停止していた。
+      writeFileSync(statePath, pathGhost);
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), pathA, "未実在パス報告中は A の tail を維持 (停止しない)");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// forceRediscover (手動 /v1/repin): grace/throttle を無視し、 claim 付きで最新の未claim
+// JSONL を取り直して re-pin する (/clear なし復帰)。
+test("startTranscriptTail: forceRediscover は最新の未claim JSONL へ即 re-pin する", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-repin-"));
+  try {
+    const sessionId = "lictor-repin-session";
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+    const uuidA = "66666666-6666-4666-8666-666666666666";
+    const pathA = join(dir, `${uuidA}.jsonl`);
+    writeFileSync(pathA, '{"type":"assistant","message":{"content":[{"type":"text","text":"A"}]}}\n');
+
+    // pin = A を束縛させる。
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId,
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+      pinnedTranscriptPath: pathA,
+    });
+    try {
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), pathA, "起動時は A を tail");
+
+      // /clear 相当で新ファイル B が生成 (A より新しい)。 hook 報告無しでも手動 repin で乗り換える。
+      const uuidB = "77777777-7777-4777-8777-777777777777";
+      const pathB = join(dir, `${uuidB}.jsonl`);
+      writeFileSync(pathB, '{"type":"assistant","message":{"content":[{"type":"text","text":"B"}]}}\n');
+      const future = Date.now() / 1000 + 5;
+      utimesSync(pathB, future, future);
+
+      const r = tail.forceRediscover();
+      assert.equal(r.ok, true, "repin 成功");
+      assert.equal(r.path, pathB, "B へ re-pin");
+      assert.equal(tail.getTranscriptPath(), pathB, "以後 B を tail");
+      assert.equal(existsSync(`${pathB}.lictor-claim`), true, "B を claim");
+      assert.equal(existsSync(`${pathA}.lictor-claim`), false, "旧 A claim は解放");
     } finally {
       tail.stop();
     }

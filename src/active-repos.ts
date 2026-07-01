@@ -20,8 +20,21 @@ import { join } from "node:path";
 /**
  * State dir の解決. 優先順:
  *  1. env `LICTOR_ACTIVE_REPOS_DIR`
- *  2. env `CLAUDE_PROJECT_DIR/.claude/state` (Claude Code が export する変数)
- *  3. ハードコード `E:\Document\Ars\.claude\state` (本リポ運用の既定値)
+ *  2. env `CLAUDE_PROJECT_DIR/.claude/state` (Claude Code が hook 実行時に export する変数)
+ *  3. env `LUDIARS_ROOT/.claude/state` (Excubitor が注入するワークスペース root)
+ *  4. `process.cwd()/.claude/state` (ポータブル最終手段)
+ *
+ * これは `.claude/hooks/track-active-repo.sh` がスクリプト相対で書き出す
+ * `<workspace-root>/.claude/state` と一致させる必要がある (= Lictor の SessionStart
+ * hook が書く transcript ポインタを、 wrap 側 transcript-tail が同じ場所から読むため)。
+ * このワークスペースではセッション cwd が常に workspace root なので `process.cwd()`
+ * 由来で shell hook と同じ正本に収束する。
+ *
+ * 旧実装は最終フォールバックが `E:\Document\Ars\.claude\state` のハードコードだった
+ * (個人パス直書き)。 E: ドライブが無い環境 (例 D:\LUDIARS 運用) では存在しないドライブ
+ * を指し、 SessionStart hook の `claude-transcript-<lictorId>.txt` 書き込みが沈黙失敗
+ * → hook 権威モードの transcript-tail が永久に束縛できず中継ゼロ (本番実害 2026-07-01)。
+ * org 全体の「E: 直書き廃止・LUDIARS_ROOT / cwd 由来」 移行に合わせて撤廃した。
  *
  * 該当 dir が存在しなくても文字列はそのまま返す (呼び出し側で existsSync 判定).
  */
@@ -32,12 +45,66 @@ export function resolveActiveReposDir(env: NodeJS.ProcessEnv = process.env): str
   if (env.CLAUDE_PROJECT_DIR && env.CLAUDE_PROJECT_DIR.trim()) {
     return join(env.CLAUDE_PROJECT_DIR.trim(), ".claude", "state");
   }
-  return "E:\\Document\\Ars\\.claude\\state";
+  if (env.LUDIARS_ROOT && env.LUDIARS_ROOT.trim()) {
+    return join(env.LUDIARS_ROOT.trim(), ".claude", "state");
+  }
+  return join(process.cwd(), ".claude", "state");
 }
 
 /** state file の絶対パスを返す. SID は Claude session UUID. */
 export function activeReposPath(stateDir: string, claudeSessionId: string): string {
   return join(stateDir, `active-repos-${claudeSessionId}.txt`);
+}
+
+/**
+ * 「現在の Claude session id」 追跡ファイルの絶対パス. キーは Lictor session id
+ * (= Concordia session id, `lictor-<uuid>`) で、 SessionStart hook
+ * (`lictor cli session-id-hook`) が現 claude session_id を書き込む.
+ *
+ * `--session-id` で固定した transcript JSONL は `/clear` で別 uuid の新 JSONL に
+ * ローテートするが、 transcript-tail は固定ファイルを掴んだまま再 discover しない.
+ * このファイルを transcript-tail が poll し、 記録された sid が現在の pin と
+ * 変わったら新 `<sid>.jsonl` へ再 pin して中継を継続する.
+ */
+export function claudeSessionStatePath(stateDir: string, lictorSessionId: string): string {
+  return join(stateDir, `claude-session-${lictorSessionId}.txt`);
+}
+
+/** {@link claudeSessionStatePath} の中身 (現 claude session id) を読む. 無ければ null. */
+export function readClaudeSessionId(path: string): string | null {
+  try {
+    const v = readFileSync(path, "utf8").trim();
+    return v || null;
+  } catch {
+    return null; // 未作成 (SessionStart hook 未発火) / 読めない
+  }
+}
+
+/**
+ * 「現在の Claude transcript JSONL 実パス」 追跡ファイルの絶対パス. キーは Lictor
+ * session id で、 SessionStart hook (`lictor cli session-id-hook`) が hook payload の
+ * `transcript_path` (= claude が実際に書き出している JSONL の絶対パス) を書き込む.
+ *
+ * transcript-tail はこれを権威ソースとして tail 対象を束縛する. これにより:
+ *  - `--session-id` で渡した uuid と実 JSONL のファイル名 uuid が一致しなくても
+ *    実ファイルを正しく掴める (中継不能の解消).
+ *  - `/clear` 等で別 uuid の新 JSONL にローテートしても hook 再発火で新パスに
+ *    更新されるので追従できる.
+ *  - mtime 推測 discover を一切しないので、 並走する別セッションの JSONL を
+ *    誤掴みする crosstalk が構造的に起きない.
+ */
+export function claudeTranscriptStatePath(stateDir: string, lictorSessionId: string): string {
+  return join(stateDir, `claude-transcript-${lictorSessionId}.txt`);
+}
+
+/** {@link claudeTranscriptStatePath} の中身 (現 transcript JSONL 実パス) を読む. 無ければ null. */
+export function readClaudeTranscriptPath(path: string): string | null {
+  try {
+    const v = readFileSync(path, "utf8").trim();
+    return v || null;
+  } catch {
+    return null; // 未作成 (SessionStart hook 未発火) / 読めない
+  }
 }
 
 /**

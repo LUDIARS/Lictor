@@ -22,7 +22,7 @@ npx lictor codex    # codex CLI をラップ
 | 変数 | 既定 | 効果 |
 |---|---|---|
 | `CONCORDIA_HOST` | `127.0.0.1` | Concordia の listen 先 |
-| `CONCORDIA_PORT` | `17330` | 同上 |
+| `CONCORDIA_PORT` | `11111` | Concordia backend port (本体 concordia.config.json に合わせる。 通常は spawn 時注入) |
 | `LICTOR_DISABLE_CONCORDIA` | (unset) | `1` で Concordia 連携を完全に skip |
 | `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Concordia `/v1/delegation/invoke` が描画した prompt ファイル。TUI 起動後に貼付+送信 |
 | `LICTOR_DELEGATION_INJECT_DELAY_MS` | `2500` | 初回 pty 出力後、委託 prompt 注入までの遅延（TUI 描画待ち） |

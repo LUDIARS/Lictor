@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -33,6 +35,12 @@ jobs:
         run: |
           git config --global url."https://github.com/".insteadOf "git+ssh://git@github.com/"
           git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      # vestigium (file:./lib/vestigium) を先にビルドして dist を用意してから
+      # 本体の npm ci を回す (順序が逆だと file: dep の dist が無く解決できない)。
+      - name: Build submodules
+        run: |
+          cd lib/vestigium && npm install --ignore-scripts && npm run build && cd ../..
 
       - name: Install deps
         run: npm ci
