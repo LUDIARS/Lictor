@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lictor — per-session sidecar for agent TUI CLIs</title>
+<meta name="description" content="Lictor (Li) — Claude Code / Codex CLI をラップする per-session sidecar。役割・特徴・設計の概要。" />
+<link rel="stylesheet" href="./assets/styles.css" />
+</head>
+<body>
+<nav class="nav">
+  <a class="brand" href="./index.html"><span class="badge">Li</span> Lictor</a>
+  <div class="links">
+    <a href="./index.html" class="active">概要</a>
+    <a href="./graph.html">グラフビュー</a>
+    <a href="./api.html">API リファレンス</a>
+    <a href="https://github.com/LUDIARS/Lictor" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="tag">LUDIARS short code · Li</div>
+  <h1>Lictor</h1>
+  <p class="lede">
+    Claude Code / OpenAI Codex などの <strong>エージェント TUI CLI をラップする per-session sidecar</strong>。
+    セッション内のフックがホスト端末を操作し（ウィンドウタイトル）、TUI にキー入力を注入し、
+    Concordia（マルチエージェント調整サービス）と連携できるようにする薄いラッパ。
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="./graph.html">ドメイン関連グラフ →</a>
+    <a class="btn" href="./api.html">API を見る</a>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section>
+    <h2>サービスの役割</h2>
+    <p>
+      Claude Code の TUI は、自分が起動したサブプロセス（Bash ツール / フック / MCP）の標準出力を
+      取り込んでしまう。そのため、サブプロセスが発行した OSC エスケープ（<code>\e]0;TITLE\a</code>）は
+      レンダラに吸収され端末に届かない —— <em>セッション内から端末タイトルを変えられない</em>
+      という既知の問題（anthropics/claude-code #15802, #18326, #20441）がある。
+    </p>
+    <p>
+      Lictor は <strong>claude の親プロセスになる</strong> ことでこれを回避する。Lictor 自身の
+      <code>process.stdout</code> が本物の端末 pty なので、Lictor が発行する OSC は
+      Windows Terminal / iTerm2 / Alacritty にそのまま届く。セッション内のサブプロセスは
+      loopback HTTP sidecar 経由で Lictor に依頼し、実際のエスケープ書き込みは Lictor が行う。
+    </p>
+    <div class="callout">
+      <span class="t">核となる不変条件（drop-in wrapper）</span>
+      Lictor の <code>process.stdout</code> だけが本物の端末 pty に繋がっている。フックは
+      claude の stdout を通さず、loopback でこの sidecar に到達する。
+    </div>
+  </section>
+
+  <section>
+    <h2>特徴</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>🪟 端末タイトル制御</h3>
+        <p>OSC 0 でタイトルを発行。手動オーバーライドと、persona + repo + branch + dirty/unpushed からの自動生成をサポート。並行セッションをタスクバー/Alt-Tab で識別。</p>
+        <div class="src">src/osc.ts · auto-title.ts</div>
+      </div>
+      <div class="card">
+        <h3>⌨️ キーストローク注入</h3>
+        <p>pty マスターとして TUI に入力を代行。<code>/rename</code> / <code>/slash</code> / 生キー / AskUserQuestion 回答を注入。注入前に必ずサニタイズ。</p>
+        <div class="src">src/sidecar.ts · ask-question-relay.ts</div>
+      </div>
+      <div class="card">
+        <h3>🔌 Concordia 連携</h3>
+        <p>セッション登録 / WS 生存 / 10分 stat ポーリング / chat・report・event 中継 / WS イベントリアクタ。失敗しても best-effort で劣化。</p>
+        <div class="src">src/concordia.ts · client.ts · event-reactor.ts</div>
+      </div>
+      <div class="card">
+        <h3>🧩 Skill 注入</h3>
+        <p><code>--add-dir</code> で per-session SKILL.md を注入。persona / repo 関連メモリ / 現在タスク / 競合 / セッション状態を skill として供給。</p>
+        <div class="src">src/skill-injector.ts · memory-loader.ts</div>
+      </div>
+      <div class="card">
+        <h3>📜 Transcript リレー / pull</h3>
+        <p>ラップ中 CLI の JSONL を発見・tail し、frame 化して Concordia へ push。<code>GET /v1/transcript</code> で loopback から pull も可能。</p>
+        <div class="src">src/transcript-tail.ts</div>
+      </div>
+      <div class="card">
+        <h3>🛡️ 許可プロキシ</h3>
+        <p>PreToolUse 許可判断を Concordia / Web UI へ橋渡し。session-scoped な settings 注入で deferred decision に対応。</p>
+        <div class="src">src/permission-hook.ts</div>
+      </div>
+      <div class="card">
+        <h3>📨 委託 prompt 自動注入</h3>
+        <p>Concordia delegation で描画済みの委託 prompt を、TUI 起動後に自動で貼付+送信。Codex への委託入口。</p>
+        <div class="src">src/delegation-inject.ts</div>
+      </div>
+      <div class="card">
+        <h3>📋 タスク宣言プロトコル</h3>
+        <p>「今どのブランチで何を」を Concordia に宣言。pending-tasks / conflicts を 60s ポーリングし skill 化、タイトルに <code>⚠N</code>。</p>
+        <div class="src">src/task-relay.ts · pending-tasks.ts · conflict-watcher.ts</div>
+      </div>
+      <div class="card">
+        <h3>❓ AskUserQuestion pending-gate</h3>
+        <p>picker 表示中は通常 inject を FIFO で保留し誤確定を防止。PreToolUse hook で質問を Discord へ早期投稿。</p>
+        <div class="src">src/pending-question-gate.ts · ask-question-hook.ts</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>設計</h2>
+    <h3>なぜ HTTP loopback + pty なのか</h3>
+    <ul class="clean">
+      <li><strong>移植性</strong> — HTTP-over-TCP loopback は Windows / macOS / Linux で同一に動く（OS 固有のソケットパス不要）。</li>
+      <li><strong>Concordia との対称性</strong> — Concordia が既に HTTP なので proxy 経路が <code>fetch</code> in / <code>fetch</code> out で済む。</li>
+      <li><strong>フックの使いやすさ</strong> — <code>curl</code> はどこにでもある。named pipe は OS ごとにツールが違う。</li>
+      <li><strong>pty.spawn の採用（v0.3）</strong> — sidecar が TUI に入力を注入するには pty マスターである必要がある。prebuild 同梱の <code>node-pty@^1.1</code> のみ採用（gyp ビルド不要）。</li>
+    </ul>
+
+    <h3>2 つの trust boundary</h3>
+    <p>ユーザ供給テキストをホスト端末 / TUI に渡す関数は 2 つだけで、両方とも先にサニタイズする。</p>
+    <table>
+      <thead><tr><th>境界</th><th>関数</th><th>処理</th></tr></thead>
+      <tbody>
+        <tr><td>OSC タイトル</td><td><code>sanitizeTitle</code> (src/osc.ts)</td><td>C0/DEL 除去・200 文字 cap・多バイト保持。OSC の早期終端や別エスケープ注入を防ぐ。</td></tr>
+        <tr><td>pty 注入</td><td><code>sanitizeRenameArg</code> (src/sidecar.ts)</td><td>C0/DEL 除去・先頭 <code>/</code> 除去（slash チェイン防止）・trim・長さ cap。</td></tr>
+      </tbody>
+    </table>
+
+    <h3>ステートレス設計</h3>
+    <p>
+      Lictor は永続データを持たない per-session ラッパ（状態は Concordia / env / pty 側）。セッション専用
+      ディレクトリは終了時に丸ごと削除され、グローバルな <code>~/.claude/skills/</code> を汚さない。
+      Concordia 不在時は v0.0 相当に劣化し、中継系は 500 ではなく <strong>503</strong> を返す。
+    </p>
+    <p class="small dim">アーキテクチャ図と設計判断の全文は <a href="https://github.com/LUDIARS/Lictor/blob/main/DESIGN.md" target="_blank" rel="noopener">DESIGN.md</a> を参照。</p>
+  </section>
+
+  <section>
+    <h2>プロバイダ</h2>
+    <table>
+      <thead><tr><th>Provider</th><th>コマンド</th><th>Skill 注入</th><th>Slash/keys/answer</th><th>Concordia</th></tr></thead>
+      <tbody>
+        <tr><td>Claude Code</td><td><code>lictor claude</code></td><td>✅ (<code>--add-dir</code>)</td><td>✅</td><td>✅</td></tr>
+        <tr><td>OpenAI Codex CLI</td><td><code>lictor codex</code></td><td>❌</td><td>✅</td><td>✅</td></tr>
+        <tr><td>Gemini CLI</td><td><code>lictor gemini</code></td><td>❌</td><td>✅</td><td>✅</td></tr>
+        <tr><td>Local LLM</td><td><code>lictor gemma4-12</code></td><td>❌（外部 Famulus）</td><td>✅</td><td>✅</td></tr>
+      </tbody>
+    </table>
+    <p class="small dim">title / Concordia / session-meta / pty の面は共通で、skill 注入経路のみ異なる。</p>
+  </section>
+
+  <section>
+    <h2>仕様（spec）とコードの整合性レビュー</h2>
+    <p>
+      <code>spec/</code> 配下の資料と <code>src/</code> の実装を突き合わせたレビュー結果。核心部分（2 つの
+      trust boundary、主要 sidecar エンドポイント、Concordia クライアント契約、skill / transcript /
+      permission / delegation / task / ask-gate の各サブシステム）は <strong>spec とコードが対応</strong>している。
+      以下は検出したドリフト・記載漏れ。
+    </p>
+
+    <div class="callout drift">
+      <span class="t">① Local LLM が外部 Famulus へ移行（spec/README が陳腐化）</span>
+      <code>spec/local-llm-agent.md</code> と README は内蔵 REPL（<code>binary = "lictor"</code>,
+      <code>spawnArgs = ["cli","local-agent"]</code>）を記述するが、<code>src/provider.ts</code> の
+      <code>gemma4-12</code> は外部バイナリ <code>famulus run</code>（<code>binary = "famulus"</code>）へ
+      移行済み（2026-06-10）。<code>src/local-agent/</code> は旧実装として残存。
+    </div>
+
+    <div class="callout warn">
+      <span class="t">② fs-rpc が spec 未記載</span>
+      <code>GET /v1/fs/read | /v1/fs/list | /v1/fs/grep</code>（cwd 限定の read/list/grep）は実装
+      （<code>src/fs-rpc.ts</code>）+ テスト（<code>tests/fs-rpc.test.ts</code>）済みだが、
+      <code>spec/interface/sidecar-http-api.md</code> の表にも feature 索引にも存在しない。
+    </div>
+
+    <div class="callout warn">
+      <span class="t">③ /v1/internal/* が spec API 表に不在</span>
+      <code>/v1/internal/permission-check</code> / <code>permission-response</code> /
+      <code>ask-question</code> / <code>force-exit</code> は実装済み。<code>force-exit</code> は
+      README にあるが spec の API 表には未掲載。
+    </div>
+
+    <div class="callout warn">
+      <span class="t">④ askquestion-pending-gate.md が feature 索引から漏れ</span>
+      <code>spec/feature/askquestion-pending-gate.md</code> は存在するが、<code>spec/README.md</code>
+      の feature 一覧表に行が無い（9 行掲載／実体 10 ファイル）。
+    </div>
+
+    <div class="callout warn">
+      <span class="t">⑤ Gemini プロバイダが README プロバイダ表に不在</span>
+      <code>src/provider.ts</code> に <code>gemini</code>（<code>displayName: "Gemini CLI"</code>）が
+      あるが、README のプロバイダ表は claude / codex / local のみ。
+    </div>
+
+    <p class="small dim">
+      ※ このサイトのプロバイダ表・API リファレンス・グラフは <strong>コード側の現状</strong>に合わせて
+      記載している（spec ではなく実装を真実とした）。
+    </p>
+  </section>
+
+  <section>
+    <h2>クイックスタート</h2>
+    <pre class="block"><code># claude をラップ（TTY / args / exit code / signal は透過）
+lictor claude
+
+# セッション内の Bash ツール / フックから sidecar を叩く
+curl -s -X POST -H 'content-type: application/json' \
+  -d '{"text":"[Cr] 認証 502 デバッグ"}' \
+  "http://127.0.0.1:${LICTOR_PORT}/v1/title"
+
+# 同梱 CLI ショートカット（LICTOR_PORT を読む）
+lictor cli title  "[Cr] 認証 502 デバッグ"
+lictor cli rename "[Cr] 認証 502 デバッグ"   # claude に /rename を打鍵
+lictor cli chat team "デプロイ前確認"        # author_label は persona から自動補完</code></pre>
+  </section>
+
+</main>
+
+<footer>
+  Lictor (Li) · per-session sidecar for agent TUI CLIs ·
+  <a href="https://github.com/LUDIARS/Lictor" target="_blank" rel="noopener">LUDIARS/Lictor</a> ·
+  MIT License
+</footer>
+</body>
+</html>
