@@ -312,9 +312,25 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     if (!accepts) return true;
     const first = readTranscriptFirstLine(path);
     if (first === null) return true;
-    if (accepts(first, { cwd: opts.cwd })) return true;
+    if (accepts(first, { cwd: opts.cwd, startedAtMs: startedAt })) return true;
     claimDbg(`candidate rejected by meta filter path=${path} owner=${opts.sessionId}`);
     return false;
+  };
+
+  // 同時起動レース緩和: provider が先頭メタから開始時刻を読めるなら、 mtime 降順ではなく
+  // 「wrapper 起動時刻に最も近い開始時刻」 順で候補を試す。 2 つの codex がほぼ同時に
+  // 起動しても、 各 wrapper は自分の起動に時刻が寄っている rollout を先に claim しに行く
+  // ため、 隣のファイルを先取りする確率が下がる (最終ガードは従来どおり claim)。
+  const orderByStartAffinity = (candidates: { path: string; mtime: number }[]): { path: string; mtime: number }[] => {
+    const readStart = opts.provider.transcriptMetaStartedAt;
+    if (!readStart) return candidates;
+    return candidates
+      .map((c) => {
+        const first = readTranscriptFirstLine(c.path);
+        const headTs = first === null ? null : readStart(first);
+        return { ...c, affinity: headTs === null ? Number.MAX_SAFE_INTEGER : Math.abs(headTs - startedAt) };
+      })
+      .sort((a, b) => a.affinity - b.affinity || b.mtime - a.mtime);
   };
 
   // 同 cwd で複数 lictor wrapper が並走するとき、 mtime 最新だけで pick すると
@@ -372,7 +388,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       candidates.push({ path: p, mtime: mtimeMs });
     });
     candidates.sort((a, b) => b.mtime - a.mtime);
-    for (const c of candidates) {
+    for (const c of orderByStartAffinity(candidates)) {
       if (!candidateAccepted(c.path)) continue;
       const cp = tryClaimJsonl(c.path, STALE_CLAIM_MS, opts.sessionId);
       if (cp) {
@@ -518,7 +534,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       currentMtime: curMtime,
       startedAt,
     });
-    for (const c of candidates) {
+    for (const c of orderByStartAffinity(candidates)) {
       if (!candidateAccepted(c.path)) continue;
       const cp = tryClaimJsonl(c.path, STALE_CLAIM_MS, opts.sessionId);
       if (!cp) continue;
