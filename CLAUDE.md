@@ -82,3 +82,12 @@ spawning a real claude.
   when `$LICTOR_PORT` is set, falling back to "manual rename" when not.
   v0.3 onward, the skill should also call `lictor cli rename "<text>"`
   to keep the claude.ai/code session name in sync with the OSC title.
+
+## デプロイの注意 (dist 実行)
+
+- `bin/lictor.mjs` は **`dist/cli.js` (コンパイル済み) を実行する**。 src を直しても
+  `npm run build` するまで新規セッションに反映されない (2026-07-02 の crosstalk 再発は
+  「#72/#73 をマージしたが dist が古いまま」 が原因だった)。
+- **main へマージしたら必ず `npm run build` を実行する** (E:/Document/Ars/Lictor)。
+- 既に起動中の wrapper はコードをメモリに載せているため、 修正反映には該当セッションの
+  Lictor 再起動 (/co-relictor or 再 spawn) が必要。
