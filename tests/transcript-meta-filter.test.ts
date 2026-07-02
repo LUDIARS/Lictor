@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { codexTranscriptMetaAccepts, normalizePathForCompare, PROVIDERS } from "../src/provider.js";
+import { codexTranscriptMetaAccepts, codexTranscriptMetaStartedAt, normalizePathForCompare, PROVIDERS } from "../src/provider.js";
 import { readTranscriptFirstLine } from "../src/transcript-tail.js";
 
 const CWD = "E:/Document/Ars";
@@ -49,6 +49,60 @@ test("fail-open: parse 不能 / session_meta 以外 / cwd 欠落は許可 (claim
   assert.equal(codexTranscriptMetaAccepts(JSON.stringify({ type: "message", payload: {} }), { cwd: CWD }), true);
   assert.equal(codexTranscriptMetaAccepts(metaLine({ session_id: "x" }), { cwd: CWD }), true);
   assert.equal(codexTranscriptMetaAccepts(JSON.stringify({ type: "session_meta", payload: null }), { cwd: CWD }), true);
+});
+
+test("head-ts filter: wrapper 起動より 60s 以上古い会話は除外 (スリープ復帰の奪い合い防止)", () => {
+  const startedAtMs = new Date("2026-07-02T10:00:00.000Z").getTime();
+  const oldLine = metaLine({
+    cwd: "E:\\Document\\Ars", originator: "codex_cli_rs", source: "cli",
+    timestamp: "2026-07-02T08:00:00.000Z",
+  });
+  assert.equal(codexTranscriptMetaAccepts(oldLine, { cwd: CWD, startedAtMs }), false);
+  // startedAtMs 無指定 (旧呼び出し) は従来どおり許可
+  assert.equal(codexTranscriptMetaAccepts(oldLine, { cwd: CWD }), true);
+  // 猶予内 (起動直前) は許可
+  const freshLine = metaLine({
+    cwd: "E:\\Document\\Ars", originator: "codex_cli_rs", source: "cli",
+    timestamp: "2026-07-02T09:59:30.000Z",
+  });
+  assert.equal(codexTranscriptMetaAccepts(freshLine, { cwd: CWD, startedAtMs }), true);
+  // timestamp が一切読めないメタは fail-open (metaLine はトップレベル timestamp を
+  // 持つため、 ここは素の JSON で組む)
+  const noTs = JSON.stringify({
+    type: "session_meta",
+    payload: { cwd: "E:\\Document\\Ars", originator: "codex_cli_rs", source: "cli" },
+  });
+  assert.equal(codexTranscriptMetaAccepts(noTs, { cwd: CWD, startedAtMs }), true);
+});
+
+test("head-ts filter: LICTOR_CODEX_HEAD_TS_FILTER=0 で無効化できる (escape hatch)", () => {
+  const prev = process.env.LICTOR_CODEX_HEAD_TS_FILTER;
+  process.env.LICTOR_CODEX_HEAD_TS_FILTER = "0";
+  try {
+    const startedAtMs = new Date("2026-07-02T10:00:00.000Z").getTime();
+    const oldLine = metaLine({
+      cwd: "E:\\Document\\Ars", originator: "codex_cli_rs", source: "cli",
+      timestamp: "2026-07-02T08:00:00.000Z",
+    });
+    assert.equal(codexTranscriptMetaAccepts(oldLine, { cwd: CWD, startedAtMs }), true);
+  } finally {
+    if (prev === undefined) delete process.env.LICTOR_CODEX_HEAD_TS_FILTER;
+    else process.env.LICTOR_CODEX_HEAD_TS_FILTER = prev;
+  }
+});
+
+test("codexTranscriptMetaStartedAt: payload.timestamp 優先、トップレベル fallback", () => {
+  const payloadTs = metaLine({ cwd: CWD, timestamp: "2026-07-02T09:00:00.000Z" });
+  assert.equal(codexTranscriptMetaStartedAt(payloadTs), new Date("2026-07-02T09:00:00.000Z").getTime());
+  // metaLine はトップレベル timestamp (2026-07-02T00:00:00Z) を常に持つ
+  const topOnly = metaLine({ cwd: CWD });
+  assert.equal(codexTranscriptMetaStartedAt(topOnly), new Date("2026-07-02T00:00:00.000Z").getTime());
+  assert.equal(codexTranscriptMetaStartedAt("not-json{"), null);
+  assert.equal(codexTranscriptMetaStartedAt(JSON.stringify({ type: "message" })), null);
+});
+
+test("codex provider wires transcriptMetaStartedAt", () => {
+  assert.equal(PROVIDERS.codex.transcriptMetaStartedAt, codexTranscriptMetaStartedAt);
 });
 
 test("readTranscriptFirstLine: 先頭行のみ返す / 無ファイルは null", () => {
