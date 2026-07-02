@@ -151,7 +151,14 @@ export interface ProviderConfig {
    * parse 不能・未知フォーマット) は true を返して従来どおり claim ガードに
    * 委ねる (新しい CLI バージョンでメタ形式が変わっても中継が止まらない)。
    */
-  transcriptMetaAccepts?: (firstLine: string, ctx: { cwd: string }) => boolean;
+  transcriptMetaAccepts?: (firstLine: string, ctx: { cwd: string; startedAtMs?: number }) => boolean;
+
+  /**
+   * 先頭メタ行からそのセッションの開始時刻 (epoch ms) を読む。 定義されている
+   * provider は discover 時に「wrapper 起動時刻に最も近い開始時刻のファイル」 を
+   * 優先して束縛する (同時起動レースの誤掴み緩和)。 読めなければ null。
+   */
+  transcriptMetaStartedAt?: (firstLine: string) => number | null;
 }
 
 /**
@@ -173,9 +180,17 @@ export function normalizePathForCompare(p: string): string {
  *    ではないので除外。
  *  - `payload.cwd` が自分の cwd と不一致: 別リポ / 別ディレクトリのウインドウ。
  *    除外。
+ *  - `payload.timestamp` が wrapper 起動より HEAD_TS_GRACE_MS 以上古い: 自分より
+ *    前から生きている別セッションの会話。 除外 (Lictor が spawn する codex は常に
+ *    新規会話なので、 自分の rollout の開始時刻が wrapper 起動より古いことはない)。
+ *    スリープ復帰などで全 claim が同時に stale 化した際、 隣の長寿セッションの
+ *    ファイルを奪う経路をここで構造的に塞ぐ。 LICTOR_CODEX_HEAD_TS_FILTER=0 で無効化可
+ *    (codex を手動 resume でラップする等の特殊運用向け escape hatch)。
  *  - メタが読めない / 形式不明: 許可 (claim ガードに委ねる fail-open)。
  */
-export function codexTranscriptMetaAccepts(firstLine: string, ctx: { cwd: string }): boolean {
+const HEAD_TS_GRACE_MS = 60_000;
+
+export function codexTranscriptMetaAccepts(firstLine: string, ctx: { cwd: string; startedAtMs?: number }): boolean {
   let parsed: unknown;
   try {
     parsed = JSON.parse(firstLine);
@@ -194,7 +209,42 @@ export function codexTranscriptMetaAccepts(firstLine: string, ctx: { cwd: string
   if (typeof p.cwd === "string" && p.cwd.length > 0) {
     if (normalizePathForCompare(p.cwd) !== normalizePathForCompare(ctx.cwd)) return false;
   }
+  if (
+    typeof ctx.startedAtMs === "number" &&
+    process.env.LICTOR_CODEX_HEAD_TS_FILTER !== "0"
+  ) {
+    const headTs = codexTranscriptMetaStartedAt(firstLine);
+    if (headTs !== null && headTs < ctx.startedAtMs - HEAD_TS_GRACE_MS) return false;
+  }
   return true;
+}
+
+/**
+ * Codex rollout 先頭行の session_meta から会話開始時刻を epoch ms で返す。
+ * timestamp は payload 側 (正) とトップレベル (rollout 形式によってはこちら) の
+ * 両方がありうるので payload 優先で読む。 読めなければ null。
+ */
+export function codexTranscriptMetaStartedAt(firstLine: string): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(firstLine);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const rec = parsed as Record<string, unknown>;
+  if (rec.type !== "session_meta") return null;
+  const payload = typeof rec.payload === "object" && rec.payload !== null
+    ? (rec.payload as Record<string, unknown>)
+    : null;
+  const ts = typeof payload?.timestamp === "string" && payload.timestamp
+    ? payload.timestamp
+    : typeof rec.timestamp === "string" && rec.timestamp
+      ? rec.timestamp
+      : null;
+  if (!ts) return null;
+  const ms = new Date(ts).getTime();
+  return Number.isFinite(ms) ? ms : null;
 }
 
 /**
@@ -328,6 +378,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // 全セッション共有の ~/.codex/sessions/ から自分の候補を絞る先頭行フィルタ
     // (cwd 一致 + `codex exec` rollout 除外)。 crosstalk 対策の本体。
     transcriptMetaAccepts: codexTranscriptMetaAccepts,
+    transcriptMetaStartedAt: codexTranscriptMetaStartedAt,
   },
   gemini: {
     name: "gemini",
