@@ -135,6 +135,66 @@ export interface ProviderConfig {
    * {@link supportsSessionPin} が true のとき必須。dir が解決できなければ null。
    */
   pinnedTranscriptFile?: (cwd: string, uuid: string) => string | null;
+  /**
+   * mtime discover の候補 JSONL が「このセッションのものでありうるか」 を
+   * 先頭行メタデータで判定する任意フィルタ ({@link supportsSessionPin} が
+   * false の provider 向け)。
+   *
+   * codex は transcript を cwd 別に分けず ~/.codex/sessions/ に全セッション
+   * (別リポの対話ウインドウ・Concordia delegation の `codex exec` rollout 含む)
+   * を吐くため、 mtime + claim だけでは別セッションの JSONL を誤掴みして
+   * 「無関係なメッセージが別 channel / 別セッションに混線する」 crosstalk が
+   * 起きる。 先頭行 session_meta の cwd / source で候補自体を絞り、 誤掴みの
+   * 母集団を構造的に減らす。
+   *
+   * 戻り値: true = 候補として許可 / false = 除外。 判定不能 (メタ行なし・
+   * parse 不能・未知フォーマット) は true を返して従来どおり claim ガードに
+   * 委ねる (新しい CLI バージョンでメタ形式が変わっても中継が止まらない)。
+   */
+  transcriptMetaAccepts?: (firstLine: string, ctx: { cwd: string }) => boolean;
+}
+
+/**
+ * パス比較用の正規化。 Windows の `\` / `/` 揺れとドライブ大文字小文字揺れを
+ * 吸収する (codex は session_meta.cwd を `E:\\...` 形式で書くが、 Lictor の
+ * opts.cwd は `E:/...` 形式のことがある)。 大文字小文字は Windows FS が
+ * case-insensitive なので全体を lower で比較する。
+ */
+export function normalizePathForCompare(p: string): string {
+  return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+/**
+ * Codex rollout JSONL の先頭行 (`type: "session_meta"`) を読んで、 この
+ * セッションの候補たりうるかを判定する ({@link ProviderConfig.transcriptMetaAccepts})。
+ *
+ *  - `payload.source === "exec"` / `originator === "codex_exec"`: ヘッドレス
+ *    実行 (Concordia delegation 等) の rollout。 対話ウインドウの transcript
+ *    ではないので除外。
+ *  - `payload.cwd` が自分の cwd と不一致: 別リポ / 別ディレクトリのウインドウ。
+ *    除外。
+ *  - メタが読めない / 形式不明: 許可 (claim ガードに委ねる fail-open)。
+ */
+export function codexTranscriptMetaAccepts(firstLine: string, ctx: { cwd: string }): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(firstLine);
+  } catch {
+    return true;
+  }
+  if (typeof parsed !== "object" || parsed === null) return true;
+  const rec = parsed as Record<string, unknown>;
+  if (rec.type !== "session_meta") return true;
+  const payload = rec.payload;
+  if (typeof payload !== "object" || payload === null) return true;
+  const p = payload as Record<string, unknown>;
+  const source = typeof p.source === "string" ? p.source : "";
+  const originator = typeof p.originator === "string" ? p.originator : "";
+  if (source === "exec" || originator === "codex_exec") return false;
+  if (typeof p.cwd === "string" && p.cwd.length > 0) {
+    if (normalizePathForCompare(p.cwd) !== normalizePathForCompare(ctx.cwd)) return false;
+  }
+  return true;
 }
 
 /**
@@ -265,6 +325,9 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // codex は rollout filename を CLI 側が自動採番し session-id 固定 flag が
     // 無いため pin 不可。 従来どおり mtime discover に委譲する。
     supportsSessionPin: false,
+    // 全セッション共有の ~/.codex/sessions/ から自分の候補を絞る先頭行フィルタ
+    // (cwd 一致 + `codex exec` rollout 除外)。 crosstalk 対策の本体。
+    transcriptMetaAccepts: codexTranscriptMetaAccepts,
   },
   gemini: {
     name: "gemini",

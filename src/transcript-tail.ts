@@ -27,6 +27,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readSync,
   statSync,
   unlinkSync,
   utimesSync,
@@ -49,7 +50,14 @@ import { stripAskBlock } from "./ask-json.js";
 const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
 const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
-const STALE_CLAIM_MS = 60 * 60 * 1000; // 1h 経った claim は wrapper クラッシュ残骸とみなす
+// stale claim (wrapper クラッシュ残骸) の判定閾値。 active な wrapper は poll (500ms)
+// 毎に refreshClaim で mtime を打ち直すので、 5 分無更新 = 所有者は生きていない。
+// 旧値 1h は「クラッシュ後の再起動が同じ JSONL を 1 時間掴めず中継不能」 かつ
+// 「候補枯渇で誤掴みフォールバックを誘発」 する副作用が大きかった。 env override 可。
+const STALE_CLAIM_MS = ((): number => {
+  const v = Number(process.env.LICTOR_STALE_CLAIM_MS ?? "");
+  return Number.isFinite(v) && v > 0 ? v : 5 * 60 * 1000;
+})();
 
 // relay スタール検知 watchdog の猶予。 セッションが active なのにこの時間を超えて
 // frame を 1 つも送れない (= 束縛先が見失われた / ローテートで死んだファイルを掴み続け
@@ -83,6 +91,29 @@ const CLAIM_DEBUG = process.env.LICTOR_DEBUG_TRANSCRIPT !== "0";
 function claimDbg(msg: string): void {
   if (!CLAIM_DEBUG) return;
   try { process.stderr.write(`[verbose-transcript] ${msg}\n`); } catch { /* best-effort */ }
+}
+
+/**
+ * JSONL の先頭行 (最大 maxBytes) を読む。 provider の transcriptMetaAccepts に
+ * 渡すメタ判定専用で、 読めなければ null (判定不能 = フィルタは fail-open)。
+ */
+export function readTranscriptFirstLine(path: string, maxBytes = 8192): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    const buf = Buffer.alloc(maxBytes);
+    const n = readSync(fd, buf, 0, maxBytes, 0);
+    if (n <= 0) return null;
+    const text = buf.subarray(0, n).toString("utf8");
+    const nl = text.indexOf("\n");
+    return nl >= 0 ? text.slice(0, nl) : text;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* best-effort */ }
+    }
+  }
 }
 
 /** claim file の mtime を now に更新し stale 化を防ぐ (active 中は剥がされない). best-effort. */
@@ -272,6 +303,20 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     };
   }
 
+  // provider の先頭行メタ判定 (codex: cwd 一致 + `codex exec` rollout 除外)。
+  // フィルタ未定義 provider / 先頭行が読めない・形式不明の場合は許可し、 従来どおり
+  // claim ガードに委ねる (fail-open)。 claim より先に判定して、 別セッションの
+  // ファイルへ claim を置いてしまう副作用ごと避ける。
+  const candidateAccepted = (path: string): boolean => {
+    const accepts = opts.provider.transcriptMetaAccepts;
+    if (!accepts) return true;
+    const first = readTranscriptFirstLine(path);
+    if (first === null) return true;
+    if (accepts(first, { cwd: opts.cwd })) return true;
+    claimDbg(`candidate rejected by meta filter path=${path} owner=${opts.sessionId}`);
+    return false;
+  };
+
   // 同 cwd で複数 lictor wrapper が並走するとき、 mtime 最新だけで pick すると
   // 全 wrapper が同じ jsonl を読んで「他セッションの transcript を自分の session_id
   // で Concordia に送る」 race を起こす. 結果として AI 応答が別 channel に混在する.
@@ -328,6 +373,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     });
     candidates.sort((a, b) => b.mtime - a.mtime);
     for (const c of candidates) {
+      if (!candidateAccepted(c.path)) continue;
       const cp = tryClaimJsonl(c.path, STALE_CLAIM_MS, opts.sessionId);
       if (cp) {
         claimPath = cp;
@@ -473,6 +519,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       startedAt,
     });
     for (const c of candidates) {
+      if (!candidateAccepted(c.path)) continue;
       const cp = tryClaimJsonl(c.path, STALE_CLAIM_MS, opts.sessionId);
       if (!cp) continue;
       if (claimPath) { try { unlinkSync(claimPath); } catch { /* best-effort */ } }
@@ -718,7 +765,9 @@ export function readRecentFromFile(
 /**
  * 1 つの jsonl について `<path>.lictor-claim` を atomic create で取りに行く.
  * 取れたら claim path を返す. 既に他 wrapper が claim 済 or race で取れなかった
- * 場合は null. 1h 以上経った stale claim は wrapper crash 残骸とみなして剥がす.
+ * 場合は null. STALE_CLAIM_MS (既定 5 分) 以上 mtime 更新の無い stale claim は
+ * wrapper crash 残骸とみなして剥がす (active な所有者は poll 毎に refreshClaim で
+ * mtime を打ち直しているため誤って剥がれない).
  *
  * 純関数なので unit test で複数 wrapper の race を simulation できる.
  */
