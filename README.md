@@ -234,7 +234,7 @@ lictor cli skill delete my-skill
 
 ## Migration from raw Concordia hooks
 
-Existing hooks that call Concordia directly (`curl http://127.0.0.1:17330/...`)
+Existing hooks that call Concordia directly (`curl http://127.0.0.1:11111/...`)
 keep working in lictor-wrapped sessions, but they're now redundant:
 
 | Old hook                          | New hook                                    |
