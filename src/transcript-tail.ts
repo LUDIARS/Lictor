@@ -278,10 +278,15 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   let relayUnresolvedWarned = false;
   const startedAt = Date.now();
   // watchdog: 最後に「束縛できた / 新バイトを読めた」 時刻。 これが STALL_RECOVERY_MS
-  // 以上更新されず、 かつ session active なら relay スタールとみなして mtime 再発見する。
+  // 以上更新されず、 かつ session active なら relay スタールとみなして取り直す。
   let lastProgressAt = Date.now();
-  // 再発見の連打を防ぐ throttle (候補ゼロのときに毎 poll で dir 全 walk しないため)。
-  let lastRecoveryAt = 0;
+  // codex (pin 不可 + hook 権威なし) の session_id 施錠キー。 初回束縛で
+  // session_meta.session_id を読んで記録し、 以後この id を持つ rollout 以外には
+  // 一切紐づけない (鉄のルール: mtime 推測での再束縛を排し crosstalk を構造排除)。
+  let boundSessionId: string | null = null;
+  // 束縛を拒否 (同 cwd 並走で曖昧 / 施錠喪失) したとき、 中継が黙って止まらないよう
+  // fail-loud する。 bind 成功でリセットし、 次の異常でまた 1 度鳴らせる。
+  let codexFailLoudWarned = false;
   // AskUserQuestion の tool_use id → Concordia の question_id。picker がローカル回答で
   // 解決した（tool_result 検知）とき、Concordia に resolve 通知して古いボタンを失効させる。
   const questionIdByToolUse = new Map<string, number>();
@@ -317,20 +322,80 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     return false;
   };
 
-  // 同時起動レース緩和: provider が先頭メタから開始時刻を読めるなら、 mtime 降順ではなく
-  // 「wrapper 起動時刻に最も近い開始時刻」 順で候補を試す。 2 つの codex がほぼ同時に
-  // 起動しても、 各 wrapper は自分の起動に時刻が寄っている rollout を先に claim しに行く
-  // ため、 隣のファイルを先取りする確率が下がる (最終ガードは従来どおり claim)。
-  const orderByStartAffinity = (candidates: { path: string; mtime: number }[]): { path: string; mtime: number }[] => {
-    const readStart = opts.provider.transcriptMetaStartedAt;
-    if (!readStart) return candidates;
-    return candidates
-      .map((c) => {
-        const first = readTranscriptFirstLine(c.path);
-        const headTs = first === null ? null : readStart(first);
-        return { ...c, affinity: headTs === null ? Number.MAX_SAFE_INTEGER : Math.abs(headTs - startedAt) };
-      })
-      .sort((a, b) => a.affinity - b.affinity || b.mtime - a.mtime);
+  // codex 束縛を拒否したときの fail-loud (沈黙死禁止)。 曖昧 (同 cwd 並走) /
+  // 施錠喪失で「掴まない」 判断をしたことを stderr に 1 度出す。 まだ発話されていない
+  // アイドルは正常なので鳴らさない。
+  const warnCodexFailLoud = (detail: string): void => {
+    if (codexFailLoudWarned) return;
+    if (opts.isSessionActive && !opts.isSessionActive()) return;
+    codexFailLoudWarned = true;
+    try {
+      process.stderr.write(`lictor: codex transcript relay held — ${detail}\n`);
+    } catch { /* best-effort */ }
+  };
+
+  // 束縛先パスを差し替える共通処理 (offset/pending を初期化し watchdog grace をリセット)。
+  const bindPath = (path: string): void => {
+    jsonlPath = path;
+    offset = 0;
+    pending = "";
+    lastProgressAt = Date.now();
+  };
+
+  // codex (pin 不可 + hook 権威なし) の discover。 session_id 施錠が唯一の束縛キーで、
+  // mtime は「同一 session_id の分割 rollout の新しい方を採る」 ためだけに使う
+  // (別 session_id を掴む余地は無いので crosstalk が構造的に起きない)。
+  //
+  //   - 未施錠 (初回): accepts (cwd/exec/head-ts) を通り session_id が読める候補が
+  //     「ちょうど 1 件」 のときだけ束縛し、 その id を施錠する。 0 件 → 待つ。
+  //     2 件以上 (同 cwd 並走) → **掴まず fail-loud** (誤掴みするより中継を止める)。
+  //   - 施錠済: session_id 一致の rollout だけを対象にする。 一致 0 件なら束縛喪失として
+  //     fail-loud し、 別 session_id へは絶対に降りない (フォールバック禁止)。
+  const discoverCodex = (): string | null => {
+    type C = { path: string; sessionId: string | null; mtime: number };
+    const candidates: C[] = [];
+    walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => {
+      // 過去セッションの継承を防ぐ recency 下限 (mtime は選択には使わない)。
+      if (st.mtimeMs < startedAt - 5_000) return;
+      if (!candidateAccepted(p)) return; // cwd / exec / head-ts
+      const first = readTranscriptFirstLine(p);
+      const sid = first ? opts.provider.transcriptMetaSessionId?.(first) ?? null : null;
+      candidates.push({ path: p, sessionId: sid, mtime: st.mtimeMs });
+    });
+
+    if (boundSessionId) {
+      const matches = candidates
+        .filter((c) => c.sessionId === boundSessionId)
+        .sort((a, b) => b.mtime - a.mtime);
+      if (matches.length === 0) {
+        warnCodexFailLoud(`bound session_id=${boundSessionId} rollout not found; relay held (no mtime fallback)`);
+        return null;
+      }
+      const best = matches[0].path;
+      if (best === jsonlPath) return best; // 既に束縛中 (claim 保持済)
+      const cp = tryClaimJsonl(best, STALE_CLAIM_MS, opts.sessionId);
+      if (!cp) return null;
+      if (claimPath) { try { unlinkSync(claimPath); } catch { /* best-effort */ } }
+      claimPath = cp;
+      return best;
+    }
+
+    const decision = decideCodexInitialBind(candidates);
+    if (decision.action === "wait") return null;
+    if (decision.action === "ambiguous") {
+      warnCodexFailLoud(
+        `${decision.paths.length} concurrent codex rollouts in this cwd; refusing to bind ` +
+          `(crosstalk guard, no guess). paths=${decision.paths.join(", ")}`,
+      );
+      return null;
+    }
+    const cp = tryClaimJsonl(decision.path, STALE_CLAIM_MS, opts.sessionId);
+    if (!cp) return null;
+    claimPath = cp;
+    boundSessionId = decision.sessionId;
+    codexFailLoudWarned = false; // 束縛できた: 次の異常でまた fail-loud できるよう解除
+    claimDbg(`codex bound session_id=${boundSessionId} path=${decision.path} owner=${opts.sessionId}`);
+    return decision.path;
   };
 
   // 同 cwd で複数 lictor wrapper が並走するとき、 mtime 最新だけで pick すると
@@ -364,39 +429,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       return null;
     }
     // pinnedPath が null = まだ束縛先が確定していない。
-    // hook 権威 (lictorTranscriptStatePath) が設定済なら、 maybeRebind が hook の実
-    // transcript_path を束縛するまで待つ。 mtime 推測は別セッションの JSONL を誤掴みする
-    // crosstalk 源なので一切しない (起動直後の hook 未発火の短い間だけここに来る)。 猶予を
-    // 過ぎても解決しなければ pollOnce が fail-loud で表面化する (無言フォールバック禁止)。
+    // hook 権威 (lictorTranscriptStatePath) が設定済 (claude) なら、 maybeRebind が hook の
+    // 実 transcript_path を束縛するまで待つ。 mtime 推測は crosstalk 源なので一切しない。
     if (opts.lictorTranscriptStatePath) return null;
-    // hook 権威なし (SessionStart hook 非対応 provider: codex/gemini/famulus)。 従来の mtime discover。
+    // hook 権威なし & pin 不可 (codex 等): session_id 施錠で discover する。
     if (!existsSync(dir)) return null;
-    type Candidate = { path: string; mtime: number };
-    const candidates: Candidate[] = [];
-    walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => {
-      const mtimeMs = st.mtimeMs;
-      // Only consider files touched after lictor started (avoids resuming
-      // old sessions that happen to live in the same project dir).
-      //
-      // 旧実装は `Date.now() - mtimeMs > 30s` で「最近 30 秒以内に touch された
-      // ものに限る」 上限フィルタも持っていたが、 wrapped CLI がユーザ操作待ちで
-      // 何分も idle した後に初発話するケース (claude のセッション開始直後 +
-      // 数分黙考、 等) でも jsonl が生成された瞬間に拾えるよう撤廃した.
-      // 下限 (startedAt - 5s) だけで「過去のセッションの jsonl を誤って継承
-      // しない」 という本来の目的は満たせる。
-      if (mtimeMs < startedAt - 5_000) return;
-      candidates.push({ path: p, mtime: mtimeMs });
-    });
-    candidates.sort((a, b) => b.mtime - a.mtime);
-    for (const c of orderByStartAffinity(candidates)) {
-      if (!candidateAccepted(c.path)) continue;
-      const cp = tryClaimJsonl(c.path, STALE_CLAIM_MS, opts.sessionId);
-      if (cp) {
-        claimPath = cp;
-        return c.path;
-      }
-    }
-    return null;
+    return discoverCodex();
   };
 
   // SessionStart hook (起動 / `/clear` / resume / compact で発火) が報告する実
@@ -462,26 +500,21 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     } catch { /* best-effort */ }
   };
 
-  // stall 復帰 / 手動 repin のディスパッチャ。 hook 権威 (claude) と mtime discover
-  // (権威なし provider: codex/gemini/famulus) で経路を分ける。
+  // stall 復帰 / 手動 repin のディスパッチャ。 どちらの経路も mtime 推測での
+  // 別セッション誤掴みを構造的に排除している (鉄のルール: 束縛キーは権威パス or session_id)。
   //
-  //   - hook 権威あり: 権威 transcript_path を真として束縛し直す (recoverByAuthority)。
-  //     mtime 推測は **絶対にしない**。 共有 projects/<cwd> で複数セッションが同居する環境
-  //     (= 親ディレクトリ一括 wrap) では、 mtime 最新の未claim JSONL が「自分のもの」 とは
-  //     限らない。 Concordia の再起動連打で全セッションの relay が同時 stall すると、 各々が
-  //     復帰時に自分の claim を一旦解放してから取り直すため claim の空き窓が生まれ、 newest
-  //     unclaimed を奪い合って **他セッションの生 transcript を自分の session_id で中継** して
-  //     しまう (= 別 channel に発話が混在する crosstalk、 本番実害 2026-06-30 の再発経路)。
-  //     権威パスは「このセッションの実ファイル」 を一意に指すので、 これだけに束縛すれば
-  //     mass-stall でも誤掴みが構造的に起きない。 maybeRebind の existsSync ガードで phantom
-  //     束縛による停止も既に塞いであるため、 mtime last-resort は claude には不要かつ有害。
+  //   - hook 権威あり (claude): 権威 transcript_path を真として束縛し直す (recoverByAuthority)。
+  //     mtime 推測は **絶対にしない**。 共有 projects/<cwd> で複数セッションが同居しても、
+  //     権威パスは「このセッションの実ファイル」 を一意に指すので誤掴みが起きない。
   //
-  //   - hook 権威なし: 従来の claim ガード付き mtime discover (recoverByMtime)。
-  //     codex/gemini/famulus は SessionStart hook の transcript_path 報告機構を持たないため、
-  //     stall 復帰は mtime に頼らざるを得ない (claim が唯一の anti-crosstalk ガード)。
+  //   - hook 権威なし + session_id 読取り可 (codex): session_id 施錠のまま同一 id の
+  //     rollout を取り直す (recoverCodexLocked)。 別 session_id へは絶対に降りない。
+  //   - pin のみ (hook 無し claude / メタ無し provider): pin へ束縛し直すだけ
+  //     (recoverByPin)。 いずれの経路も mtime 推測での誤掴みが構造的に起きない。
   const recoverRelay = (force = false): { ok: boolean; path: string | null } => {
     if (opts.lictorTranscriptStatePath) return recoverByAuthority();
-    return recoverByMtime(force);
+    if (opts.provider.transcriptMetaSessionId) return recoverCodexLocked();
+    return recoverByPin();
   };
 
   // hook 権威ありの stall 復帰: 権威 transcript_path (SessionStart hook が書く実パス) を
@@ -512,43 +545,38 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     return { ok: true, path: want };
   };
 
-  // watchdog 本体 (hook 権威なし provider 専用): claim ガード付き mtime discover で生
-  // transcript を取り直して re-pin。 claim が anti-crosstalk を担保するので、 他 wrapper が
-  // active に掴んでいる JSONL は避け、 自分の cwd 配下で最も新しい未claim ファイル
-  // (= /clear 後の生 transcript or 起動後の実体) を掴む。 force=true (手動 /v1/repin) では
-  // throttle と grace を無視して即取り直す。 hook 権威あり provider はここを通らない
-  // (recoverByAuthority 経由。 mtime 誤掴みによる crosstalk を避けるため)。
-  const recoverByMtime = (force = false): { ok: boolean; path: string | null } => {
+  // codex の stall 復帰 / 手動 repin: session_id 施錠のまま同一 id の rollout を
+  // discoverCodex で取り直すだけ。 mtime 推測で別 session_id を掴む経路は持たない
+  // (crosstalk 構造排除)。 施錠済で同一 id が見つかればそこへ束縛し直し、 見つからなければ
+  // discoverCodex 内で fail-loud する (別 id へは降りない)。 未施錠なら初回束縛を再試行する。
+  const recoverCodexLocked = (): { ok: boolean; path: string | null } => {
     if (!dir || !existsSync(dir)) return { ok: false, path: jsonlPath };
-    const now = Date.now();
-    if (!force && now - lastRecoveryAt < STALL_RECOVERY_MS) return { ok: false, path: jsonlPath };
-    lastRecoveryAt = now;
-    let curMtime = 0;
-    if (jsonlPath) {
-      try { curMtime = statSync(jsonlPath).mtimeMs; } catch { curMtime = 0; }
-    }
-    const files: { path: string; mtime: number }[] = [];
-    walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => files.push({ path: p, mtime: st.mtimeMs }));
-    const candidates = chooseRecoveryCandidates(files, {
-      currentPath: jsonlPath,
-      currentMtime: curMtime,
-      startedAt,
-    });
-    for (const c of orderByStartAffinity(candidates)) {
-      if (!candidateAccepted(c.path)) continue;
-      const cp = tryClaimJsonl(c.path, STALE_CLAIM_MS, opts.sessionId);
-      if (!cp) continue;
-      if (claimPath) { try { unlinkSync(claimPath); } catch { /* best-effort */ } }
-      claimPath = cp;
-      pinnedPath = c.path; // 以後の権威。 hook が実在パスを再報告すれば maybeRebind が更に乗り換える。
-      jsonlPath = c.path;
-      offset = 0;
-      pending = "";
-      lastProgressAt = Date.now();
-      claimDbg(`stall-recovery rebind to ${c.path} owner=${opts.sessionId} force=${force}`);
-      return { ok: true, path: c.path };
+    const found = discoverCodex();
+    if (found && found !== jsonlPath) {
+      bindPath(found);
+      claimDbg(`codex stall-recovery rebind to ${found} owner=${opts.sessionId}`);
+      return { ok: true, path: found };
     }
     return { ok: false, path: jsonlPath };
+  };
+
+  // pin のみ (hook 権威なし claude / メタ無し provider) の stall 復帰 / 手動 repin。
+  // 束縛先は起動時の pin で確定しているので、 mtime 推測は一切せず pin が実在すれば
+  // そこへ束縛し直すだけ (別 JSONL を推測で掴まない = crosstalk なし)。 pin が現束縛と
+  // 同じなら何もしない (stall は外的要因)。
+  const recoverByPin = (): { ok: boolean; path: string | null } => {
+    if (!pinnedPath || !existsSync(pinnedPath)) return { ok: false, path: jsonlPath };
+    if (pinnedPath === jsonlPath) {
+      lastProgressAt = Date.now();
+      return { ok: false, path: jsonlPath };
+    }
+    const cp = tryClaimJsonl(pinnedPath, STALE_CLAIM_MS, opts.sessionId);
+    if (!cp) return { ok: false, path: jsonlPath };
+    if (claimPath) { try { unlinkSync(claimPath); } catch { /* best-effort */ } }
+    claimPath = cp;
+    bindPath(pinnedPath);
+    claimDbg(`stall-recovery (pin) rebind to ${pinnedPath} owner=${opts.sessionId}`);
+    return { ok: true, path: pinnedPath };
   };
 
   // poll から呼ぶ自動 watchdog: session active かつ STALL_RECOVERY_MS 進捗ゼロなら再束縛。
@@ -567,7 +595,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       jsonlPath = discover();
       if (!jsonlPath) {
         warnIfRelayUnresolved();
-        maybeRecover(); // hook 権威でも active なら mtime で取り直す (/clear 不要の自己修復)。
+        maybeRecover(); // active なら取り直す (claude=権威パス / codex=同一 session_id のみ)。
         return;
       }
       offset = 0;
@@ -684,6 +712,9 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   timer.unref?.();
 
   const getSessionUuid = (): string | null => {
+    // codex は施錠済 session_meta.session_id が最も権威ある id。 それ以外 (claude 等) は
+    // 従来どおり束縛中ファイル名から抽出する。
+    if (boundSessionId) return boundSessionId;
     if (!jsonlPath) return null;
     const slash = jsonlPath.lastIndexOf("/");
     const back = jsonlPath.lastIndexOf("\\");
@@ -709,27 +740,39 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   };
 }
 
+/** codex 初回束縛の候補 (path と、 その rollout の session_meta.session_id)。 */
+export interface CodexBindCandidate {
+  path: string;
+  sessionId: string | null;
+}
+
+/** {@link decideCodexInitialBind} の判定結果。 */
+export type CodexBindDecision =
+  | { action: "bind"; path: string; sessionId: string }
+  | { action: "wait" }
+  | { action: "ambiguous"; paths: string[] };
+
 /**
- * stall-recovery / 手動 repin の候補選定 (純関数, test 対象)。
- * 与えられた JSONL 一覧から、 取り直し対象を「新しい順」で返す:
- *   - lictor 起動より前 (startedAt-5s) のファイルは過去セッションなので除外。
- *   - 現束縛中のファイル自身は除外 (それを掴み続けても進まないため)。
- *   - 現束縛がある (bound) ときは、 それより厳密に新しいものだけ (アイドル中の正しい束縛を
- *     古いファイルへ巻き戻さない)。 未束縛 (currentPath=null) のときは全ての候補を許可。
- * 実際の claim 取得は呼び出し側 (tryClaimJsonl) が anti-crosstalk ガードとして行う。
+ * codex の初回束縛の決定 (純関数, test 対象)。 accepts フィルタ (cwd/exec/head-ts) を
+ * 通過済の候補から、 session_id を束縛キーとして決める:
+ *
+ *   - session_meta.session_id が読める候補が 0 件 → `wait` (まだ自分の rollout が
+ *     現れていない、 or メタ未書き込み)。
+ *   - ちょうど 1 件 → `bind` (その session_id を施錠する)。
+ *   - 2 件以上 → `ambiguous` (同 cwd で codex が並走)。 呼び出し側は **掴まず fail-loud**
+ *     する。 mtime 等で 1 件を推測して選ぶと別セッションを誤掴みして crosstalk になるため、
+ *     「混戦を出すくらいなら中継を止める」 を選ぶ (鉄のルール: 曖昧なら束縛しない)。
+ *
+ * session_id が読めない候補 (メタ未書き込み / 形式不明) は束縛キーを持たないため、
+ * 判定母集団から除外する (施錠できないファイルには紐づけない)。
  */
-export function chooseRecoveryCandidates(
-  files: { path: string; mtime: number }[],
-  opts: { currentPath: string | null; currentMtime: number; startedAt: number },
-): { path: string; mtime: number }[] {
-  return files
-    .filter((f) => {
-      if (f.mtime < opts.startedAt - 5_000) return false;
-      if (f.path === opts.currentPath) return false;
-      if (opts.currentPath && f.mtime <= opts.currentMtime) return false;
-      return true;
-    })
-    .sort((a, b) => b.mtime - a.mtime);
+export function decideCodexInitialBind(candidates: CodexBindCandidate[]): CodexBindDecision {
+  const withId = candidates.filter(
+    (c): c is { path: string; sessionId: string } => typeof c.sessionId === "string" && c.sessionId.length > 0,
+  );
+  if (withId.length === 0) return { action: "wait" };
+  if (withId.length === 1) return { action: "bind", path: withId[0].path, sessionId: withId[0].sessionId };
+  return { action: "ambiguous", paths: withId.map((c) => c.path) };
 }
 
 /**

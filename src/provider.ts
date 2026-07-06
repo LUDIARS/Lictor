@@ -154,9 +154,18 @@ export interface ProviderConfig {
   transcriptMetaAccepts?: (firstLine: string, ctx: { cwd: string; startedAtMs?: number }) => boolean;
 
   /**
+   * 先頭メタ行から provider ネイティブの session id を読む ({@link supportsSessionPin}
+   * が false の provider 向け)。 codex は `--session-id` 相当の pin フラグを持たないため、
+   * transcript-tail は初回束縛でこの session id を読んで **施錠** し、 以後この id を持つ
+   * rollout 以外には一切紐づけない。 これで mtime 推測による別セッション JSONL の誤掴み
+   * (= 別 channel に発話が混在する crosstalk) を構造的に排除する。 読めなければ null。
+   */
+  transcriptMetaSessionId?: (firstLine: string) => string | null;
+
+  /**
    * 先頭メタ行からそのセッションの開始時刻 (epoch ms) を読む。 定義されている
-   * provider は discover 時に「wrapper 起動時刻に最も近い開始時刻のファイル」 を
-   * 優先して束縛する (同時起動レースの誤掴み緩和)。 読めなければ null。
+   * provider は候補フィルタ (head-ts) で「wrapper 起動より前の別セッション」 を除外する
+   * のに使う。 読めなければ null。
    */
   transcriptMetaStartedAt?: (firstLine: string) => number | null;
 }
@@ -245,6 +254,31 @@ export function codexTranscriptMetaStartedAt(firstLine: string): number | null {
   if (!ts) return null;
   const ms = new Date(ts).getTime();
   return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * Codex rollout 先頭行の `session_meta` から provider ネイティブの session id を返す。
+ * transcript-tail の「session_id 施錠」 の唯一の束縛キー。 payload / トップレベルの
+ * どちらに載る形式でも読めるよう両方を見る。 session_meta 以外の行 / parse 不能 /
+ * id 欠落なら null (= 施錠キー無し → 束縛不能)。
+ */
+export function codexTranscriptMetaSessionId(firstLine: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(firstLine);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const rec = parsed as Record<string, unknown>;
+  if (rec.type !== "session_meta") return null;
+  const payload = typeof rec.payload === "object" && rec.payload !== null
+    ? (rec.payload as Record<string, unknown>)
+    : null;
+  for (const value of [payload?.session_id, payload?.id, rec.session_id, rec.id]) {
+    if (typeof value === "string" && value.trim().length > 0) return value;
+  }
+  return null;
 }
 
 /**
@@ -373,11 +407,14 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     transcriptDir: codexTranscriptDir,
     extractSessionId: extractUuid,
     // codex は rollout filename を CLI 側が自動採番し session-id 固定 flag が
-    // 無いため pin 不可。 従来どおり mtime discover に委譲する。
+    // 無いため事前 pin 不可。 transcript-tail は初回に session_meta.session_id を
+    // 読んで施錠し、 以後その id の rollout だけを tail する (mtime 推測の排除)。
     supportsSessionPin: false,
     // 全セッション共有の ~/.codex/sessions/ から自分の候補を絞る先頭行フィルタ
-    // (cwd 一致 + `codex exec` rollout 除外)。 crosstalk 対策の本体。
+    // (cwd 一致 + `codex exec` rollout 除外 + head-ts)。 初回束縛の母集団を絞る。
     transcriptMetaAccepts: codexTranscriptMetaAccepts,
+    // 施錠キー。 これが読めない候補は「束縛不能」 として初回束縛から除外する。
+    transcriptMetaSessionId: codexTranscriptMetaSessionId,
     transcriptMetaStartedAt: codexTranscriptMetaStartedAt,
   },
   gemini: {
