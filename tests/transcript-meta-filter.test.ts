@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { codexTranscriptMetaAccepts, codexTranscriptMetaStartedAt, normalizePathForCompare, PROVIDERS } from "../src/provider.js";
+import { codexTranscriptMetaAccepts, codexTranscriptMetaSessionId, codexTranscriptMetaStartedAt, normalizePathForCompare, PROVIDERS } from "../src/provider.js";
 import { readTranscriptFirstLine } from "../src/transcript-tail.js";
 
 const CWD = "E:/Document/Ars";
@@ -103,6 +103,32 @@ test("codexTranscriptMetaStartedAt: payload.timestamp 優先、トップレベ�
 
 test("codex provider wires transcriptMetaStartedAt", () => {
   assert.equal(PROVIDERS.codex.transcriptMetaStartedAt, codexTranscriptMetaStartedAt);
+});
+
+// ─── codexTranscriptMetaSessionId: session_id 施錠キーの読み取り ───────────
+test("codexTranscriptMetaSessionId: payload.session_id を読む", () => {
+  assert.equal(codexTranscriptMetaSessionId(metaLine({ session_id: "abc-123", cwd: CWD })), "abc-123");
+});
+
+test("codexTranscriptMetaSessionId: payload.id / トップレベル session_id / id にも fallback", () => {
+  assert.equal(codexTranscriptMetaSessionId(metaLine({ id: "pid-1", cwd: CWD })), "pid-1");
+  assert.equal(
+    codexTranscriptMetaSessionId(JSON.stringify({ type: "session_meta", session_id: "top-1", payload: { cwd: CWD } })),
+    "top-1",
+  );
+});
+
+test("codexTranscriptMetaSessionId: session_meta 以外 / parse 不能 / id 欠落は null", () => {
+  assert.equal(codexTranscriptMetaSessionId("not-json{"), null);
+  assert.equal(codexTranscriptMetaSessionId(JSON.stringify({ type: "message", payload: { session_id: "x" } })), null);
+  assert.equal(codexTranscriptMetaSessionId(metaLine({ cwd: CWD })), null);
+});
+
+test("codex provider wires transcriptMetaSessionId; claude/gemini は施錠キー無し", () => {
+  assert.equal(PROVIDERS.codex.transcriptMetaSessionId, codexTranscriptMetaSessionId);
+  // claude は pin (--session-id) で構造的に守られるので session_meta 施錠は不要。
+  assert.equal(PROVIDERS.claude.transcriptMetaSessionId, undefined);
+  assert.equal(PROVIDERS.gemini.transcriptMetaSessionId, undefined);
 });
 
 test("readTranscriptFirstLine: 先頭行のみ返す / 無ファイルは null", () => {
