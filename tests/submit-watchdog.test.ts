@@ -4,25 +4,30 @@ import { createSubmitWatchdog } from "../src/submit-watchdog.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-test("submit-watchdog: arm 後 timeout で \\r を 1 回送る", async () => {
+test("submit-watchdog: keeps sending Enter until a user message is observed", async () => {
   const writes: string[] = [];
-  const wd = createSubmitWatchdog({ write: (d) => writes.push(d), timeoutMs: 20 });
+  const wd = createSubmitWatchdog({ write: (d) => writes.push(d), timeoutMs: 15 });
   wd.arm();
-  await sleep(50);
-  assert.deepEqual(writes, ["\r"]);
+  await sleep(55);
+  wd.noteUserMessage();
+  const countAtStop = writes.length;
+  await sleep(35);
+  assert.ok(countAtStop >= 2, `expected repeated writes, got ${countAtStop}`);
+  assert.equal(writes.length, countAtStop);
+  assert.deepEqual(writes, Array.from({ length: writes.length }, () => "\r"));
 });
 
-test("submit-watchdog: noteUserMessage で武装解除すると \\r を送らない", async () => {
+test("submit-watchdog: noteUserMessage cancels before first Enter", async () => {
   const writes: string[] = [];
   const wd = createSubmitWatchdog({ write: (d) => writes.push(d), timeoutMs: 30 });
   wd.arm();
   await sleep(10);
-  wd.noteUserMessage(); // submit 成立 (user フレーム観測)
+  wd.noteUserMessage();
   await sleep(40);
   assert.deepEqual(writes, []);
 });
 
-test("submit-watchdog: timeoutMs<=0 は無効化 (arm しても送らない)", async () => {
+test("submit-watchdog: timeoutMs<=0 disables watchdog", async () => {
   const writes: string[] = [];
   const wd = createSubmitWatchdog({ write: (d) => writes.push(d), timeoutMs: 0 });
   wd.arm();
@@ -30,17 +35,18 @@ test("submit-watchdog: timeoutMs<=0 は無効化 (arm しても送らない)", a
   assert.deepEqual(writes, []);
 });
 
-test("submit-watchdog: 連続 arm は最後の 1 本だけ生き、 \\r は 1 回", async () => {
+test("submit-watchdog: consecutive arm keeps a single retry loop", async () => {
   const writes: string[] = [];
   const wd = createSubmitWatchdog({ write: (d) => writes.push(d), timeoutMs: 25 });
   wd.arm();
   await sleep(10);
-  wd.arm(); // 張り直し
-  await sleep(45);
-  assert.deepEqual(writes, ["\r"]);
+  wd.arm();
+  await sleep(40);
+  wd.noteUserMessage();
+  assert.equal(writes.length, 1);
 });
 
-test("submit-watchdog: stop で保留タイマーを止める", async () => {
+test("submit-watchdog: stop clears pending retry loop", async () => {
   const writes: string[] = [];
   const wd = createSubmitWatchdog({ write: (d) => writes.push(d), timeoutMs: 20 });
   wd.arm();
@@ -49,14 +55,17 @@ test("submit-watchdog: stop で保留タイマーを止める", async () => {
   assert.deepEqual(writes, []);
 });
 
-test("submit-watchdog: write が throw しても握り潰す", async () => {
+test("submit-watchdog: write errors are swallowed and retries continue", async () => {
+  let attempts = 0;
   const wd = createSubmitWatchdog({
     write: () => {
+      attempts += 1;
       throw new Error("pty gone");
     },
     timeoutMs: 15,
   });
   wd.arm();
-  await sleep(35); // throw が unhandled にならず通過すれば OK
-  assert.ok(true);
+  await sleep(35);
+  wd.stop();
+  assert.ok(attempts >= 1);
 });

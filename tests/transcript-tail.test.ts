@@ -131,7 +131,16 @@ test("lineToFrame: codex event_msg.agent_message → text frame (assistant)", ()
     type: "event_msg",
     payload: { type: "agent_message", message: "了解しました", phase: "commentary" },
   }));
-  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "了解しました" } });
+  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "了解しました", phase: "commentary" } });
+});
+
+test("lineToFrame: codex event_msg.agent_message keeps final_answer phase", () => {
+  const f = lineToFrame(JSON.stringify({
+    timestamp: "2026-07-08T07:00:00.000Z",
+    type: "event_msg",
+    payload: { type: "agent_message", message: "done", phase: "final_answer" },
+  }));
+  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "done", phase: "final_answer" } });
 });
 
 test("lineToFrame: codex response_item.message(role=user,input_text) → text frame", () => {
@@ -158,7 +167,7 @@ test("lineToFrame: codex response_item.message(role=assistant,output_text) → t
       phase: "commentary",
     },
   }));
-  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "AIの出力" } });
+  assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "AIの出力", phase: "commentary" } });
 });
 
 test("lineToFrame: codex response_item.reasoning → thinking frame", () => {

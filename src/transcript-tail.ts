@@ -1002,7 +1002,11 @@ export function lineToFrame(line: string): Frame | null {
       return { kind: "text", payload: { role: "user", text: p.message.slice(0, 4000) } };
     }
     if (pType === "agent_message" && typeof p.message === "string") {
-      return { kind: "text", payload: { role: "assistant", text: p.message.slice(0, 4000) } };
+      const phase = typeof p.phase === "string" ? p.phase : undefined;
+      return {
+        kind: "text",
+        payload: { role: "assistant", text: p.message.slice(0, 4000), ...(phase ? { phase } : {}) },
+      };
     }
     // task_started, tool_call, etc. は raw 扱い (将来必要なら拡張).
   }
@@ -1017,7 +1021,13 @@ export function lineToFrame(line: string): Frame | null {
       const role = normalizeCodexRole(p.role);
       if (role) {
         const text = extractCodexMessageText(p.content);
-        if (text) return { kind: "text", payload: { role, text: text.slice(0, 4000) } };
+        if (text) {
+          const phase = typeof p.phase === "string" ? p.phase : undefined;
+          return {
+            kind: "text",
+            payload: { role, text: text.slice(0, 4000), ...(phase ? { phase } : {}) },
+          };
+        }
       }
     }
     if (pType === "reasoning") {

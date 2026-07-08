@@ -857,6 +857,30 @@ export function applyAutoTitle(ctx: SidecarContext, stat: ReturnType<typeof gath
   }
 }
 
+const SESSION_CONTEXT_SKILL_NAME = "lictor-session-context";
+
+function syncSessionContextSkill(injector: SkillInjector, cwd: string): void {
+  try {
+    const memDir = memoryDirForCwd(cwd);
+    const repoLeaf = repoLeafFromCwd(cwd);
+    const matches = findRepoMemories(memDir, repoLeaf, 3);
+    if (matches.length === 0) {
+      injector.deleteSkill(SESSION_CONTEXT_SKILL_NAME);
+      return;
+    }
+    injector.writeSkill(
+      SESSION_CONTEXT_SKILL_NAME,
+      renderSkillMd({
+        name: SESSION_CONTEXT_SKILL_NAME,
+        description: `Repo-relevant memory matches for ${repoLeaf} (lictor-scoped, this session only)`,
+        body: renderMemoryDigest(matches),
+      }),
+    );
+  } catch (err) {
+    process.stderr.write(`lictor: skill seed (memory) failed: ${(err as Error).message}\n`);
+  }
+}
+
 /**
  * Pre-spawn skill seeding. Writes:
  *   - lictor-persona   : Concordia's persona.skill_template (if assigned)
@@ -887,25 +911,7 @@ function seedSkills(injector: SkillInjector, meta: Meta): void {
     }
   }
 
-  // Session-context skill from memories
-  try {
-    const memDir = memoryDirForCwd(meta.cwd);
-    const repoLeaf = repoLeafFromCwd(meta.cwd);
-    const matches = findRepoMemories(memDir, repoLeaf, 3);
-    if (matches.length > 0) {
-      const body = renderMemoryDigest(matches);
-      injector.writeSkill(
-        "lictor-session-context",
-        renderSkillMd({
-          name: "lictor-session-context",
-          description: `Repo-relevant memory matches for ${repoLeaf} (lictor-scoped, this session only)`,
-          body,
-        }),
-      );
-    }
-  } catch (err) {
-    process.stderr.write(`lictor: skill seed (memory) failed: ${(err as Error).message}\n`);
-  }
+  syncSessionContextSkill(injector, meta.cwd);
 
   // session-end skill: provider 横断で「終了処理」 フローを inject.
   // Claude には slash command (`.claude/commands/session-end.md`) があるが、
@@ -971,6 +977,8 @@ async function pollLiveState(ctx: SidecarContext): Promise<void> {
   const activeChanged = activeCwd !== ctx.activeRepoState.lastActive;
   const listChanged = !sameStringList(activeRepos, ctx.activeRepoState.lastList);
   if (activeChanged) {
+    ctx.meta.cwd = activeCwd;
+    if (ctx.injector) syncSessionContextSkill(ctx.injector, activeCwd);
     try {
       await ctx.concordia.patchSession(ctx.sessionId, { repo_path: activeCwd });
       await ctx.concordia.event(ctx.sessionId, {
