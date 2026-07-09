@@ -168,6 +168,23 @@ export interface ProviderConfig {
    * のに使う。 読めなければ null。
    */
   transcriptMetaStartedAt?: (firstLine: string) => number | null;
+
+  /**
+   * transcript **ファイル名の末尾 UUID が Lictor の session id** である
+   * ローカルLLM/Ollama 系 provider を示す (Famulus 等が LICTOR_SESSION_ID を
+   * そのまま `<sessionId>.jsonl` に使う前提)。
+   *
+   * true のとき transcript-tail は起動時に自分の session id ({@link extractSessionId}
+   * で正規化) を施錠キーとして **事前施錠** し、 discoverCodex の施錠済み分岐で
+   * filename UUID が完全一致する 1 ファイルだけを束縛する。 codex と違い
+   * session_meta を読まずに済み、 mtime 推測もしないので、 同一 sessions dir に
+   * 別セッションの JSONL が並んでいても自分のファイルだけを exact bind する
+   * (crosstalk 構造排除)。 stall 復帰も同じ施錠キーで取り直す。
+   *
+   * session id から UUID が抽出できない場合は事前施錠せず、 従来の discoverCodex
+   * 初回束縛 (候補 UUID で決める) に安全フォールバックする。
+   */
+  usesFilenameSessionLock?: boolean;
 }
 
 /**
@@ -394,6 +411,47 @@ function extractUuid(basename: string): string | null {
   return m ? m[1] : null;
 }
 
+/**
+ * ローカルLLM/Ollama 系 provider を作る共通ファクトリ。 runner (Famulus 等) は
+ * `<sessionsDir>/<LICTOR_SESSION_ID>.jsonl` に `{ts, role, content}` 形式の JSONL を
+ * 追記する前提で、 次を共通化する:
+ *
+ *  - SKILL 注入なし / session pin flag なし (runner 側が会話ログ・compaction を持つ)。
+ *  - transcript は {@link usesFilenameSessionLock} で filename UUID を施錠キーにして
+ *    exact bind (mtime 推測なし = crosstalk 構造排除)。
+ *  - Concordia 上の種別は `local-llm`、 inject は単行 write。
+ *
+ * `lineToFrame` の `{role, content}` 分岐が地の文を text/system frame に正規化するので、
+ * ここで作った provider は追加のパーサ無しでそのまま Web/Discord へ中継される。
+ * 別の Ollama 系 runner を足すときはこのファクトリを 1 回呼ぶだけでよい。
+ */
+export function makeLocalLlmProvider(opts: {
+  name: string;
+  binary: string;
+  displayName: string;
+  sessionsDir: (cwd: string) => string;
+  binaryEnvVar?: string;
+  spawnArgs?: string[];
+}): ProviderConfig {
+  return {
+    name: opts.name,
+    binary: opts.binary,
+    binaryEnvVar: opts.binaryEnvVar,
+    spawnArgs: opts.spawnArgs,
+    skillStrategy: "none",
+    supportsSkills: false,
+    concordiaProvider: "local-llm",
+    displayName: opts.displayName,
+    submitInject: submitInjectSingleWrite,
+    transcriptDir: opts.sessionsDir,
+    // ファイル名は `<lictor-session-id>.jsonl`。 末尾 UUID を共通正規表現で抽出する。
+    extractSessionId: extractUuid,
+    supportsSessionPin: false,
+    // 自分の session id を施錠キーにして自分の 1 ファイルだけを束縛する。
+    usesFilenameSessionLock: true,
+  };
+}
+
 export const PROVIDERS: Record<string, ProviderConfig> = {
   claude: {
     name: "claude",
@@ -455,34 +513,28 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // transcript ファイル自体が安定形式で吐かれないため pin 不可 (tail 自体 no-op)。
     supportsSessionPin: false,
   },
-  "gemma4-12": {
-    // ローカル LLM エージェント (既定モデル gemma4:12b)。実体は別リポ Famulus
-    // (@ludiars/famulus、ローカル LLM スポナー) の `famulus run` を pty で起動する。
-    // 旧 `lictor cli local-agent` 内蔵実装からの載せ替え (2026-06-10)。Famulus は
-    // 任意タスクからも再利用される共通スポナー。旧名 `local` は getProvider の
-    // エイリアスで引き続き起動可。
+  // ローカル LLM エージェント (既定モデル gemma4:12b)。実体は別リポ Famulus
+  // (@ludiars/famulus、ローカル LLM スポナー) の `famulus run` を pty で起動する。
+  // 旧 `lictor cli local-agent` 内蔵実装からの載せ替え (2026-06-10)。Famulus は
+  // 任意タスクからも再利用される共通スポナー。旧名 `local` は getProvider の
+  // エイリアスで引き続き起動可。
+  //
+  // Famulus は独自 JSONL (~/.famulus/sessions/<sessionId>.jsonl) に {ts, role, content}
+  // 形式で書く。 sessionId は LICTOR_SESSION_ID (= Concordia session id) を読む
+  // (Lictor が wrap で env export 済) ので、 Lictor は自分の session id を施錠キーにして
+  // 自分の 1 ファイルだけを exact bind できる (usesFilenameSessionLock)。 lineToFrame の
+  // local 分岐が {role, content} を text/system frame 化して Web/Discord に中継する。
+  //
+  // Famulus は Lictor の依存ではなく各マシンに別途入る外部 CLI。 PATH に居ない /
+  // 別所に入れた場合は `LICTOR_FAMULUS_BIN` で spawn 先を差し替える (PATH fallback)。
+  "gemma4-12": makeLocalLlmProvider({
     name: "gemma4-12",
     binary: "famulus",
-    // Famulus は Lictor の依存ではなく各マシンに別途入る外部 CLI。 PATH に居ない /
-    // 別所に入れた場合は `LICTOR_FAMULUS_BIN` で spawn 先を差し替える (PATH fallback)。
     binaryEnvVar: "LICTOR_FAMULUS_BIN",
     spawnArgs: ["run"],
-    // 会話ログ・compaction・hook は Famulus の REPL が持つ。Lictor の SKILL 注入は使わない。
-    skillStrategy: "none",
-    supportsSkills: false,
-    concordiaProvider: "local-llm",
     displayName: "Local LLM (Famulus / Ollama)",
-    submitInject: submitInjectSingleWrite,
-    // Famulus は独自 JSONL (~/.famulus/sessions/<sessionId>.jsonl) に {ts, role, content}
-    // 形式で書く。 transcript-tail がこの dir を mtime discover で tail し、 lineToFrame の
-    // local 分岐で text frame 化して Concordia に中継する (= REPL の応答が Web/Discord に出る)。
-    // Famulus の sessionId は LICTOR_SESSION_ID (= Concordia session id) を後方互換で読むので
-    // 衝突せず discover できる (Lictor が wrap で env export 済)。
-    transcriptDir: () => join(homedir(), ".famulus", "sessions"),
-    // ファイル名は `<lictor-uuid>.jsonl`。 末尾 UUID を共通正規表現で抽出する。
-    extractSessionId: extractUuid,
-    supportsSessionPin: false,
-  },
+    sessionsDir: () => join(homedir(), ".famulus", "sessions"),
+  }),
 };
 
 // 旧 provider 名 → 現行キーのエイリアス。後方互換のためだけに引く。

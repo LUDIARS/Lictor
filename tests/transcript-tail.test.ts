@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, ut
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { lineToFrame, tryClaimJsonl, refreshClaim, readRecentFromFile, startTranscriptTail, decideCodexInitialBind } from "../src/transcript-tail.js";
-import { PROVIDERS } from "../src/provider.js";
+import { PROVIDERS, makeLocalLlmProvider } from "../src/provider.js";
 import { claudeTranscriptStatePath } from "../src/active-repos.js";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
@@ -1139,6 +1139,111 @@ test("startTranscriptTail: pin のみの forceRediscover は mtime 最新 decoy 
       assert.equal(r.path, pathA, "pin (A) に留まる (mtime 最新 B へ乗り換えない)");
       assert.equal(tail.getTranscriptPath(), pathA, "以後も A を tail");
       assert.equal(existsSync(`${pathB}.lictor-claim`), false, "より新しい decoy B は掴まない");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── ローカルLLM/Ollama 汎用化 (usesFilenameSessionLock) ─────────────────────────
+
+test("makeLocalLlmProvider: ローカルLLM共通フィールドを埋める", () => {
+  const p = makeLocalLlmProvider({
+    name: "test-llm",
+    binary: "test-runner",
+    binaryEnvVar: "TEST_RUNNER_BIN",
+    spawnArgs: ["run"],
+    displayName: "Test LLM",
+    sessionsDir: () => "/tmp/test-llm/sessions",
+  });
+  assert.equal(p.name, "test-llm");
+  assert.equal(p.binary, "test-runner");
+  assert.equal(p.binaryEnvVar, "TEST_RUNNER_BIN");
+  assert.deepEqual(p.spawnArgs, ["run"]);
+  assert.equal(p.skillStrategy, "none");
+  assert.equal(p.supportsSkills, false);
+  assert.equal(p.concordiaProvider, "local-llm");
+  assert.equal(p.supportsSessionPin, false);
+  assert.equal(p.usesFilenameSessionLock, true, "filename 施錠を有効化する");
+  assert.equal(p.transcriptDir(""), "/tmp/test-llm/sessions");
+});
+
+test("gemma4-12 (Famulus): usesFilenameSessionLock 済で ~/.famulus/sessions を tail する", () => {
+  const p = PROVIDERS["gemma4-12"];
+  assert.equal(p.usesFilenameSessionLock, true);
+  assert.equal(p.supportsSessionPin, false);
+  assert.equal(p.concordiaProvider, "local-llm");
+  assert.equal(p.binaryEnvVar, "LICTOR_FAMULUS_BIN");
+  assert.ok(p.transcriptDir("").endsWith(join(".famulus", "sessions")));
+});
+
+// 中核: 同一 sessions dir に別セッションの JSONL が「より新しい mtime」 で並んでいても、
+// 自分の session id を施錠キーにして自分の 1 ファイルだけを exact bind する (mtime 推測ゼロ)。
+// これが「他のローカルLLM/Ollama系」 でも crosstalk しない汎用化の本体。
+test("startTranscriptTail(local-llm): 自 session id のファイルだけを exact bind し新しい decoy を掴まない", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-localllm-"));
+  try {
+    const provider = { ...PROVIDERS["gemma4-12"], transcriptDir: () => dir };
+
+    // 自分の session id = そのままファイル名 stem (Famulus 規約)。
+    const ownId = "11111111-1111-4111-8111-111111111111";
+    const ownPath = join(dir, `${ownId}.jsonl`);
+    // 別セッションの famulus ログ。 より新しい mtime を持たせて「mtime 推測なら誤掴み」 を誘う。
+    const otherId = "99999999-9999-4999-8999-999999999999";
+    const otherPath = join(dir, `${otherId}.jsonl`);
+    writeFileSync(otherPath, '{"ts":1,"role":"assistant","content":"other session"}\n');
+    const future = Date.now() / 1000 + 600;
+    utimesSync(otherPath, future, future);
+
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: ownId,
+      concordiaBaseUrl: "http://127.0.0.1:1", // 到達不能 → postFrame は drop
+      provider,
+    });
+    try {
+      // 自分のファイルはまだ無い → 施錠キー一致 0 件。 fail-loud せず静かに待ち、 decoy も掴まない。
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), null, "自ファイル未生成の間は何も掴まない");
+      assert.equal(existsSync(`${otherPath}.lictor-claim`), false, "より新しい別セッションを掴まない");
+
+      // 自分の famulus ログが現れた → これだけを exact bind する。
+      writeFileSync(ownPath, '{"ts":2,"role":"assistant","content":"mine"}\n');
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), ownPath, "自 session id のファイルを exact bind");
+      assert.equal(existsSync(`${ownPath}.lictor-claim`), true, "自ファイルを claim する");
+      assert.equal(existsSync(`${otherPath}.lictor-claim`), false, "decoy は最後まで掴まない");
+      assert.equal(tail.getSessionUuid(), ownId, "session uuid は自 id を返す");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// session id から UUID が抽出できない provider 設定でも事前施錠せず従来動作に落ちる
+// (安全フォールバック)。 唯一の候補を初回束縛する。
+test("startTranscriptTail(local-llm): session id が非UUIDなら事前施錠せず初回束縛にフォールバック", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-localllm-fb-"));
+  try {
+    const provider = { ...PROVIDERS["gemma4-12"], transcriptDir: () => dir };
+    // 末尾 UUID を持つ実ファイル (famulus は UUID を名前に使う)。
+    const fileId = "22222222-2222-4222-8222-222222222222";
+    const filePath = join(dir, `${fileId}.jsonl`);
+    writeFileSync(filePath, '{"ts":1,"role":"assistant","content":"hi"}\n');
+
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "plain-non-uuid-session", // extractUuid → null → 事前施錠しない
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+    });
+    try {
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), filePath, "唯一候補を初回束縛 (フォールバック)");
     } finally {
       tail.stop();
     }
