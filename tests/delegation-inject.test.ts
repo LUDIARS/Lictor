@@ -4,10 +4,35 @@ import {
   createDelegationInjector,
   delegationInjectDelayMs,
   delegationPromptPath,
+  delegationSessionMetadata,
   DELEGATION_PROMPT_ENV,
+  DELEGATION_RUN_ID_ENV,
+  DELEGATION_CALL_NAME_ENV,
+  DELEGATION_PARENT_SESSION_ENV,
   loadDelegationPrompt,
   sanitizeDelegationPrompt,
 } from "../src/delegation-inject.js";
+
+test("delegationSessionMetadata: maps delegation env → metadata keys, trims, drops empty", () => {
+  assert.deepEqual(delegationSessionMetadata({}), {});
+  assert.deepEqual(
+    delegationSessionMetadata({
+      [DELEGATION_RUN_ID_ENV]: "  run-1  ",
+      [DELEGATION_CALL_NAME_ENV]: "impl-from-design",
+      [DELEGATION_PARENT_SESSION_ENV]: "lictor-parent",
+    }),
+    {
+      delegation_run_id: "run-1",
+      delegation_call_name: "impl-from-design",
+      delegation_parent_session_id: "lictor-parent",
+    },
+  );
+  // run_id だけでも紐付けに十分。空白のみのキーは落とす。
+  assert.deepEqual(
+    delegationSessionMetadata({ [DELEGATION_RUN_ID_ENV]: "run-2", [DELEGATION_CALL_NAME_ENV]: "   " }),
+    { delegation_run_id: "run-2" },
+  );
+});
 
 test("delegationPromptPath reads env, trims, null when empty", () => {
   assert.equal(delegationPromptPath({ [DELEGATION_PROMPT_ENV]: "  /tmp/p.md  " }), "/tmp/p.md");

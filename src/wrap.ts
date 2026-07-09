@@ -31,6 +31,7 @@ import { PendingQuestionGate } from "./pending-question-gate.js";
 import {
   createDelegationInjector,
   delegationInjectDelayMs,
+  delegationSessionMetadata,
   loadDelegationPrompt,
   type DelegationInjector,
 } from "./delegation-inject.js";
@@ -781,6 +782,9 @@ async function tryRegisterConcordia(meta: Meta, provider: ProviderConfig): Promi
         start_iso: meta.start_iso,
         platform: meta.platform,
         wrapped_by: "lictor",
+        // delegation spawn 由来なら run 識別子を載せる。Concordia が run↔子セッションを
+        // 決定的に紐付け (child_session_id を焼く) → inject / 外注リスト紐付けが機能する。
+        ...delegationSessionMetadata(process.env),
       },
     });
     const liveness = client.openLiveness(id);

@@ -19,6 +19,36 @@ import { readFileSync } from "node:fs";
 /** spawn 先に渡る prompt file path の env 名。Concordia delegation/service.ts と対。 */
 export const DELEGATION_PROMPT_ENV = "CONCORDIA_DELEGATION_PROMPT_FILE";
 
+/**
+ * spawn 先に渡る delegation 識別 env 名。Concordia `delegation/service.ts` の spawn env と対。
+ * これらを session 登録 metadata に載せると、Concordia 側 (`lifecycle.ts` →
+ * `claimChildSession`) が run と子セッションを **決定的に** 紐付けられる (cwd 一致頼みの
+ * in-memory 照合はプロセス再起動や同一 cwd 並行 spawn で外れる)。この配線が無いと
+ * `child_session_id` が焼かれず、親からの `/v1/delegation/runs/:id/inject` は 409
+ * (`child_session_not_claimed`) になり、外注リストにも子セッションが紐付かない。
+ */
+export const DELEGATION_RUN_ID_ENV = "CONCORDIA_DELEGATION_RUN_ID";
+export const DELEGATION_CALL_NAME_ENV = "CONCORDIA_DELEGATION_CALL_NAME";
+export const DELEGATION_PARENT_SESSION_ENV = "CONCORDIA_DELEGATION_PARENT_SESSION_ID";
+
+/**
+ * delegation spawn 由来の env から、session 登録 metadata に載せる delegation 識別子を組む。
+ * spawn でなければ空オブジェクト。Concordia が受け取る metadata キー名 (`delegation_run_id`
+ * 等) に揃える。値は trim して空なら落とす (undefined を metadata に残さない)。
+ */
+export function delegationSessionMetadata(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const meta: Record<string, string> = {};
+  const runId = env[DELEGATION_RUN_ID_ENV]?.trim();
+  const callName = env[DELEGATION_CALL_NAME_ENV]?.trim();
+  const parent = env[DELEGATION_PARENT_SESSION_ENV]?.trim();
+  if (runId) meta.delegation_run_id = runId;
+  if (callName) meta.delegation_call_name = callName;
+  if (parent) meta.delegation_parent_session_id = parent;
+  return meta;
+}
+
 /** prompt 本文の最大バイト数。委託 prompt は大きめなので 512 KiB まで許容。 */
 const MAX_PROMPT_BYTES = 512 * 1024;
 
