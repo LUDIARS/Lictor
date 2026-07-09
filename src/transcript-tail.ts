@@ -283,7 +283,19 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // codex (pin 不可 + hook 権威なし) の session_id 施錠キー。 初回束縛で
   // session_meta.session_id を読んで記録し、 以後この id を持つ rollout 以外には
   // 一切紐づけない (鉄のルール: mtime 推測での再束縛を排し crosstalk を構造排除)。
-  let boundSessionId: string | null = null;
+  //
+  // ローカルLLM/Ollama 系 (usesFilenameSessionLock): transcript ファイル名の末尾 UUID が
+  // Lictor の session id なので、 自分の session id から施錠キーを **事前施錠** する。
+  // これで discoverCodex は初回から filename UUID 完全一致の 1 ファイルだけを束縛し、
+  // 同一 sessions dir に別セッションの JSONL が並んでも exact bind する (mtime 推測ゼロ)。
+  // UUID が抽出できなければ null のままにし、 従来の初回束縛にフォールバックする。
+  let boundSessionId: string | null = opts.provider.usesFilenameSessionLock
+    ? opts.provider.extractSessionId(opts.sessionId)
+    : null;
+  // 施錠キーで一度でも実 transcript を束縛できたか。 事前施錠 (usesFilenameSessionLock)
+  // では起動直後 runner がまだファイルを書いておらず「施錠キー一致 0 件」 が正常なので、
+  // 一度も束縛していない間は fail-loud せず静かに待つ (束縛後に喪失したときだけ鳴らす)。
+  let hasBoundOnce = false;
   // 束縛を拒否 (同 cwd 並走で曖昧 / 施錠喪失) したとき、 中継が黙って止まらないよう
   // fail-loud する。 bind 成功でリセットし、 次の異常でまた 1 度鳴らせる。
   let codexFailLoudWarned = false;
@@ -376,7 +388,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
         .filter((c) => c.sessionId === boundSessionId || c.fileSessionId === boundSessionId)
         .sort((a, b) => b.mtime - a.mtime);
       if (matches.length === 0) {
-        warnCodexFailLoud(`bound session_id=${boundSessionId} rollout not found; relay held (no mtime fallback)`);
+        // 一度でも束縛できていれば「喪失」 として fail-loud。 事前施錠で未束縛のまま
+        // (runner がまだ書いていない) なら正常な待機なので黙って待つ。
+        if (hasBoundOnce) {
+          warnCodexFailLoud(`bound session_id=${boundSessionId} rollout not found; relay held (no mtime fallback)`);
+        }
         return null;
       }
       const best = matches[0].path;
@@ -385,6 +401,8 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       if (!cp) return null;
       if (claimPath) { try { unlinkSync(claimPath); } catch { /* best-effort */ } }
       claimPath = cp;
+      hasBoundOnce = true;
+      codexFailLoudWarned = false; // 束縛できた: 次に喪失したらまた 1 度鳴らせる
       return best;
     }
 
@@ -405,6 +423,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     if (!cp) return null;
     claimPath = cp;
     boundSessionId = decision.sessionId;
+    hasBoundOnce = true;
     codexFailLoudWarned = false; // 束縛できた: 次の異常でまた fail-loud できるよう解除
     claimDbg(`codex bound session_id=${boundSessionId} path=${decision.path} owner=${opts.sessionId}`);
     return decision.path;
@@ -525,7 +544,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   //     (recoverByPin)。 いずれの経路も mtime 推測での誤掴みが構造的に起きない。
   const recoverRelay = (force = false): { ok: boolean; path: string | null } => {
     if (opts.lictorTranscriptStatePath) return recoverByAuthority();
-    if (opts.provider.transcriptMetaSessionId) return recoverCodexLocked();
+    // codex (session_meta 施錠) と ローカルLLM (filename 施錠) はどちらも施錠キーで
+    // discoverCodex を取り直す。 別 session へは降りない (crosstalk 構造排除)。
+    if (opts.provider.transcriptMetaSessionId || opts.provider.usesFilenameSessionLock) {
+      return recoverCodexLocked();
+    }
     return recoverByPin();
   };
 
