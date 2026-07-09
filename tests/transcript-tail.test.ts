@@ -898,6 +898,36 @@ test("decideCodexInitialBind: session_id 付きが 2 件以上なら ambiguous (
   );
 });
 
+test("decideCodexInitialBind: session_id 付きが 2 件以上でも mtime が一意に最新なら bind", () => {
+  assert.deepEqual(
+    decideCodexInitialBind([
+      { path: "/a", sessionId: "S1", mtimeMs: 100 },
+      { path: "/b", sessionId: "S2", mtimeMs: 200 },
+    ]),
+    { action: "bind", path: "/b", sessionId: "S2" },
+  );
+});
+
+test("decideCodexInitialBind: mtime が同点なら ambiguous のまま", () => {
+  assert.deepEqual(
+    decideCodexInitialBind([
+      { path: "/a", sessionId: "S1", mtimeMs: 100 },
+      { path: "/b", sessionId: "S2", mtimeMs: 100 },
+    ]),
+    { action: "ambiguous", paths: ["/a", "/b"] },
+  );
+});
+
+test("decideCodexInitialBind: 一部候補だけ mtime 不明なら ambiguous のまま", () => {
+  assert.deepEqual(
+    decideCodexInitialBind([
+      { path: "/a", sessionId: "S1", mtimeMs: 100 },
+      { path: "/b", sessionId: "S2" },
+    ]),
+    { action: "ambiguous", paths: ["/a", "/b"] },
+  );
+});
+
 // ─── codex session_id 施錠 (startTranscriptTail 統合) ───────────────────────
 
 /** codex rollout の session_meta 先頭行 + 任意本文を書いた JSONL を作る。 */
@@ -906,6 +936,21 @@ function writeCodexRollout(dir: string, name: string, sessionId: string, cwd: st
   const meta = {
     type: "session_meta",
     payload: { session_id: sessionId, cwd, timestamp: new Date().toISOString() },
+  };
+  writeFileSync(p, [meta, ...body].map((o) => JSON.stringify(o)).join("\n") + "\n");
+  return p;
+}
+
+function writeCodexRolloutWithPayload(
+  dir: string,
+  name: string,
+  payload: Record<string, unknown>,
+  body: unknown[] = [],
+): string {
+  const p = join(dir, name);
+  const meta = {
+    type: "session_meta",
+    payload: { ...payload, timestamp: new Date().toISOString() },
   };
   writeFileSync(p, [meta, ...body].map((o) => JSON.stringify(o)).join("\n") + "\n");
   return p;
@@ -957,9 +1002,8 @@ test("startTranscriptTail(codex): session_id を施錠し、別 session_id の�
   }
 });
 
-// 同 cwd で codex が 2 つ並走 (S1, S2 が同時に存在) すると初回束縛が曖昧になる。
-// 誤掴みで別 channel に混戦させるより、 束縛せず中継を止める (fail-loud)。
-test("startTranscriptTail(codex): 同 cwd に 2 rollout が同時存在するとどちらも束縛しない", async () => {
+// 同 cwd で複数候補がある場合でも、spawn 直後の Codex は mtime 最新を自分の rollout として選べる。
+test("startTranscriptTail(codex): 同 cwd に 2 rollout が同時存在すると mtime 最新を束縛する", async () => {
   const dir = mkdtempSync(join(tmpdir(), "lictor-codex-amb-"));
   try {
     const provider = { ...PROVIDERS.codex, transcriptDir: () => dir };
@@ -972,10 +1016,47 @@ test("startTranscriptTail(codex): 同 cwd に 2 rollout が同時存在すると
     try {
       const r1 = writeCodexRollout(dir, "rollout-2026-07-06-A.jsonl", "SA", dir);
       const r2 = writeCodexRollout(dir, "rollout-2026-07-06-B.jsonl", "SB", dir);
+      const now = Date.now() / 1000;
+      utimesSync(r1, now, now);
+      utimesSync(r2, now + 2, now + 2);
       await sleep(700);
-      assert.equal(tail.getTranscriptPath(), null, "曖昧なので掴まない (混戦より中継停止)");
-      assert.equal(existsSync(`${r1}.lictor-claim`), false, "A を掴まない");
-      assert.equal(existsSync(`${r2}.lictor-claim`), false, "B を掴まない");
+      assert.equal(tail.getTranscriptPath(), r2, "mtime 最新の B を tail する");
+      assert.equal(tail.getSessionUuid(), "SB", "B の session_id を施錠する");
+      assert.equal(existsSync(`${r1}.lictor-claim`), false, "A は掴まない");
+      assert.equal(existsSync(`${r2}.lictor-claim`), true, "B を claim する");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("startTranscriptTail(codex): session_meta id が無くても rollout filename UUID で束縛する", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-codex-fileid-"));
+  try {
+    const provider = { ...PROVIDERS.codex, transcriptDir: () => dir };
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-codex-fileid",
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+    });
+    try {
+      const uuid = "019f412f-77ff-7523-b837-97a60c2f52b9";
+      const rollout = writeCodexRolloutWithPayload(
+        dir,
+        `rollout-2026-07-09T00-00-00-${uuid}.jsonl`,
+        { cwd: dir, originator: "codex_cli_rs", source: "cli" },
+        [{ type: "event_msg", payload: { type: "agent_message", message: "fallback ok" } }],
+      );
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), rollout, "filename UUID fallback で rollout を tail する");
+      assert.equal(tail.getSessionUuid(), uuid, "filename UUID を session UUID として返す");
+      const recent = tail.readRecent(5);
+      assert.equal(recent.available, true);
+      assert.equal(recent.path, rollout);
+      assert.equal(recent.returned > 0, true, "transcript tail が 0 件にならない");
     } finally {
       tail.stop();
     }

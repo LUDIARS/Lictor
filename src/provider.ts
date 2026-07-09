@@ -151,7 +151,7 @@ export interface ProviderConfig {
    * parse 不能・未知フォーマット) は true を返して従来どおり claim ガードに
    * 委ねる (新しい CLI バージョンでメタ形式が変わっても中継が止まらない)。
    */
-  transcriptMetaAccepts?: (firstLine: string, ctx: { cwd: string; startedAtMs?: number }) => boolean;
+  transcriptMetaAccepts?: (firstLine: string, ctx: { cwd: string; startedAtMs?: number; mtimeMs?: number }) => boolean;
 
   /**
    * 先頭メタ行から provider ネイティブの session id を読む ({@link supportsSessionPin}
@@ -199,7 +199,10 @@ export function normalizePathForCompare(p: string): string {
  */
 const HEAD_TS_GRACE_MS = 60_000;
 
-export function codexTranscriptMetaAccepts(firstLine: string, ctx: { cwd: string; startedAtMs?: number }): boolean {
+export function codexTranscriptMetaAccepts(
+  firstLine: string,
+  ctx: { cwd: string; startedAtMs?: number; mtimeMs?: number },
+): boolean {
   let parsed: unknown;
   try {
     parsed = JSON.parse(firstLine);
@@ -223,7 +226,11 @@ export function codexTranscriptMetaAccepts(firstLine: string, ctx: { cwd: string
     process.env.LICTOR_CODEX_HEAD_TS_FILTER !== "0"
   ) {
     const headTs = codexTranscriptMetaStartedAt(firstLine);
-    if (headTs !== null && headTs < ctx.startedAtMs - HEAD_TS_GRACE_MS) return false;
+    const freshMtime =
+      typeof ctx.mtimeMs === "number" &&
+      Number.isFinite(ctx.mtimeMs) &&
+      ctx.mtimeMs >= ctx.startedAtMs - HEAD_TS_GRACE_MS;
+    if (headTs !== null && headTs < ctx.startedAtMs - HEAD_TS_GRACE_MS && !freshMtime) return false;
   }
   return true;
 }
@@ -275,7 +282,22 @@ export function codexTranscriptMetaSessionId(firstLine: string): string | null {
   const payload = typeof rec.payload === "object" && rec.payload !== null
     ? (rec.payload as Record<string, unknown>)
     : null;
-  for (const value of [payload?.session_id, payload?.id, rec.session_id, rec.id]) {
+  for (const value of [
+    payload?.session_id,
+    payload?.sessionId,
+    payload?.conversation_id,
+    payload?.conversationId,
+    payload?.thread_id,
+    payload?.threadId,
+    payload?.id,
+    rec.session_id,
+    rec.sessionId,
+    rec.conversation_id,
+    rec.conversationId,
+    rec.thread_id,
+    rec.threadId,
+    rec.id,
+  ]) {
     if (typeof value === "string" && value.trim().length > 0) return value;
   }
   return null;
