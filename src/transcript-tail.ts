@@ -312,12 +312,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // フィルタ未定義 provider / 先頭行が読めない・形式不明の場合は許可し、 従来どおり
   // claim ガードに委ねる (fail-open)。 claim より先に判定して、 別セッションの
   // ファイルへ claim を置いてしまう副作用ごと避ける。
-  const candidateAccepted = (path: string): boolean => {
+  const candidateAccepted = (path: string, st?: Stats): boolean => {
     const accepts = opts.provider.transcriptMetaAccepts;
     if (!accepts) return true;
     const first = readTranscriptFirstLine(path);
     if (first === null) return true;
-    if (accepts(first, { cwd: opts.cwd, startedAtMs: startedAt })) return true;
+    if (accepts(first, { cwd: opts.cwd, startedAtMs: startedAt, mtimeMs: st?.mtimeMs })) return true;
     claimDbg(`candidate rejected by meta filter path=${path} owner=${opts.sessionId}`);
     return false;
   };
@@ -342,30 +342,38 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     lastProgressAt = Date.now();
   };
 
-  // codex (pin 不可 + hook 権威なし) の discover。 session_id 施錠が唯一の束縛キーで、
-  // mtime は「同一 session_id の分割 rollout の新しい方を採る」 ためだけに使う
-  // (別 session_id を掴む余地は無いので crosstalk が構造的に起きない)。
+  const sessionIdFromTranscriptPath = (path: string): string | null => {
+    const slash = path.lastIndexOf("/");
+    const back = path.lastIndexOf("\\");
+    let base = path.slice(Math.max(slash, back) + 1);
+    if (base.endsWith(".jsonl")) base = base.slice(0, -".jsonl".length);
+    return opts.provider.extractSessionId(base);
+  };
+
+  // codex (pin 不可 + hook 権威なし) の discover。 候補は cwd/exec/head-ts で絞り、
+  // session_meta の session_id を優先、無ければ rollout filename の UUID を施錠キーにする。
   //
-  //   - 未施錠 (初回): accepts (cwd/exec/head-ts) を通り session_id が読める候補が
-  //     「ちょうど 1 件」 のときだけ束縛し、 その id を施錠する。 0 件 → 待つ。
-  //     2 件以上 (同 cwd 並走) → **掴まず fail-loud** (誤掴みするより中継を止める)。
-  //   - 施錠済: session_id 一致の rollout だけを対象にする。 一致 0 件なら束縛喪失として
-  //     fail-loud し、 別 session_id へは絶対に降りない (フォールバック禁止)。
+  //   - 未施錠 (初回): 候補 1 件なら束縛。複数候補なら spawn 直後の mtime 最新を採る。
+  //     最新 mtime が同点なら曖昧として fail-loud し、推測束縛しない。
+  //   - 施錠済: 施錠キー一致の rollout だけを対象にする。 一致 0 件なら束縛喪失として
+  //     fail-loud し、 別 session_id へは降りない。
   const discoverCodex = (): string | null => {
-    type C = { path: string; sessionId: string | null; mtime: number };
+    type C = { path: string; sessionId: string | null; fileSessionId: string | null; mtime: number };
     const candidates: C[] = [];
     walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => {
-      // 過去セッションの継承を防ぐ recency 下限 (mtime は選択には使わない)。
+      // 過去セッションの継承を防ぐ recency 下限。候補が複数なら mtime で最新を選ぶ。
       if (st.mtimeMs < startedAt - 5_000) return;
-      if (!candidateAccepted(p)) return; // cwd / exec / head-ts
+      if (!candidateAccepted(p, st)) return; // cwd / exec / head-ts
       const first = readTranscriptFirstLine(p);
-      const sid = first ? opts.provider.transcriptMetaSessionId?.(first) ?? null : null;
-      candidates.push({ path: p, sessionId: sid, mtime: st.mtimeMs });
+      const metaSid = first ? opts.provider.transcriptMetaSessionId?.(first) ?? null : null;
+      const fileSid = sessionIdFromTranscriptPath(p);
+      const sid = metaSid ?? fileSid;
+      candidates.push({ path: p, sessionId: sid, fileSessionId: fileSid, mtime: st.mtimeMs });
     });
 
     if (boundSessionId) {
       const matches = candidates
-        .filter((c) => c.sessionId === boundSessionId)
+        .filter((c) => c.sessionId === boundSessionId || c.fileSessionId === boundSessionId)
         .sort((a, b) => b.mtime - a.mtime);
       if (matches.length === 0) {
         warnCodexFailLoud(`bound session_id=${boundSessionId} rollout not found; relay held (no mtime fallback)`);
@@ -380,7 +388,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       return best;
     }
 
-    const decision = decideCodexInitialBind(candidates);
+    const decision = decideCodexInitialBind(candidates.map((c) => ({
+      path: c.path,
+      sessionId: c.sessionId,
+      mtimeMs: c.mtime,
+    })));
     if (decision.action === "wait") return null;
     if (decision.action === "ambiguous") {
       warnCodexFailLoud(
@@ -716,11 +728,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     // 従来どおり束縛中ファイル名から抽出する。
     if (boundSessionId) return boundSessionId;
     if (!jsonlPath) return null;
-    const slash = jsonlPath.lastIndexOf("/");
-    const back = jsonlPath.lastIndexOf("\\");
-    let base = jsonlPath.slice(Math.max(slash, back) + 1);
-    if (base.endsWith(".jsonl")) base = base.slice(0, -".jsonl".length);
-    return opts.provider.extractSessionId(base);
+    return sessionIdFromTranscriptPath(jsonlPath);
   };
 
   return {
@@ -740,10 +748,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   };
 }
 
-/** codex 初回束縛の候補 (path と、 その rollout の session_meta.session_id)。 */
+/** codex 初回束縛の候補 (path と、 session_meta session_id / filename UUID 由来の施錠キー)。 */
 export interface CodexBindCandidate {
   path: string;
   sessionId: string | null;
+  mtimeMs?: number;
 }
 
 /** {@link decideCodexInitialBind} の判定結果。 */
@@ -754,24 +763,30 @@ export type CodexBindDecision =
 
 /**
  * codex の初回束縛の決定 (純関数, test 対象)。 accepts フィルタ (cwd/exec/head-ts) を
- * 通過済の候補から、 session_id を束縛キーとして決める:
+ * 通過済の候補から、 session_id / filename UUID を束縛キーとして決める:
  *
- *   - session_meta.session_id が読める候補が 0 件 → `wait` (まだ自分の rollout が
- *     現れていない、 or メタ未書き込み)。
- *   - ちょうど 1 件 → `bind` (その session_id を施錠する)。
- *   - 2 件以上 → `ambiguous` (同 cwd で codex が並走)。 呼び出し側は **掴まず fail-loud**
- *     する。 mtime 等で 1 件を推測して選ぶと別セッションを誤掴みして crosstalk になるため、
- *     「混戦を出すくらいなら中継を止める」 を選ぶ (鉄のルール: 曖昧なら束縛しない)。
+ *   - 施錠キーが読める候補が 0 件 → `wait`。
+ *   - ちょうど 1 件 → `bind`。
+ *   - 2 件以上 → mtime が一意に最新の候補を `bind`。同点 / mtime 不明なら `ambiguous`。
  *
- * session_id が読めない候補 (メタ未書き込み / 形式不明) は束縛キーを持たないため、
+ * 施錠キーが読めない候補 (メタ未書き込み / filename 規約外) は束縛キーを持たないため、
  * 判定母集団から除外する (施錠できないファイルには紐づけない)。
  */
 export function decideCodexInitialBind(candidates: CodexBindCandidate[]): CodexBindDecision {
   const withId = candidates.filter(
-    (c): c is { path: string; sessionId: string } => typeof c.sessionId === "string" && c.sessionId.length > 0,
+    (c): c is { path: string; sessionId: string; mtimeMs?: number } =>
+      typeof c.sessionId === "string" && c.sessionId.length > 0,
   );
   if (withId.length === 0) return { action: "wait" };
   if (withId.length === 1) return { action: "bind", path: withId[0].path, sessionId: withId[0].sessionId };
+  const byMtime = withId
+    .filter((c): c is { path: string; sessionId: string; mtimeMs: number } =>
+      typeof c.mtimeMs === "number" && Number.isFinite(c.mtimeMs),
+    )
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  if (byMtime.length === withId.length && byMtime[0].mtimeMs > byMtime[1].mtimeMs) {
+    return { action: "bind", path: byMtime[0].path, sessionId: byMtime[0].sessionId };
+  }
   return { action: "ambiguous", paths: withId.map((c) => c.path) };
 }
 
