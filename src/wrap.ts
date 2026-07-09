@@ -4,6 +4,7 @@ import * as pty from "node-pty";
 import { buildAnswerSequence, sanitizeKeySeq, startSidecar, type SidecarContext, type TitleState } from "./sidecar.js";
 import { gatherBaseMeta, type Meta } from "./meta.js";
 import { resetTitle } from "./osc.js";
+import { createUserActivitySignal } from "./user-activity.js";
 import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./concordia.js";
 import { gatherRepoStat } from "./stat.js";
 import { renderSkillMd, SkillInjector } from "./skill-injector.js";
@@ -616,7 +617,21 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       // some shells (e.g. piped stdin) don't support raw mode; ignore.
     }
   }
+  // 物理端末の生キーストローク = ユーザの入力意思。 Concordia の idle-nudge に
+  // user_activity を送って待機催促タイマをキャンセルさせる。 inject
+  // (submitInject/ptyWriter) は別経路なのでここには来ない。 打鍵ごとに来るため
+  // debounce (既定 2s) で間引く。 best-effort — Concordia 未接続/失敗は無視。
+  const signalUserActivity = concordia
+    ? createUserActivitySignal({
+        send: () => {
+          void concordia.client
+            .event(concordia.id, { kind: "user_activity" })
+            .catch(() => {});
+        },
+      })
+    : () => {};
   const onStdin = (chunk: Buffer) => {
+    signalUserActivity();
     // ローカル端末で Enter (CR) を押した = ターンを submit した、 とみなす。
     if (chunk.includes(0x0d)) sawSessionTurn = true;
     try {
