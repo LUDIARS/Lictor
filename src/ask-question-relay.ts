@@ -18,6 +18,14 @@
 import type { ProviderConfig } from "./provider.js";
 
 const POST_TIMEOUT_MS = 2000;
+const EXIT_PLAN_MODE_PLAN_MAX_CHARS = 1500;
+const EXIT_PLAN_MODE_FALLBACK_PLAN = "(プラン本文なし)";
+const EXIT_PLAN_MODE_QUESTION_PREFIX = "プラン承認: このプランで進めますか?";
+const EXIT_PLAN_MODE_OPTIONS: PendingQuestion["options"] = [
+  { label: "承認 (auto-accept edits)" },
+  { label: "承認 (編集は手動確認)" },
+  { label: "却下 (プラン継続)" },
+];
 
 export interface PendingQuestion {
   /**
@@ -97,6 +105,48 @@ export function detectAskUserQuestion(line: string): PendingQuestion[] {
       if (options.length === 0) continue;
       out.push({ id, question: q.question, options });
     }
+  }
+  return out;
+}
+
+/**
+ * Parse a single Claude Code JSONL line and return `ExitPlanMode` invocations
+ * as pending single-choice questions.
+ *
+ * The option labels are semantic mirrors of Claude Code's local plan-mode
+ * picker, and their array indexes are assumed to match that picker's current
+ * order. Lictor intentionally does not try to absorb Claude Code version
+ * drift here because answer injection uses the local picker index directly.
+ */
+export function detectExitPlanMode(line: string): PendingQuestion[] {
+  let msg: any;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return [];
+  }
+  if (!msg || typeof msg !== "object") return [];
+  if (msg.type !== "assistant") return [];
+
+  const content = msg.message?.content;
+  if (!Array.isArray(content)) return [];
+
+  const out: PendingQuestion[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    if (part.type !== "tool_use") continue;
+    if (part.name !== "ExitPlanMode") continue;
+
+    const id = typeof part.id === "string" ? part.id : "";
+    const rawPlan = part.input?.plan;
+    const plan = typeof rawPlan === "string"
+      ? rawPlan.slice(0, EXIT_PLAN_MODE_PLAN_MAX_CHARS)
+      : EXIT_PLAN_MODE_FALLBACK_PLAN;
+    out.push({
+      id,
+      question: `${EXIT_PLAN_MODE_QUESTION_PREFIX}\n\n${plan}`,
+      options: EXIT_PLAN_MODE_OPTIONS,
+    });
   }
   return out;
 }

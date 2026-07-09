@@ -40,6 +40,7 @@ import { readClaudeTranscriptPath } from "./active-repos.js";
 import {
   detectAnsweredQuestionIds,
   detectAskUserQuestion,
+  detectExitPlanMode,
   postPendingQuestion,
   postResolveQuestion,
   providerSupportsAskUserQuestion,
@@ -665,12 +666,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     pending = lines.pop() ?? "";
     for (const line of lines) {
       if (!line.trim()) continue;
-      // AskUserQuestion tool_use を見つけたら、 transcript.frame の正規ルートとは別に
+      // AskUserQuestion / ExitPlanMode tool_use を見つけたら、 transcript.frame の正規ルートとは別に
       // Concordia の pending-question API に直接通知する. これで Discord 側 (bot.routeEvent)
       // の question.posted listener が embed + button を session channel に出せるようになる.
       // questions[] が複数ある場合は **全部** 一気に流す (一括投稿).
       if (askUserQuestionEnabled) {
-        const pqs = detectAskUserQuestion(line);
+        const pqs = detectAskUserQuestion(line).concat(detectExitPlanMode(line));
         for (const pq of pqs) {
           // question_id を控えて tool_use id と紐付ける（後で local-resolve 通知に使う）。
           // 登録成功後に onPickerQuestionRegistered を呼び、wrap.ts が「picker 既知 qid」
