@@ -5,6 +5,7 @@ import { buildAnswerSequence, sanitizeKeySeq, startSidecar, type SidecarContext,
 import { gatherBaseMeta, type Meta } from "./meta.js";
 import { resetTitle } from "./osc.js";
 import { createUserActivitySignal } from "./user-activity.js";
+import { concordiaSpawnSessionMetadata } from "./spawn-context.js";
 import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./concordia.js";
 import { gatherRepoStat } from "./stat.js";
 import { renderSkillMd, SkillInjector } from "./skill-injector.js";
@@ -800,6 +801,9 @@ async function tryRegisterConcordia(meta: Meta, provider: ProviderConfig): Promi
         // delegation spawn 由来なら run 識別子を載せる。Concordia が run↔子セッションを
         // 決定的に紐付け (child_session_id を焼く) → inject / 外注リスト紐付けが機能する。
         ...delegationSessionMetadata(process.env),
+        // Cc からの interactive spawn なら一意 id + cwd 指定有無を返す。
+        // Concordia はこれを根拠に対象セッションだけへ project 特定 instruction を inject する。
+        ...concordiaSpawnSessionMetadata(process.env),
       },
     });
     const liveness = client.openLiveness(id);
