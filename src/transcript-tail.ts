@@ -46,6 +46,7 @@ import {
 } from "./ask-question-relay.js";
 import { parseAskMarkerText } from "./ask-marker.js";
 import { stripAskBlock } from "./ask-json.js";
+import type { TranscriptFrameSink } from "./transcript-sink.js";
 
 const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
@@ -176,6 +177,15 @@ export interface TranscriptTailOptions {
   concordiaBaseUrl: string;
   provider: ProviderConfig;
   /**
+   * App Server bootstrap で確定済みの Codex thread id。指定時は初回から exact match のみを
+   * 許可し、mtime による候補選択へ降りない。
+   */
+  expectedCodexThreadId?: string | null;
+  /** App Server binding frame と seq 空間を共有する ordered sink。 */
+  transcriptSink?: TranscriptFrameSink | null;
+  /** ordered sink の永続失敗を wrap へ伝える。 */
+  onRelayError?: (error: Error) => void;
+  /**
    * Called with the AskUserQuestion `tool_use` id when a picker is detected
    * opening in the transcript. wrap.ts wires this to {@link PendingQuestionGate}
    * so ordinary pty injects are held while the picker waits for an answer.
@@ -289,9 +299,10 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // これで discoverCodex は初回から filename UUID 完全一致の 1 ファイルだけを束縛し、
   // 同一 sessions dir に別セッションの JSONL が並んでも exact bind する (mtime 推測ゼロ)。
   // UUID が抽出できなければ null のままにし、 従来の初回束縛にフォールバックする。
-  let boundSessionId: string | null = opts.provider.usesFilenameSessionLock
-    ? opts.provider.extractSessionId(opts.sessionId)
-    : null;
+  let boundSessionId: string | null = opts.expectedCodexThreadId?.trim() || null;
+  if (!boundSessionId && opts.provider.usesFilenameSessionLock) {
+    boundSessionId = opts.provider.extractSessionId(opts.sessionId);
+  }
   // 施錠キーで一度でも実 transcript を束縛できたか。 事前施錠 (usesFilenameSessionLock)
   // では起動直後 runner がまだファイルを書いておらず「施錠キー一致 0 件」 が正常なので、
   // 一度も束縛していない間は fail-loud せず静かに待つ (束縛後に喪失したときだけ鳴らす)。
@@ -305,6 +316,19 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // AskUserQuestion tool は Claude Code 専用. Codex / Gemini provider のときは
   // 検知を回避して JSON.parse の二度手間を避ける (= lineToFrame だけ走らせる).
   const askUserQuestionEnabled = providerSupportsAskUserQuestion(opts.provider);
+
+  const sendFrame = async (kind: string, payload: unknown): Promise<void> => {
+    try {
+      if (opts.transcriptSink) {
+        await opts.transcriptSink.post(kind, payload);
+        return;
+      }
+      await postFrame(opts.concordiaBaseUrl, opts.sessionId, seq++, kind, payload);
+    } catch (error) {
+      opts.onRelayError?.(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
+  };
 
   // provider.transcriptDir が null を返す provider (Gemini 等) は no-op handle.
   if (!dir) {
@@ -717,7 +741,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
             // 1. 説明テキスト (ask ブロック除去済) を先に送る。中身が空なら省略。
             const stripped = stripAskBlock(p.text);
             if (stripped) {
-              await postFrame(opts.concordiaBaseUrl, opts.sessionId, seq++, "text", {
+              await sendFrame("text", {
                 ...(frame.payload as object),
                 text: stripped,
               });
@@ -736,8 +760,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
           opts.onUserReply?.();
         }
       }
-      const seqNum = seq++;
-      void postFrame(opts.concordiaBaseUrl, opts.sessionId, seqNum, frame.kind, frame.payload);
+      void sendFrame(frame.kind, frame.payload).catch(() => undefined);
     }
   };
 

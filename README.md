@@ -24,6 +24,26 @@ skill-injection paths differ. Codex's own `--add-dir` widens the writable
 sandbox but doesn't trigger skill scanning, so `/v1/skill` returns 503 for
 Codex sessions.
 
+### Codex App Server transport
+
+`lictor codex` uses Codex App Server by default. Lictor creates the thread
+first, binds the returned thread ID to the Concordia transcript, and then
+starts the interactive CLI with `codex resume <thread-id>`. This avoids
+guessing the session from the newest rollout file when multiple Codex or
+delegation sessions start at the same time. Existing Codex ChatGPT OAuth
+authentication is reused, including subscription-based accounts.
+
+Set `LICTOR_CODEX_TRANSPORT=legacy` only as an explicit rollback. Lictor does
+not silently fall back to legacy discovery after an App Server failure.
+
+| Variable | Default | Effect |
+|---|---:|---|
+| `LICTOR_CODEX_TRANSPORT` | `app-server` | `app-server` or explicit rollback `legacy` |
+| `LICTOR_CODEX_APP_SERVER_REQUEST_TIMEOUT_MS` | `30000` | JSON-RPC request timeout |
+| `LICTOR_CODEX_APP_SERVER_TURN_TIMEOUT_MS` | `14400000` | Delegation turn timeout |
+| `LICTOR_TRANSCRIPT_RELAY_TIMEOUT_MS` | `5000` | Concordia transcript write timeout |
+| `LICTOR_TRANSCRIPT_RELAY_RETRIES` | `3` | Transient transcript write retries |
+
 `lictor gemma4-12` (旧名 `lictor local` も alias で可) is different: it wraps
 **Famulus** (`@ludiars/famulus`, `famulus run`), a separate local-LLM spawner
 CLI, instead of a cloud agent. Famulus is a light stand-in for the codex shell

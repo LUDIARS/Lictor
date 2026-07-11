@@ -52,9 +52,25 @@ import {
   writeAskMarkerPrompt,
 } from "./ask-marker.js";
 import { postResolveQuestion } from "./ask-question-relay.js";
+import {
+  closeCodexAppServerSession,
+  runCodexDelegationTurn,
+  startCodexAppServerSession,
+  type CodexAppServerSession,
+} from "./codex-app-server-session.js";
+import type { TranscriptFrameSink } from "./transcript-sink.js";
+import { LICTOR_VERSION } from "./version.js";
 
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
+
+export type CodexTransport = "app-server" | "legacy";
+
+export function codexTransport(env: NodeJS.ProcessEnv = process.env): CodexTransport {
+  const raw = env.LICTOR_CODEX_TRANSPORT?.trim() || "app-server";
+  if (raw === "app-server" || raw === "legacy") return raw;
+  throw new Error(`invalid LICTOR_CODEX_TRANSPORT=${raw}; expected app-server or legacy`);
+}
 
 /** Parse a positive-int env var, falling back to `fallback` when unset/invalid. */
 function envInt(raw: string | undefined, fallback: number): number {
@@ -352,6 +368,20 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   pollTimer?.unref?.();
   if (concordia) pollLiveState(ctx).catch(() => {});
 
+  let sharedCleanupDone = false;
+  const cleanupShared = async (): Promise<void> => {
+    if (sharedCleanupDone) return;
+    sharedCleanupDone = true;
+    if (statTimer) clearInterval(statTimer);
+    if (pollTimer) clearInterval(pollTimer);
+    submitWatchdog.stop();
+    pendingQuestionGate.forceClear();
+    concordia?.liveness.close();
+    sidecar.close();
+    resetTitle();
+    injector?.cleanup();
+  };
+
   // spawn する実バイナリ。 binaryEnvVar (例: gemma4-12 の LICTOR_FAMULUS_BIN) が
   // 設定されていれば PATH 既定を上書きする。 log / spawn で同じ値を使う。
   const effectiveBinary = resolveBinary(provider);
@@ -392,7 +422,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // provider.spawnArgs は user args の前に必ず差す (local: ["cli","local-agent"] で
   // lictor 自身を REPL として再起動)。claude/codex/gemini は spawnArgs 無し。
   const baseArgs = provider.spawnArgs ? [...provider.spawnArgs, ...args] : [...args];
-  const providerArgs =
+  let providerArgs =
     provider.skillStrategy === "claude-add-dir" && injector
       ? ["--add-dir", injector.sessionDir, ...baseArgs]
       : baseArgs;
@@ -471,6 +501,70 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     }
   }
 
+  const delegationPrompt = loadDelegationPrompt(env);
+  let codexAppServerSession: CodexAppServerSession | null = null;
+  let expectedCodexThreadId: string | null = null;
+  let codexTranscriptSink: TranscriptFrameSink | null = null;
+  const transport = provider.name === "codex" ? codexTransport(env) : "legacy";
+
+  if (provider.name === "codex" && transport === "app-server") {
+    const standaloneSink = concordia ? undefined : createVolatileTranscriptSink();
+    try {
+      codexAppServerSession = await startCodexAppServerSession({
+        binary: effectiveBinary,
+        cwd: meta.cwd,
+        env,
+        concordiaBaseUrl: concordia?.client.cfg.baseUrl,
+        lictorSessionId: concordia?.id,
+        sink: standaloneSink,
+        lictorVersion: LICTOR_VERSION,
+        requestTimeoutMs: envInt(env.LICTOR_CODEX_APP_SERVER_REQUEST_TIMEOUT_MS, 30_000),
+        transcriptTimeoutMs: envInt(env.LICTOR_TRANSCRIPT_POST_TIMEOUT_MS, 2_000),
+        transcriptMaxAttempts: envInt(env.LICTOR_TRANSCRIPT_MAX_ATTEMPTS, 3),
+        transcriptRetryBaseMs: envInt(env.LICTOR_TRANSCRIPT_RETRY_BASE_MS, 100),
+        transcriptMaxQueue: envInt(env.LICTOR_TRANSCRIPT_MAX_QUEUE, 1_000),
+        onDiagnostic: (message) => process.stderr.write(`lictor: codex app-server: ${message}\n`),
+      });
+    } catch (error) {
+      await cleanupShared();
+      await unregisterConcordiaSession(concordia);
+      throw error;
+    }
+    ctx.forceExit = () => codexAppServerSession?.client.terminate();
+    ctx.requestGracefulExit = () => codexAppServerSession?.client.terminate();
+
+    if (delegationPrompt) {
+      try {
+        await runCodexDelegationTurn(codexAppServerSession, {
+          prompt: delegationPrompt.text,
+          cwd: meta.cwd,
+          turnTimeoutMs: envInt(env.LICTOR_CODEX_APP_SERVER_TURN_TIMEOUT_MS, 4 * 60 * 60 * 1_000),
+        });
+        await closeCodexAppServerSession(codexAppServerSession);
+      } finally {
+        codexAppServerSession.client.terminate();
+        await cleanupShared();
+        await unregisterConcordiaSession(concordia);
+      }
+      return;
+    }
+
+    expectedCodexThreadId = codexAppServerSession.identity.threadId;
+    codexTranscriptSink = codexAppServerSession.sink;
+    try {
+      await codexAppServerSession.client.close();
+    } catch (error) {
+      codexAppServerSession.client.terminate();
+      await cleanupShared();
+      await unregisterConcordiaSession(concordia);
+      throw error;
+    }
+    providerArgs = ["resume", expectedCodexThreadId, ...providerArgs];
+    process.stderr.write(
+      `lictor: Codex thread bound via app-server (${expectedCodexThreadId}); starting interactive resume\n`,
+    );
+  }
+
   // node-pty on Windows uses CreateProcessW which does not auto-resolve .cmd
   // extensions. CLI bins ship as `<name>.cmd` in npm global bin, so wrap via
   // cmd.exe; on POSIX, spawn the binary directly.
@@ -479,23 +573,30 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   const ptyArgs = isWindows ? ["/d", "/s", "/c", effectiveBinary, ...providerArgs] : providerArgs;
 
   const { cols, rows } = currentSize();
-  const child = pty.spawn(ptyFile, ptyArgs, {
-    name: process.env.TERM ?? "xterm-256color",
-    cols,
-    rows,
-    cwd: process.cwd(),
-    env: env as { [key: string]: string },
-    // useConpty is on by default on Windows 10 1809+; node-pty falls back to
-    // winpty otherwise. We do not override.
-  });
+  let child: pty.IPty;
+  try {
+    child = pty.spawn(ptyFile, ptyArgs, {
+      name: process.env.TERM ?? "xterm-256color",
+      cols,
+      rows,
+      cwd: process.cwd(),
+      env: env as { [key: string]: string },
+      // useConpty is on by default on Windows 10 1809+; node-pty falls back to
+      // winpty otherwise. We do not override.
+    });
+  } catch (error) {
+    await cleanupShared();
+    await unregisterConcordiaSession(concordia);
+    throw error;
+  }
 
   ctx.ptyWriter = (data: string) => child.write(data);
-  ctx.forceExit = () => { child.kill("SIGTERM"); };
+  ctx.forceExit = () => { terminatePty(child, "SIGTERM"); };
   // session-end の session-log 保存を途中で殺さないため、force-exit は既定で
   // 「猶予付き」: transcript が一定時間無活動になってから kill する。
   let gracefulExit: GracefulExitHandle | null = null;
   ctx.requestGracefulExit = (gopts) => {
-    if (gopts?.immediate) { gracefulExit?.cancel(); child.kill("SIGTERM"); return; }
+    if (gopts?.immediate) { gracefulExit?.cancel(); terminatePty(child, "SIGTERM"); return; }
     if (gracefulExit) return; // 既にスケジュール済 (idempotent)
     gracefulExit = scheduleGracefulExit({
       // transcript JSONL の mtime = 最終書き込み時刻 = 活動シグナル。
@@ -504,7 +605,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         if (!p) return null;
         try { return statSync(p).mtimeMs; } catch { return null; }
       },
-      kill: () => child.kill("SIGTERM"),
+      kill: () => terminatePty(child, "SIGTERM"),
       idleMs: envInt(env.LICTOR_SESSION_END_IDLE_KILL_MS, 300_000),
       maxWaitMs: envInt(env.LICTOR_SESSION_END_MAX_WAIT_MS, 1_800_000),
       checkMs: envInt(env.LICTOR_SESSION_END_CHECK_MS, 30_000),
@@ -517,8 +618,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // rendered prompt. We paste+submit it once, after the TUI has had time to
   // draw (armed on first pty output). Best-effort; no env → no-op.
   let delegationInjector: DelegationInjector | null = null;
-  const delegationPrompt = loadDelegationPrompt(env);
-  if (delegationPrompt) {
+  if (delegationPrompt && transport === "legacy") {
     delegationInjector = createDelegationInjector({
       prompt: delegationPrompt,
       submit: (text) => {
@@ -547,6 +647,14 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       sessionId: concordia.id,
       concordiaBaseUrl,
       provider,
+      expectedCodexThreadId,
+      transcriptSink: codexTranscriptSink,
+      onRelayError: (error) => {
+        process.stderr.write(`lictor: transcript relay failed: ${error.message}\n`);
+        if (provider.name === "codex" && transport === "app-server") {
+          terminatePty(child, "SIGTERM");
+        }
+      },
       onQuestionOpen: (qid) => pendingQuestionGate.openQuestion(qid),
       onQuestionResolved: (qid) => pendingQuestionGate.resolveQuestion(qid),
       askMarkerEnabled: askMarkerActive,
@@ -657,16 +765,16 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
 
   let childExited = false;
   const cleanup = async () => {
-    if (statTimer) clearInterval(statTimer);
-    if (pollTimer) clearInterval(pollTimer);
     transcriptTail?.stop();
-    submitWatchdog.stop();
-    // Drop any held injects rather than flushing them into a dying pty.
-    pendingQuestionGate.forceClear();
-    concordia?.liveness.close();
-    sidecar.close();
-    resetTitle();
-    injector?.cleanup();
+    gracefulExit?.cancel();
+    if (codexTranscriptSink) {
+      try {
+        await codexTranscriptSink.flush();
+      } catch (error) {
+        process.stderr.write(`lictor: transcript flush failed during cleanup: ${(error as Error).message}\n`);
+      }
+    }
+    await cleanupShared();
     stdin.off("data", onStdin);
     process.stdout.off("resize", onResize);
     if (stdin.isTTY) {
@@ -712,7 +820,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   const forward = (sig: NodeJS.Signals) => () => {
     if (childExited) return;
     try {
-      child.kill(sig);
+      terminatePty(child, sig);
     } catch {
       // node-pty on Windows ignores signal name; falls back to terminate.
     }
@@ -752,6 +860,22 @@ function currentSize(): { cols: number; rows: number } {
   return { cols, rows };
 }
 
+function createVolatileTranscriptSink(): TranscriptFrameSink {
+  let seq = 0;
+  return {
+    post: async () => ({ seq: seq++, persisted: true }),
+    flush: async () => undefined,
+  };
+}
+
+function terminatePty(child: pty.IPty, signal: NodeJS.Signals): void {
+  if (process.platform === "win32") {
+    child.kill();
+    return;
+  }
+  child.kill(signal);
+}
+
 function signalNumberToName(signal: number): NodeJS.Signals {
   // node-pty reports signal as a number on POSIX. Map the common ones; fall
   // back to SIGTERM which is universally accepted by process.kill.
@@ -776,6 +900,20 @@ interface ConcordiaSlot {
   roleLabel: string | null;
   /** Mutable — wrap.ts swaps this out after ctx is built to attach the reactor. */
   liveness: LivenessHandle;
+}
+
+async function unregisterConcordiaSession(concordia: ConcordiaSlot | null): Promise<void> {
+  if (!concordia) return;
+  try {
+    const reply = await concordia.client.unregister(concordia.id);
+    if (!reply?.report) return;
+    const text = typeof reply.report === "string"
+      ? reply.report
+      : JSON.stringify(reply.report, null, 2);
+    process.stderr.write(`\nlictor: Concordia session report\n${text}\n`);
+  } catch {
+    // Concordia cleanup is best-effort; the wrapped process is already ending.
+  }
 }
 
 async function tryRegisterConcordia(meta: Meta, provider: ProviderConfig): Promise<ConcordiaSlot | null> {

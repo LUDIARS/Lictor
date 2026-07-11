@@ -1251,3 +1251,52 @@ test("startTranscriptTail(local-llm): session id が非UUIDなら事前施錠せ
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("startTranscriptTail(codex): expected App Server thread id exact-binds instead of newer decoy", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-codex-app-server-lock-"));
+  try {
+    const provider = { ...PROVIDERS.codex, transcriptDir: () => dir };
+    const expected = writeCodexRollout(
+      dir,
+      "rollout-2026-07-11-expected.jsonl",
+      "thread-expected",
+      dir,
+    );
+    const decoy = writeCodexRollout(
+      dir,
+      "rollout-2026-07-11-decoy.jsonl",
+      "thread-decoy",
+      dir,
+    );
+    const now = Date.now() / 1000;
+    utimesSync(expected, now, now);
+    utimesSync(decoy, now + 30, now + 30);
+
+    const frames: unknown[] = [];
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-app-server",
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+      expectedCodexThreadId: "thread-expected",
+      transcriptSink: {
+        post: async (kind, payload) => {
+          frames.push({ kind, payload });
+          return { seq: frames.length, persisted: true };
+        },
+        flush: async () => undefined,
+      },
+    });
+    try {
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), expected);
+      assert.equal(tail.getSessionUuid(), "thread-expected");
+      assert.equal(existsSync(`${expected}.lictor-claim`), true);
+      assert.equal(existsSync(`${decoy}.lictor-claim`), false);
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@ludiars/vestigium": "file:./lib/vestigium",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "zod": "^4.4.3"
   }
 }
