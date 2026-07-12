@@ -157,14 +157,37 @@ export class OrderedTranscriptSink implements TranscriptFrameSink {
 
   private async deliverWithRetry(frame: QueuedFrame): Promise<TranscriptPostResult> {
     let lastError: Error | null = null;
+    // timeout / ネットワーク断で終わった attempt は「サーバに届いて永続化済みかも
+    // しれない」不確定送信。後続 attempt が persisted:false (= サーバの
+    // INSERT OR IGNORE が同 seq を重複扱い) を返した場合、この不確定送信が
+    // 実は成功していた at-least-once の正常系なので、requirePersisted でも
+    // 成功として扱う (2026-07-12: Concordia 停滞 → 2s timeout → 同 seq 再送 →
+    // 重複応答で codex bootstrap が自殺した実障害の恒久対策)。
+    let uncertainAttempts = 0;
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+      let result: TranscriptPostResult;
       try {
-        return await this.deliver(frame);
+        result = await this.deliver(frame);
       } catch (error) {
         lastError = asError(error);
+        if (isUncertainDelivery(lastError)) uncertainAttempts++;
         if (!isRetryable(lastError) || attempt === this.maxAttempts) break;
         await this.sleep(this.retryBaseMs * 2 ** (attempt - 1));
+        continue;
       }
+      if (frame.requirePersisted && !result.persisted) {
+        if (uncertainAttempts > 0) {
+          return { seq: frame.seq, persisted: true };
+        }
+        // 不確定送信ゼロで persisted:false = 本当に他の書き手と seq が衝突している。
+        // ここで通すと binding の実体が別 frame という壊れ方になるので fail する。
+        lastError = new TranscriptSinkError(
+          "transcript_not_persisted",
+          `transcript seq=${frame.seq} was not newly persisted`,
+        );
+        break;
+      }
+      return result;
     }
     throw new TranscriptSinkError(
       "transcript_sink_failed",
@@ -220,12 +243,7 @@ export class OrderedTranscriptSink implements TranscriptFrameSink {
         `transcript POST response omitted persisted for seq=${frame.seq}`,
       );
     }
-    if (frame.requirePersisted && !parsed.data.persisted) {
-      throw new TranscriptSinkError(
-        "transcript_not_persisted",
-        `transcript seq=${frame.seq} was not newly persisted`,
-      );
-    }
+    // requirePersisted の判定は deliverWithRetry 側 (再送文脈を知っている層) で行う。
     return { seq: frame.seq, persisted: parsed.data.persisted };
   }
 }
@@ -241,6 +259,17 @@ function asError(error: unknown): Error {
 }
 
 function isRetryable(error: Error): boolean {
+  if (!(error instanceof TranscriptSinkError)) return false;
+  return error.code === "transcript_http_error";
+}
+
+/**
+ * リクエストがサーバに到達して処理された可能性を否定できない失敗か。
+ * timeout / ネットワーク断 (transcript_http_error) はレスポンスを受け取れなかった
+ * だけで、サーバ側では永続化が完了していることがある。HTTP 4xx/5xx も同 code に
+ * 畳まれているが、これらも「届いた上での失敗」なので同様に不確定として扱う。
+ */
+function isUncertainDelivery(error: Error): boolean {
   if (!(error instanceof TranscriptSinkError)) return false;
   return error.code === "transcript_http_error";
 }
