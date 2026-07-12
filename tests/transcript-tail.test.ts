@@ -868,6 +868,80 @@ test("startTranscriptTail: AskUserQuestion 検出後に onPickerQuestionRegister
   }
 });
 
+test("startTranscriptTail: ExitPlanMode 検出後に onQuestionOpen と onPickerQuestionRegistered を呼ぶ", async () => {
+  const pendingBodies: unknown[] = [];
+  const server = createServer((req, res) => {
+    if (req.method === "POST" && req.url?.includes("pending-question")) {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        pendingBodies.push(JSON.parse(body));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ question_id: 100 }));
+      });
+      return;
+    }
+    res.writeHead(204);
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  const concordiaBaseUrl = `http://127.0.0.1:${port}`;
+
+  const dir = mkdtempSync(join(tmpdir(), "lictor-plan-picker-"));
+  const openedIds: string[] = [];
+  const pickerQids: number[] = [];
+  try {
+    const ownUuid = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+    const pinnedPath = join(dir, `${ownUuid}.jsonl`);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-plan-picker-session",
+      concordiaBaseUrl,
+      provider,
+      pinnedTranscriptPath: pinnedPath,
+      onQuestionOpen: (id) => openedIds.push(id),
+      onPickerQuestionRegistered: (qid) => pickerQids.push(qid),
+    });
+    try {
+      const line = JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "toolu_plan_picker01",
+              name: "ExitPlanMode",
+              input: { plan: "このプランで実装します。" },
+            },
+          ],
+        },
+      });
+      writeFileSync(pinnedPath, line + "\n", "utf8");
+
+      await sleep(1200);
+      assert.deepEqual(openedIds, ["toolu_plan_picker01"], "ExitPlanMode の tool_use id で gate を開く");
+      assert.deepEqual(pickerQids, [100], "ExitPlanMode 登録後に question_id=100 で呼ばれる");
+      assert.equal(pendingBodies.length, 1);
+      assert.deepEqual((pendingBodies[0] as { options?: unknown }).options, [
+        { label: "承認 (auto-accept edits)" },
+        { label: "承認 (編集は手動確認)" },
+        { label: "却下 (プラン継続)" },
+      ]);
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 // ─── decideCodexInitialBind: codex 初回束縛の決定 (session_id 施錠) ───────────
 //
 // 束縛キーは session_meta.session_id ただ一つ。 ちょうど 1 件のときだけ束縛し、

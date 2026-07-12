@@ -53,6 +53,11 @@ picker が**開く前**に発火する Claude Code の PreToolUse hook（matcher
 4. **force-clear** — wrapper 終了 / transcript-tail stop 時は保留を flush せず破棄
    （死にゆく pty / 追跡不能な picker への誤注入を避ける）。
 
+`ExitPlanMode` も `detectExitPlanMode` で `PendingQuestion` に変換し、transcript-tail の
+同じ後続処理（pending-question 投稿、`tool_use id → question_id` 記録、picker 回答キー注入）に
+流す。ローカル picker の選択肢順と Concordia 側の選択肢 index が一致する前提で、wrap.ts の
+既存 picker 分岐を再利用する。
+
 ## 劣化方針
 - gate は純粋な状態機械（タイマ無し）。`tool_result` 検知が解放の主経路で、
   picker 解決は必ず `tool_result` を書くため、セッションが生きている限り
