@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   detectAnsweredQuestionIds,
   detectAskUserQuestion,
+  detectExitPlanMode,
   extractPendingQuestions,
   providerSupportsAskUserQuestion,
 } from "../src/ask-question-relay.js";
@@ -222,6 +223,85 @@ test("detectAskUserQuestion: 複数 questions[] は同一 tool_use id を共有"
   assert.deepEqual(pqs.map((p) => p.id), ["toolu_xyz", "toolu_xyz"]);
 });
 
+test("detectExitPlanMode: ExitPlanMode tool_use をプラン承認 question に変換", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_plan001",
+          name: "ExitPlanMode",
+          input: { plan: "1. 実装する\n2. テストする" },
+        },
+      ],
+    },
+  });
+  const pqs = detectExitPlanMode(line);
+  assert.equal(pqs.length, 1);
+  assert.equal(pqs[0].id, "toolu_plan001");
+  assert.ok(pqs[0].question.startsWith("プラン承認: このプランで進めますか?\n\n1. 実装する"));
+  assert.deepEqual(pqs[0].options, [
+    { label: "承認 (auto-accept edits)" },
+    { label: "承認 (編集は手動確認)" },
+    { label: "却下 (プラン継続)" },
+  ]);
+  assert.equal(pqs[0].multiSelect, undefined);
+});
+
+test("detectExitPlanMode: plan は 1500 文字で切り詰める", () => {
+  const plan = "x".repeat(1501);
+  const line = JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        { type: "tool_use", id: "toolu_plan_long", name: "ExitPlanMode", input: { plan } },
+      ],
+    },
+  });
+  const pqs = detectExitPlanMode(line);
+  assert.equal(pqs.length, 1);
+  const body = pqs[0].question.split("\n\n")[1];
+  assert.equal(body.length, 1500);
+  assert.equal(body, "x".repeat(1500));
+});
+
+test("detectExitPlanMode: input.plan 欠落でも本文なしとして登録する", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        { type: "tool_use", id: "toolu_plan_missing", name: "ExitPlanMode", input: {} },
+      ],
+    },
+  });
+  const pqs = detectExitPlanMode(line);
+  assert.equal(pqs.length, 1);
+  assert.equal(pqs[0].question, "プラン承認: このプランで進めますか?\n\n(プラン本文なし)");
+});
+
+test("detectExitPlanMode: AskUserQuestion 行 / 無関係 tool_use 行は空配列", () => {
+  const askLine = JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_ask",
+          name: "AskUserQuestion",
+          input: { questions: [{ question: "Q", options: [{ label: "A" }] }] },
+        },
+      ],
+    },
+  });
+  const bashLine = JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", id: "toolu_bash", name: "Bash", input: { command: "ls" } }] },
+  });
+  assert.deepEqual(detectExitPlanMode(askLine), []);
+  assert.deepEqual(detectExitPlanMode(bashLine), []);
+});
+
 test("detectAnsweredQuestionIds: user tool_result の tool_use_id を返す", () => {
   // 実データ準拠: AskUserQuestion の回答は直後の user 行に
   // tool_result{tool_use_id} として現れる。
@@ -238,6 +318,22 @@ test("detectAnsweredQuestionIds: user tool_result の tool_use_id を返す", ()
     },
   });
   assert.deepEqual(detectAnsweredQuestionIds(line), ["toolu_abc123"]);
+});
+
+test("detectAnsweredQuestionIds: ExitPlanMode の tool_result id も返す", () => {
+  const line = JSON.stringify({
+    type: "user",
+    message: {
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_plan001",
+          content: "Plan accepted",
+        },
+      ],
+    },
+  });
+  assert.deepEqual(detectAnsweredQuestionIds(line), ["toolu_plan001"]);
 });
 
 test("detectAnsweredQuestionIds: assistant 行 / 非 tool_result は空配列", () => {
