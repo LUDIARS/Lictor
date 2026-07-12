@@ -151,7 +151,7 @@ export interface ProviderConfig {
    * parse 不能・未知フォーマット) は true を返して従来どおり claim ガードに
    * 委ねる (新しい CLI バージョンでメタ形式が変わっても中継が止まらない)。
    */
-  transcriptMetaAccepts?: (firstLine: string, ctx: { cwd: string; startedAtMs?: number; mtimeMs?: number }) => boolean;
+  transcriptMetaAccepts?: (firstLine: string, ctx: { cwd: string; startedAtMs?: number; mtimeMs?: number; expectedOriginator?: string | null }) => boolean;
 
   /**
    * 先頭メタ行から provider ネイティブの session id を読む ({@link supportsSessionPin}
@@ -218,22 +218,30 @@ const HEAD_TS_GRACE_MS = 60_000;
 
 export function codexTranscriptMetaAccepts(
   firstLine: string,
-  ctx: { cwd: string; startedAtMs?: number; mtimeMs?: number },
+  ctx: { cwd: string; startedAtMs?: number; mtimeMs?: number; expectedOriginator?: string | null },
 ): boolean {
+  // originator 施錠モード: Lictor が spawn した codex は
+  // CODEX_INTERNAL_ORIGINATOR_OVERRIDE で session_meta.originator に自分の
+  // マーカーを焼く (2026-07-13 実測で 0.144.1 が尊重することを確認)。 期待値が
+  // 与えられたら **完全一致以外は全部拒否** し、 メタが読めない候補も掴まない
+  // (fail-open すると初回束縛の mtime 推測が復活し、 同 cwd の別 codex
+  // セッションを掴む crosstalk が再発するため。 2026-07-13 実害)。
+  const strict = typeof ctx.expectedOriginator === "string" && ctx.expectedOriginator.length > 0;
   let parsed: unknown;
   try {
     parsed = JSON.parse(firstLine);
   } catch {
-    return true;
+    return !strict;
   }
-  if (typeof parsed !== "object" || parsed === null) return true;
+  if (typeof parsed !== "object" || parsed === null) return !strict;
   const rec = parsed as Record<string, unknown>;
-  if (rec.type !== "session_meta") return true;
+  if (rec.type !== "session_meta") return !strict;
   const payload = rec.payload;
-  if (typeof payload !== "object" || payload === null) return true;
+  if (typeof payload !== "object" || payload === null) return !strict;
   const p = payload as Record<string, unknown>;
   const source = typeof p.source === "string" ? p.source : "";
   const originator = typeof p.originator === "string" ? p.originator : "";
+  if (strict && originator !== ctx.expectedOriginator) return false;
   if (source === "exec" || originator === "codex_exec") return false;
   if (typeof p.cwd === "string" && p.cwd.length > 0) {
     if (normalizePathForCompare(p.cwd) !== normalizePathForCompare(ctx.cwd)) return false;
