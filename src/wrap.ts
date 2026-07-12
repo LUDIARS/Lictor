@@ -93,6 +93,15 @@ export function resolveCodexTransport(
   return hasDelegationPrompt ? "app-server" : "legacy";
 }
 
+/**
+ * codex rollout の session_meta.originator に焼く Lictor マーカー
+ * (CODEX_INTERNAL_ORIGINATOR_OVERRIDE の値)。 セッション毎に一意にし、
+ * transcript-tail の originator 施錠 (完全一致束縛) のキーにする。
+ */
+export function codexOriginatorMarker(sessionId: string | null): string {
+  return sessionId ? `lictor:${sessionId}` : "lictor";
+}
+
 /** Parse a positive-int env var, falling back to `fallback` when unset/invalid. */
 function envInt(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === "") return fallback;
@@ -432,6 +441,12 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     if (meta.persona?.name) env.LICTOR_PERSONA_NAME = String(meta.persona.name);
     if (meta.role_label) env.LICTOR_ROLE_LABEL = meta.role_label;
   }
+  // codex: rollout session_meta.originator に自分のマーカーを焼く。 transcript-tail は
+  // このマーカー完全一致でのみ束縛する (originator 施錠)。 codex 0.144.1 が env を
+  // 尊重することを 2026-07-13 に実測確認。 ユーザが明示設定していれば上書きしない。
+  if (provider.name === "codex" && !env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE) {
+    env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE = codexOriginatorMarker(concordia?.id ?? null);
+  }
 
   // Spawn-arg injection. Two pieces compose here:
   //   1. --add-dir <sessionDir> for the claude-add-dir strategy (Codex
@@ -674,6 +689,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       concordiaBaseUrl,
       provider,
       expectedCodexThreadId,
+      // originator 施錠: 自分が env に焼いたマーカー (またはユーザ明示値) と
+      // 完全一致する rollout だけを束縛候補にする。
+      expectedCodexOriginator:
+        provider.name === "codex" ? env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE ?? null : null,
       transcriptSink: codexTranscriptSink,
       onRelayError: (error) => {
         process.stderr.write(`lictor: transcript relay failed: ${error.message}\n`);
