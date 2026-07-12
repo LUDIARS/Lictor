@@ -519,7 +519,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         sink: standaloneSink,
         lictorVersion: LICTOR_VERSION,
         requestTimeoutMs: envInt(env.LICTOR_CODEX_APP_SERVER_REQUEST_TIMEOUT_MS, 30_000),
-        transcriptTimeoutMs: envInt(env.LICTOR_TRANSCRIPT_POST_TIMEOUT_MS, 2_000),
+        // Concordia はイベントループ停滞で 2s を超えて固まることがある (2026-07-12
+        // 実測: transcript POST 応答まで数秒〜)。 短い timeout は同 seq 再送 →
+        // INSERT OR IGNORE 重複を誘発するだけなので、bootstrap を殺さない余裕を持たせる。
+        transcriptTimeoutMs: envInt(env.LICTOR_TRANSCRIPT_POST_TIMEOUT_MS, 10_000),
         transcriptMaxAttempts: envInt(env.LICTOR_TRANSCRIPT_MAX_ATTEMPTS, 3),
         transcriptRetryBaseMs: envInt(env.LICTOR_TRANSCRIPT_RETRY_BASE_MS, 100),
         transcriptMaxQueue: envInt(env.LICTOR_TRANSCRIPT_MAX_QUEUE, 1_000),

@@ -56,6 +56,33 @@ test("OrderedTranscriptSink retries transient HTTP failures without changing seq
   assert.deepEqual(sleeps, [25]);
 });
 
+test("OrderedTranscriptSink treats duplicate-after-timeout as persisted (at-least-once)", async () => {
+  // attempt1: サーバは永続化したが応答前に timeout (不確定送信)。
+  // attempt2: 同 seq 再送 → サーバの INSERT OR IGNORE が重複扱いで persisted:false。
+  // requirePersisted でも「先行 attempt が永続化済み」として成功しなければならない。
+  let calls = 0;
+  const sink = new OrderedTranscriptSink({
+    baseUrl: "http://127.0.0.1:17330",
+    sessionId: "session-dup",
+    maxAttempts: 3,
+    retryBaseMs: 1,
+    sleep: async () => {},
+    fetchFn: async () => {
+      calls++;
+      if (calls === 1) throw new Error("socket hang up (timeout)");
+      return new Response(JSON.stringify({ persisted: false }), { status: 200 });
+    },
+  });
+
+  assert.deepEqual(
+    await sink.post("raw", { type: "bound" }, { requirePersisted: true }),
+    { seq: 0, persisted: true },
+  );
+  assert.equal(calls, 2);
+  // sink は毒化されず後続 post も通る。
+  assert.deepEqual(await sink.post("text", {}), { seq: 1, persisted: false });
+});
+
 test("OrderedTranscriptSink poisons later posts after required persistence fails", async () => {
   const sink = new OrderedTranscriptSink({
     baseUrl: "http://127.0.0.1:17330",
