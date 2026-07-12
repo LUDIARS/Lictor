@@ -97,9 +97,15 @@ function claimDbg(msg: string): void {
 
 /**
  * JSONL の先頭行 (最大 maxBytes) を読む。 provider の transcriptMetaAccepts に
- * 渡すメタ判定専用で、 読めなければ null (判定不能 = フィルタは fail-open)。
+ * 渡すメタ判定専用で、 読めなければ null (判定不能 = フィルタ側の扱いに委ねる)。
+ *
+ * maxBytes は codex の session_meta 行が base_instructions を丸ごと含んで
+ * 数十 KB になるため 256 KiB。 旧上限 8 KiB では先頭行が途中で切れて JSON.parse
+ * が失敗し、 originator 施錠モードが「自分の rollout」 を拒否して中継が全停止した
+ * (2026-07-13 実害: 実測 17 KB の session_meta)。 cap 内に改行が見つからない
+ * 場合は途切れた JSON を返さず null (判定不能) にする。
  */
-export function readTranscriptFirstLine(path: string, maxBytes = 8192): string | null {
+export function readTranscriptFirstLine(path: string, maxBytes = 262_144): string | null {
   let fd: number | null = null;
   try {
     fd = openSync(path, "r");
@@ -108,7 +114,10 @@ export function readTranscriptFirstLine(path: string, maxBytes = 8192): string |
     if (n <= 0) return null;
     const text = buf.subarray(0, n).toString("utf8");
     const nl = text.indexOf("\n");
-    return nl >= 0 ? text.slice(0, nl) : text;
+    if (nl >= 0) return text.slice(0, nl);
+    // cap いっぱいまで読んで改行なし = 行が途切れている (書きかけ or 巨大行)。
+    // 壊れた JSON を返すと strict フィルタが誤判定するので「読めない」扱いにする。
+    return n === maxBytes ? null : text;
   } catch {
     return null;
   } finally {
