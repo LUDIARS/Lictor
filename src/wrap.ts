@@ -72,6 +72,27 @@ export function codexTransport(env: NodeJS.ProcessEnv = process.env): CodexTrans
   throw new Error(`invalid LICTOR_CODEX_TRANSPORT=${raw}; expected app-server or legacy`);
 }
 
+/**
+ * 実効 codex transport を決める。
+ *
+ * codex 0.144.x はターン 0 のスレッドの rollout を一切書かない (app-server 存命中
+ * でも書かれないことを 2026-07-13 に実測)。 そのため対話セッションの
+ * 「thread/start で bind → close → `codex resume <threadId>`」 は resume が
+ * "No saved session found" で即死し、 spawn された Codex セッションが数十秒で
+ * 全滅する。 App Server bind が機能するのは実ターンを回す headless delegation
+ * のみなので、 対話 (delegation prompt なし) は legacy (rollout tail 採択) に
+ * 落とす。 env LICTOR_CODEX_TRANSPORT の明示指定は常に尊重する。
+ */
+export function resolveCodexTransport(
+  env: NodeJS.ProcessEnv,
+  hasDelegationPrompt: boolean,
+): CodexTransport {
+  const configured = codexTransport(env);
+  if (configured !== "app-server") return configured;
+  if (env.LICTOR_CODEX_TRANSPORT?.trim()) return configured;
+  return hasDelegationPrompt ? "app-server" : "legacy";
+}
+
 /** Parse a positive-int env var, falling back to `fallback` when unset/invalid. */
 function envInt(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === "") return fallback;
@@ -505,7 +526,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   let codexAppServerSession: CodexAppServerSession | null = null;
   let expectedCodexThreadId: string | null = null;
   let codexTranscriptSink: TranscriptFrameSink | null = null;
-  const transport = provider.name === "codex" ? codexTransport(env) : "legacy";
+  const transport = provider.name === "codex"
+    ? resolveCodexTransport(env, delegationPrompt !== null)
+    : "legacy";
 
   if (provider.name === "codex" && transport === "app-server") {
     const standaloneSink = concordia ? undefined : createVolatileTranscriptSink();
