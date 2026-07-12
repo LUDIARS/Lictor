@@ -81,7 +81,7 @@ Notes:
     reach the terminal — bypassing Claude Code's subprocess stdout capture.
   - Concordia integration is best-effort: failures degrade to v0.0 behavior
     (no persona, no auto-stat, no liveness). Set LICTOR_DISABLE_CONCORDIA=1
-    to skip Concordia entirely. Default endpoint: 127.0.0.1:17330, override
+    to skip Concordia entirely. Default endpoint: 127.0.0.1:11111, override
     with CONCORDIA_HOST / CONCORDIA_PORT.
 `;
 

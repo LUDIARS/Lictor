@@ -95,9 +95,15 @@ export interface GrepResult { hits: GrepHit[]; files_scanned: number; truncated:
  */
 export function fsGrep(cwd: string, pattern: string, opts: { path?: string; flags?: string } = {}): GrepResult | FsError {
   if (!pattern || pattern.length > 1000) return { error: "pattern required, ≤ 1000 chars" };
+  // g / y は lastIndex を持ち re.test() が stateful になって行を取りこぼすため、
+  // stateless な flag のみ許可する (allowlist)。
+  const flags = opts.flags ?? "";
+  if (!/^[imsu]*$/.test(flags)) {
+    return { error: `unsupported regex flags: "${flags}" (allowed: i, m, s, u)` };
+  }
   let re: RegExp;
   try {
-    re = new RegExp(pattern, opts.flags ?? "");
+    re = new RegExp(pattern, flags);
   } catch (err) {
     return { error: `invalid regex: ${(err as Error).message}` };
   }
