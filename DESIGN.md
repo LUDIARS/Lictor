@@ -44,7 +44,7 @@ hook can't actually run between Claude turns.
 │  └─ auto-title cycle (persona + repo + branch + marks)   │
 └──────────┬───────────────────────────────────────────────┘
            │ node-pty ConPTY/forkpty + env injection                 ┌──────────────────────────────────┐
-           ▼                                                          │ Concordia (127.0.0.1:17330)      │
+           ▼                                                          │ Concordia (127.0.0.1:11111)      │
 ┌─────────────────────────────────────────┐                          │ ┌──────────────────────────────┐ │
 │  claude (Claude Code TUI)               │                          │ │ /v1/sessions  (register)     │ │
 │   $LICTOR_PORT, $LICTOR_SESSION_ID,     │                          │ │ /ws?session=  (liveness)     │ │

@@ -46,7 +46,7 @@ npx tsx tests/smoke-roundtrip.mjs         # registers a real Concordia session
 npx tsx tests/local-server.mjs            # long-running sidecar w/ ptyWriter→stdout logger
 ```
 
-`smoke-roundtrip.mjs` requires Concordia on `127.0.0.1:17330` and will
+`smoke-roundtrip.mjs` requires Concordia on `127.0.0.1:11111` and will
 create + delete a real `lictor-smoke-<uuid>` session. It's a tracked file
 but not part of `npm test`.
 

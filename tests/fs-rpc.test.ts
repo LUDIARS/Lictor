@@ -89,6 +89,19 @@ test("fsGrep rejects invalid regex", () => {
   } finally { cleanup(); }
 });
 
+test("fsGrep rejects stateful regex flags (g / y) but allows i/m/s/u", () => {
+  const { cwd, cleanup } = setupCwd();
+  try {
+    for (const bad of ["g", "y", "gi", "gimsuy"]) {
+      const out = fsGrep(cwd, "needle", { flags: bad });
+      assert.ok("error" in out, `flags "${bad}" should be rejected`);
+    }
+    const ok = fsGrep(cwd, "NEEDLE", { flags: "i" });
+    if ("error" in ok) throw new Error(ok.error);
+    assert.equal(ok.hits.length, 1);
+  } finally { cleanup(); }
+});
+
 test("fsGrep skips node_modules / .git", () => {
   const { cwd, cleanup } = setupCwd();
   try {
