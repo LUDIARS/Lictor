@@ -182,6 +182,13 @@ export interface TranscriptTailOptions {
    * 許可し、mtime による候補選択へ降りない。
    */
   expectedCodexThreadId?: string | null;
+  /**
+   * Lictor が spawn した codex の session_meta.originator に焼いたマーカー
+   * (CODEX_INTERNAL_ORIGINATOR_OVERRIDE の値)。 指定時は originator 完全一致の
+   * rollout 以外を候補から構造的に排除する (初回束縛の mtime 推測を廃し、
+   * 同 cwd の別 codex セッション rollout を掴む crosstalk を塞ぐ)。
+   */
+  expectedCodexOriginator?: string | null;
   /** App Server binding frame と seq 空間を共有する ordered sink。 */
   transcriptSink?: TranscriptFrameSink | null;
   /** ordered sink の永続失敗を wrap へ伝える。 */
@@ -349,12 +356,15 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // フィルタ未定義 provider / 先頭行が読めない・形式不明の場合は許可し、 従来どおり
   // claim ガードに委ねる (fail-open)。 claim より先に判定して、 別セッションの
   // ファイルへ claim を置いてしまう副作用ごと避ける。
+  const expectedOriginator = opts.expectedCodexOriginator?.trim() || null;
   const candidateAccepted = (path: string, st?: Stats): boolean => {
     const accepts = opts.provider.transcriptMetaAccepts;
     if (!accepts) return true;
     const first = readTranscriptFirstLine(path);
-    if (first === null) return true;
-    if (accepts(first, { cwd: opts.cwd, startedAtMs: startedAt, mtimeMs: st?.mtimeMs })) return true;
+    // originator 施錠モードでは先頭行が読めない候補を掴まない (fail-open すると
+    // mtime 推測束縛が復活する)。 自分の rollout の書きかけは次回 poll で読める。
+    if (first === null) return !expectedOriginator;
+    if (accepts(first, { cwd: opts.cwd, startedAtMs: startedAt, mtimeMs: st?.mtimeMs, expectedOriginator })) return true;
     claimDbg(`candidate rejected by meta filter path=${path} owner=${opts.sessionId}`);
     return false;
   };

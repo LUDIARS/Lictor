@@ -164,3 +164,34 @@ test("readTranscriptFirstLine: 改行の無い巨大 1 行は maxBytes で打ち
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── originator 施錠 (2026-07-13 crosstalk 再発対策) ────────────────────
+// Lictor が CODEX_INTERNAL_ORIGINATOR_OVERRIDE で焼いたマーカーの完全一致以外を
+// 候補から排除する。 同 cwd で人間の codex (VSCode/Desktop 等) が並走していても
+// 初回束縛が他人の rollout を掴まないことを保証する。
+
+test("originator施錠: マーカー一致のみ許可、別 originator / 欠落は拒否", () => {
+  const mine = metaLine({ cwd: CWD, originator: "lictor:lictor-abc" });
+  const other = metaLine({ cwd: CWD, originator: "Codex Desktop" });
+  const missing = metaLine({ cwd: CWD });
+  const ctx = { cwd: CWD, expectedOriginator: "lictor:lictor-abc" };
+  assert.equal(codexTranscriptMetaAccepts(mine, ctx), true);
+  assert.equal(codexTranscriptMetaAccepts(other, ctx), false);
+  assert.equal(codexTranscriptMetaAccepts(missing, ctx), false);
+});
+
+test("originator施錠: メタが読めない候補は fail-open しない", () => {
+  const ctx = { cwd: CWD, expectedOriginator: "lictor:lictor-abc" };
+  assert.equal(codexTranscriptMetaAccepts("not json", ctx), false);
+  assert.equal(codexTranscriptMetaAccepts(JSON.stringify({ type: "event_msg" }), ctx), false);
+  // 施錠なし (期待値未指定) は従来どおり fail-open。
+  assert.equal(codexTranscriptMetaAccepts("not json", { cwd: CWD }), true);
+});
+
+test("originator施錠: 一致しても cwd 不一致 / exec は従来フィルタで拒否", () => {
+  const wrongCwd = metaLine({ cwd: "E:/Other", originator: "lictor:lictor-abc" });
+  const execRollout = metaLine({ cwd: CWD, originator: "lictor:lictor-abc", source: "exec" });
+  const ctx = { cwd: CWD, expectedOriginator: "lictor:lictor-abc" };
+  assert.equal(codexTranscriptMetaAccepts(wrongCwd, ctx), false);
+  assert.equal(codexTranscriptMetaAccepts(execRollout, ctx), false);
+});
