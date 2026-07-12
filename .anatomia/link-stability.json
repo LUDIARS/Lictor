@@ -1,0 +1,680 @@
+{
+  "version": 1,
+  "entries": {
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\active-repos.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\ask-marker.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\ask-question-relay.test.ts::concordia-codex-anti-stu-69bd95cb": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\auto-title.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-delegation.compat.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.55,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-delegation.compat.ts::codex-app-server-transcr-4dfa5b5a": {
+      "streak": 1,
+      "lastConfidence": 0.4516129032258065,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-delegation.compat.ts::codex-app-server-transcr-080ee20d": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-delegation.compat.ts::codex-app-server-transcr-8f60aadb": {
+      "streak": 1,
+      "lastConfidence": 0.4516129032258065,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-delegation.compat.ts::codex-app-server-transcr-0875779f": {
+      "streak": 1,
+      "lastConfidence": 0.44102564102564107,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-delegation.compat.ts::codex-app-server-transcr-4e1512e2": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-delegation.compat.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.5333333333333333,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-delegation.compat.ts::codex-app-server-transcr-f09da7e2": {
+      "streak": 1,
+      "lastConfidence": 0.4761904761904762,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-delegation.compat.ts::codex-app-server-transcr-de989d6c": {
+      "streak": 1,
+      "lastConfidence": 0.4666666666666667,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-delegation.compat.ts::prompt-edc313e0": {
+      "streak": 1,
+      "lastConfidence": 0.4705882352941177,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-client.test.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.55,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-client.test.ts::codex-app-server-transcr-4e1512e2": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-client.test.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.5333333333333333,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-client.test.ts::codex-app-server-transcr-f09da7e2": {
+      "streak": 1,
+      "lastConfidence": 0.4545454545454546,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-client.test.ts::codex-app-server-transcr-de989d6c": {
+      "streak": 1,
+      "lastConfidence": 0.4666666666666667,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-client.test.ts::prompt-edc313e0": {
+      "streak": 1,
+      "lastConfidence": 0.4705882352941177,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server.compat.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.5714285714285714,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server.compat.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.55,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server.compat.ts::codex-app-server-transcr-f09da7e2": {
+      "streak": 1,
+      "lastConfidence": 0.4571428571428572,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server.compat.ts::codex-app-server-transcr-de989d6c": {
+      "streak": 1,
+      "lastConfidence": 0.4705882352941177,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server.compat.ts::prompt-edc313e0": {
+      "streak": 1,
+      "lastConfidence": 0.4470588235294118,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server.compat.ts::concordia-codex-d6f746fa": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-session.test.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.55,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-session.test.ts::codex-app-server-transcr-c286cc27": {
+      "streak": 1,
+      "lastConfidence": 0.44571428571428573,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-session.test.ts::codex-app-server-transcr-4dfa5b5a": {
+      "streak": 1,
+      "lastConfidence": 0.4516129032258065,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-session.test.ts::codex-app-server-transcr-f813f3d4": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-session.test.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.5333333333333333,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-session.test.ts::codex-app-server-transcr-f09da7e2": {
+      "streak": 1,
+      "lastConfidence": 0.4545454545454546,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-session.test.ts::codex-app-server-transcr-de989d6c": {
+      "streak": 1,
+      "lastConfidence": 0.4666666666666667,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-app-server-session.test.ts::prompt-edc313e0": {
+      "streak": 1,
+      "lastConfidence": 0.4705882352941177,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-event-frames.test.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-event-frames.test.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-event-frames.test.ts::concordia-codex-d6f746fa": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\concordia.test.ts::lictor-design-notes-conc-8558b5ff": {
+      "streak": 1,
+      "lastConfidence": 0.4571428571428572,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\concordia.test.ts::concordia-aa493e88": {
+      "streak": 1,
+      "lastConfidence": 0.6000000000000001,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\concordia.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\concordia.test.ts::concordia-codex-d6f746fa": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\concordia.test.ts::root-5c64123e": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-transport.test.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-transport.test.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-transport.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\codex-transport.test.ts::concordia-codex-d6f746fa": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\discord-channels.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\event-reactor.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\fs-rpc.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\delegation-inject.test.ts::askuserquestion-pending--00c986e3": {
+      "streak": 1,
+      "lastConfidence": 0.4571428571428572,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\delegation-inject.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\graceful-exit.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\harness-hook.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\local-hooks.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\local-transcript.test.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\local-transcript.test.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\local-transcript.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\local-transcript.test.ts::transcript-pull-9fcc9b51": {
+      "streak": 1,
+      "lastConfidence": 0.48000000000000004,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\osc.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\local-compaction.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\pending-question-gate.test.ts::askuserquestion-pending--00c986e3": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\memory-loader.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\provider.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\rename.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\session-end-skill.test.ts::skill-3006a8b8": {
+      "streak": 1,
+      "lastConfidence": 0.5,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\session-end-skill.test.ts::skill-a9be9462": {
+      "streak": 1,
+      "lastConfidence": 0.4470588235294118,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\session-end-skill.test.ts::skill-repo-84d03c9a": {
+      "streak": 1,
+      "lastConfidence": 0.4421052631578948,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\session-end-skill.test.ts::skill-trust-boundary-932208a2": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\spawn-context.test.ts::print-the-lictor-version-1455e389": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\spawn-context.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\slash-keys.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\task-relay.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\skill-injector.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\skill-injector.test.ts::skill-3006a8b8": {
+      "streak": 1,
+      "lastConfidence": 0.5333333333333333,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\skill-injector.test.ts::skill-repo-84d03c9a": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\skill-injector.test.ts::skill-trust-boundary-932208a2": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\submit-watchdog.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-sink.test.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-sink.test.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-sink.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-sink.test.ts::transcript-pull-9fcc9b51": {
+      "streak": 1,
+      "lastConfidence": 0.48000000000000004,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-meta-filter.test.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-meta-filter.test.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-meta-filter.test.ts::transcript-pull-9fcc9b51": {
+      "streak": 1,
+      "lastConfidence": 0.4666666666666667,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\user-activity.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-tail.test.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-tail.test.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-tail.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\transcript-tail.test.ts::transcript-pull-9fcc9b51": {
+      "streak": 1,
+      "lastConfidence": 0.48000000000000004,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\version.test.ts::print-the-lictor-version-1455e389": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\version.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\wrap-env.test.ts::prompt-edc313e0": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\tests\\wrap-env.test.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\cli.ts::or-via-the-bundled-cli-s-c53ca5ab": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-client.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.5333333333333333,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-client.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.52,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-client.ts::codex-app-server-transcr-f09da7e2": {
+      "streak": 1,
+      "lastConfidence": 0.4521739130434783,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-client.ts::codex-app-server-transcr-de989d6c": {
+      "streak": 1,
+      "lastConfidence": 0.4631578947368421,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-client.ts::prompt-edc313e0": {
+      "streak": 1,
+      "lastConfidence": 0.4421052631578948,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-session.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.5090909090909091,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-session.ts::codex-app-server-transcr-c286cc27": {
+      "streak": 1,
+      "lastConfidence": 0.4421052631578948,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-session.ts::codex-app-server-transcr-4dfa5b5a": {
+      "streak": 1,
+      "lastConfidence": 0.4470588235294118,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-session.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.5,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-session.ts::codex-app-server-transcr-f09da7e2": {
+      "streak": 1,
+      "lastConfidence": 0.448,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-app-server-session.ts::codex-app-server-transcr-de989d6c": {
+      "streak": 1,
+      "lastConfidence": 0.4571428571428572,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\concordia-types.ts::lictor-design-notes-conc-8558b5ff": {
+      "streak": 1,
+      "lastConfidence": 0.4571428571428572,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\concordia-types.ts::concordia-aa493e88": {
+      "streak": 1,
+      "lastConfidence": 0.6000000000000001,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\concordia-types.ts::concordia-codex-d6f746fa": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\concordia-types.ts::root-5c64123e": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\codex-session-bootstrap.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\concordia.ts::lictor-design-notes-conc-8558b5ff": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\concordia.ts::concordia-aa493e88": {
+      "streak": 1,
+      "lastConfidence": 0.48000000000000004,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\delegation-inject.ts::prompt-edc313e0": {
+      "streak": 1,
+      "lastConfidence": 0.46153846153846156,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\pending-question-gate.ts::askuserquestion-pending--00c986e3": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\permission-hook.ts::pretooluse-ae20c608": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\session-end-skill.ts::skill-3006a8b8": {
+      "streak": 1,
+      "lastConfidence": 0.4666666666666667,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\session-end-skill.ts::skill-a9be9462": {
+      "streak": 1,
+      "lastConfidence": 0.4421052631578948,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\pending-tasks.ts::askuserquestion-pending--00c986e3": {
+      "streak": 1,
+      "lastConfidence": 0.4571428571428572,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\session-id-hook.ts::print-the-lictor-version-1455e389": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\skill-injector.ts::skill-3006a8b8": {
+      "streak": 1,
+      "lastConfidence": 0.4571428571428572,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\spawn-context.ts::concordia-aa493e88": {
+      "streak": 1,
+      "lastConfidence": 0.4571428571428572,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\spawn-context.ts::pretooluse-4e74aad8": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\session-state-skill.ts::skill-3006a8b8": {
+      "streak": 1,
+      "lastConfidence": 0.5,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\session-state-skill.ts::skill-a9be9462": {
+      "streak": 1,
+      "lastConfidence": 0.4470588235294118,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\session-state-skill.ts::skill-trust-boundary-932208a2": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\transcript-sink.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.4444444444444445,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\transcript-sink.ts::codex-app-server-transcr-63198e9b": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\transcript-sink.ts::transcript-pull-9fcc9b51": {
+      "streak": 1,
+      "lastConfidence": 0.4666666666666667,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\version.ts::lictor-design-notes-cbbe26e8": {
+      "streak": 1,
+      "lastConfidence": 0.48000000000000004,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\version.ts::lictor-design-notes-conc-8558b5ff": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\version.ts::lictor-li-quick-start-aa4596e9": {
+      "streak": 1,
+      "lastConfidence": 0.4666666666666667,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\version.ts::print-the-lictor-version-1455e389": {
+      "streak": 1,
+      "lastConfidence": 0.48888888888888893,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\version.ts::lictor-llm-lictor-local-380a2fae": {
+      "streak": 1,
+      "lastConfidence": 0.45,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\local-agent\\transcript.ts::codex-app-server-transcr-aeab2221": {
+      "streak": 1,
+      "lastConfidence": 0.44000000000000006,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    },
+    "C:\\Users\\raury\\AppData\\Local\\Temp\\claude\\E--Document-Ars\\09a221e0-b9ca-4b50-a964-926e14c3d64e\\scratchpad\\wt4\\lictor-line\\src\\local-agent\\transcript.ts::transcript-pull-9fcc9b51": {
+      "streak": 1,
+      "lastConfidence": 0.4571428571428572,
+      "lastFingerprint": "d4e7f17c0c176f31f899ff650f2f85e8"
+    }
+  }
+}
