@@ -11,12 +11,12 @@ test("PROVIDERS registers claude with claude-add-dir skill strategy", () => {
   assert.equal(p.concordiaProvider, "claude-code");
 });
 
-test("PROVIDERS registers codex with codex-user-agents skill strategy", () => {
+test("PROVIDERS disables Codex skill injection because user scope is shared", () => {
   const p = PROVIDERS.codex;
   assert.equal(p.name, "codex");
   assert.equal(p.binary, "codex");
-  assert.equal(p.skillStrategy, "codex-user-agents");
-  assert.equal(p.supportsSkills, true);
+  assert.equal(p.skillStrategy, "none");
+  assert.equal(p.supportsSkills, false);
   assert.equal(p.concordiaProvider, "codex-cli");
 });
 

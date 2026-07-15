@@ -19,17 +19,11 @@ import { cwdToProjectKey } from "./memory-loader.js";
  *    and pass `--add-dir <sessionDir>` to claude so it picks them up at scan.
  *    Session-scoped; cleanup removes the whole sessionDir.
  *
- *  - `codex-user-agents`: write to `~/.agents/skills/lictor-<sessionId>-<name>/SKILL.md`.
- *    Codex walks `$HOME/.agents/skills/` at startup (user scope) and
- *    hot-reloads SKILL.md edits, so no spawn arg is needed. The
- *    `lictor-<sessionId>-` prefix namespaces our writes so they can't
- *    collide with the user's own skills, and cleanup deletes them by
- *    prefix on session exit.
- *
- *  - `none`: provider has no SKILL.md discovery mechanism. seedSkills /
- *    /v1/skill endpoints become no-ops.
+ *  - `none`: Lictor does not write skills for the provider. This is used for
+ *    Codex because its user-scope `.agents/skills` directory is shared by all
+ *    sessions and cannot provide per-session isolation.
  */
-export type SkillStrategy = "claude-add-dir" | "codex-user-agents" | "none";
+export type SkillStrategy = "claude-add-dir" | "none";
 
 export interface ProviderConfig {
   /** Identifier used in CLI: `lictor <name> [args...]`. */
@@ -483,12 +477,10 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
   codex: {
     name: "codex",
     binary: "codex",
-    // Codex Agent Skills (documented at developers.openai.com/codex/skills):
-    // `.agents/skills/<name>/SKILL.md`. Repo / user / admin / system scopes.
-    // We use the user scope (~/.agents/skills/) with a per-session prefix
-    // so writes are auto-discovered without polluting the user's repo.
-    skillStrategy: "codex-user-agents",
-    supportsSkills: true,
+    // Codex scans user-scope skills globally. Lictor session skills must not be
+    // written there because every concurrent session would discover them.
+    skillStrategy: "none",
+    supportsSkills: false,
     concordiaProvider: "codex-cli",
     displayName: "OpenAI Codex",
     submitInject: submitInjectTwoStep,
