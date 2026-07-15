@@ -168,13 +168,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
 
   const titleState: TitleState = { manualOverride: null };
 
-  // Skill injection — pre-spawn writes go to <root>/.claude/skills/, and we
-  // pass <root> to claude via --add-dir so it's scanned at boot. Mid-session
-  // overwrites of existing SKILL.md files reload live via claude's watcher.
-  // Skill injection: layout/scope depends on provider.skillStrategy.
-  //   - claude-add-dir: session-scoped dir, passed via --add-dir
-  //   - codex-user-agents: ~/.agents/skills/lictor-<sessionId>-<name>/, no spawn arg
-  //   - none: no injector
+  // Claude skill injection writes to a session-scoped directory passed via
+  // --add-dir. Providers with the "none" strategy, including Codex, never
+  // construct an injector.
   const sessionIdForSkills = (concordia?.id ?? `lictor-${randomUUID()}`).replace(/[^a-zA-Z0-9-]/g, "-");
   const injector = provider.supportsSkills
     ? new SkillInjector(sessionIdForSkills, provider.skillStrategy)
