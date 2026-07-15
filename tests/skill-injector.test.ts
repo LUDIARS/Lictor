@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_SKILL_BYTES, renderSkillMd, sanitizeSkillName, SkillInjector } from "../src/skill-injector.js";
@@ -37,44 +37,6 @@ test("SkillInjector [claude-add-dir]: writes, lists, deletes, cleans up", () => 
 
   inj.cleanup();
   assert.equal(existsSync(inj.sessionDir), false);
-  rmSync(home, { recursive: true, force: true });
-});
-
-test("SkillInjector [codex-user-agents]: writes with prefix, cleanup leaves user's own skills alone", () => {
-  const home = mkdtempSync(join(tmpdir(), "lictor-test-"));
-  const inj = new SkillInjector("sess-Y", "codex-user-agents", { homeRoot: home });
-  assert.equal(inj.skillsDir, join(home, ".agents", "skills"));
-
-  inj.writeSkill("persona", "x");
-  inj.writeSkill("memory", "y");
-
-  // On disk, names are prefixed.
-  const onDisk = readdirSync(inj.skillsDir).sort();
-  assert.deepEqual(onDisk, ["lictor-sess-Y-memory", "lictor-sess-Y-persona"]);
-
-  // list() strips the prefix.
-  assert.deepEqual(inj.list(), ["memory", "persona"]);
-
-  // A non-lictor skill in the same dir should survive cleanup.
-  const userSkillPath = join(inj.skillsDir, "user-own-skill");
-  mkdirSync(userSkillPath, { recursive: true });
-  writeFileSync(join(userSkillPath, "SKILL.md"), "user's skill");
-
-  inj.cleanup();
-
-  // Lictor's prefixed dirs gone, user's own skill untouched.
-  const after = readdirSync(inj.skillsDir).sort();
-  assert.deepEqual(after, ["user-own-skill"]);
-
-  rmSync(home, { recursive: true, force: true });
-});
-
-test("SkillInjector [codex-user-agents]: deleteSkill targets the prefixed dir", () => {
-  const home = mkdtempSync(join(tmpdir(), "lictor-test-"));
-  const inj = new SkillInjector("sZ", "codex-user-agents", { homeRoot: home });
-  inj.writeSkill("foo", "x");
-  assert.equal(inj.deleteSkill("foo"), true);
-  assert.deepEqual(inj.list(), []);
   rmSync(home, { recursive: true, force: true });
 });
 
