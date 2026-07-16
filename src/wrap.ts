@@ -45,12 +45,7 @@ import {
   resolveActiveReposDir,
 } from "./active-repos.js";
 import { createSubmitWatchdog } from "./submit-watchdog.js";
-import {
-  ASK_MARKER_SKILL_BODY,
-  ASK_MARKER_SKILL_DESCRIPTION,
-  ASK_MARKER_SKILL_NAME,
-  writeAskMarkerPrompt,
-} from "./ask-marker.js";
+import { writeAskMarkerPrompt } from "./ask-marker.js";
 import { postResolveQuestion } from "./ask-question-relay.js";
 import {
   closeCodexAppServerSession,
@@ -500,8 +495,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   //   - claude: 共通マーカールール + 組み込み AskUserQuestion 禁止 を常時
   //     --append-system-prompt-file で注入 (ファイル経由で Windows の cmd.exe
   //     クォート問題を回避)。
-  //   - codex : 共通マーカールールを skill 注入 (Codex は ~/.agents/skills を自動探索)。
-  // gemini は注入機構が無いので skip。検出側 (transcript-tail) は askMarkerActive と連動。
+  //   - codex / gemini: supportsSkills が false で injector が構築されないため注入なし。
+  //     検出側 (transcript-tail) は askMarkerActive と連動。
   let askMarkerActive = false;
   if (concordia && injector) {
     if (provider.name === "claude") {
@@ -512,22 +507,6 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       } catch (err) {
         process.stderr.write(
           `lictor: ask-marker system-prompt write failed: ${(err as Error).message}\n`,
-        );
-      }
-    } else if (provider.name === "codex") {
-      try {
-        injector.writeSkill(
-          ASK_MARKER_SKILL_NAME,
-          renderSkillMd({
-            name: ASK_MARKER_SKILL_NAME,
-            description: ASK_MARKER_SKILL_DESCRIPTION,
-            body: ASK_MARKER_SKILL_BODY,
-          }),
-        );
-        askMarkerActive = true;
-      } catch (err) {
-        process.stderr.write(
-          `lictor: ask-marker skill seed failed: ${(err as Error).message}\n`,
         );
       }
     }

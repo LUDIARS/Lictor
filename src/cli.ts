@@ -14,8 +14,8 @@ Usage:
   lictor claude [args...]              Wrap Claude Code. Skill injection + auto
                                        title + Concordia full integration.
   lictor codex [args...]               Wrap OpenAI Codex CLI. pty + title +
-                                       Concordia + skill injection via
-                                       ~/.agents/skills/ (per-session prefix).
+                                       Concordia integration (no session skill
+                                       injection — Codex scans user scope only).
   lictor gemini [args...]              Wrap Gemini CLI. pty + title + Concordia
                                        (no skill injection — Gemini lacks a
                                        SKILL.md discovery mechanism).
