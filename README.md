@@ -1,4 +1,13 @@
-# Lictor (Li)
+# Lictor — Agent TUI Sidecar & Session Coordinator
+
+Agent TUI CLI (**Claude Code / OpenAI Codex / Ollama**) 用のセッション管理サイドカー。
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
+  <a href="https://github.com/LUDIARS/Lictor/actions"><img src="https://github.com/LUDIARS/Lictor/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+</p>
+
+---
 
 Per-session sidecar that wraps **agent TUI CLIs** (Claude Code or OpenAI Codex)
 so hooks running inside the session can drive the host terminal — primarily
@@ -171,7 +180,7 @@ stripped first).
 | `LICTOR_PIN_TRANSCRIPT`      | (unset)     | Set to `1` to pin the session-id (`--session-id`) and export `LICTOR_TRANSCRIPT_FILE` to the child even when Concordia is disabled. For headless workers that need to read their own transcript |
 | `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Set by Concordia `/v1/delegation/invoke` to a rendered prompt file. Lictor reads it and pastes+submits it into the wrapped CLI once the TUI is up (delegation auto-inject) |
 | `LICTOR_DELEGATION_INJECT_DELAY_MS` | `2500` | Delay after first pty output before the delegation prompt is injected (lets the TUI finish drawing) |
-| `LICTOR_SUBMIT_WATCHDOG_MS`  | `2000`      | After a relay text inject (`submitInject`), if no `user` frame appears in the transcript within this many ms, force a single `\r` to submit (bracketed-paste fallback). `0` disables. See DESIGN "Submit watchdog" |
+| `LICTOR_SUBMIT_WATCHDOG_MS`  | `2000`      | After a relay text inject (`submitInject`), silently retry `\r` at this interval until a `user` frame appears (bracketed-paste fallback). `0` disables. See DESIGN "Submit watchdog" |
 
 ### Following `/clear` (transcript re-pin)
 
