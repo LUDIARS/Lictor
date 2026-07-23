@@ -60,6 +60,10 @@ import {
 } from "./codex-app-server-session.js";
 import type { TranscriptFrameSink } from "./transcript-sink.js";
 import { LICTOR_VERSION } from "./version.js";
+import {
+  providerRuntimeMetadata,
+  type ProviderRuntimeMetadata,
+} from "./provider-runtime-metadata.js";
 
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
@@ -154,11 +158,12 @@ export function stripChildSessionEnv(
 export async function runWrapped(args: string[], provider: ProviderConfig = PROVIDERS.claude): Promise<void> {
   const meta = gatherBaseMeta();
   meta.provider = provider.name;
+  const runtimeMetadata = providerRuntimeMetadata(provider.name, args);
 
   // Concordia registration — best-effort. A failure here downgrades to v0.0
   // behavior (no persona, no auto-stat, no liveness) but does NOT block the
   // wrapped session from starting.
-  const concordia = await tryRegisterConcordia(meta, provider);
+  const concordia = await tryRegisterConcordia(meta, provider, runtimeMetadata);
 
   if (concordia) {
     meta.session_id = concordia.id;
@@ -957,7 +962,11 @@ async function unregisterConcordiaSession(concordia: ConcordiaSlot | null): Prom
   }
 }
 
-async function tryRegisterConcordia(meta: Meta, provider: ProviderConfig): Promise<ConcordiaSlot | null> {
+async function tryRegisterConcordia(
+  meta: Meta,
+  provider: ProviderConfig,
+  runtimeMetadata: ProviderRuntimeMetadata,
+): Promise<ConcordiaSlot | null> {
   const cfg = loadConcordiaConfig();
   if (!cfg.enabled) return null;
   const client = new ConcordiaClient(cfg);
@@ -977,6 +986,7 @@ async function tryRegisterConcordia(meta: Meta, provider: ProviderConfig): Promi
         start_iso: meta.start_iso,
         platform: meta.platform,
         wrapped_by: "lictor",
+        ...runtimeMetadata,
         // delegation spawn 由来なら run 識別子を載せる。Concordia が run↔子セッションを
         // 決定的に紐付け (child_session_id を焼く) → inject / 外注リスト紐付けが機能する。
         ...delegationSessionMetadata(process.env),
