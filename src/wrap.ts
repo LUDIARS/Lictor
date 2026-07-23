@@ -665,6 +665,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       prompt: delegationPrompt,
       submit: (text) => {
         provider.submitInject((d) => child.write(d), text);
+        // 他の submitInject 呼び出しと同様、Enter が TUI に取りこぼされた場合に
+        // transcript の user フレーム観測まで再送する保険をここでも起動する
+        // (#598: 委託 prompt の Enter 未送信でセッションが空プロンプトのまま止まる事象)。
+        submitWatchdog.arm();
         // delegation プロンプトの自動注入 = このセッションの最初のターン。
         sawSessionTurn = true;
       },
