@@ -1,5 +1,8 @@
 node_modules/
 dist/
+
+# Anatomia がリポジトリ直下に生成する解析キャッシュ
+/.anatomia/
 *.log
 .DS_Store
 .env
