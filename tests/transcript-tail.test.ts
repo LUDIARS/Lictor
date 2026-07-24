@@ -4,13 +4,37 @@ import { createServer } from "node:http";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { lineToFrame, tryClaimJsonl, refreshClaim, readRecentFromFile, startTranscriptTail, decideCodexInitialBind } from "../src/transcript-tail.js";
+import {
+  lineToFrame,
+  tryClaimJsonl,
+  refreshClaim,
+  readRecentFromFile,
+  readTranscriptRange,
+  startTranscriptTail,
+  decideCodexInitialBind,
+} from "../src/transcript-tail.js";
 import { PROVIDERS, makeLocalLlmProvider } from "../src/provider.js";
 import { claudeTranscriptStatePath } from "../src/active-repos.js";
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+test("readTranscriptRange: 大きい transcript でも指定した追記差分だけを返す", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-range-"));
+  const path = join(dir, "session.jsonl");
+  try {
+    const prefix = "x".repeat(12 * 1024 * 1024);
+    const appended = "\nlast-frame\n";
+    writeFileSync(path, prefix + appended);
+    const chunk = readTranscriptRange(path, Buffer.byteLength(prefix), Buffer.byteLength(prefix + appended));
+    assert.ok(chunk);
+    assert.equal(chunk.length, Buffer.byteLength(appended));
+    assert.equal(chunk.toString("utf8"), appended);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test("lineToFrame: assistant text → text frame", () => {
   const f = lineToFrame(JSON.stringify({

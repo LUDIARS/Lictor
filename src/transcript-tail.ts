@@ -52,14 +52,20 @@ import type { TranscriptFrameSink } from "./transcript-sink.js";
 const POLL_INTERVAL_MS = 500;
 const POST_TIMEOUT_MS = 2000;
 const MAX_DISCOVERY_DEPTH = 4; // Codex の YYYY/MM/DD/ をカバーするため再帰段数を確保
-// stale claim (wrapper クラッシュ残骸) の判定閾値。 active な wrapper は poll (500ms)
-// 毎に refreshClaim で mtime を打ち直すので、 5 分無更新 = 所有者は生きていない。
+// stale claim (wrapper クラッシュ残骸) の判定閾値。 active な wrapper は定期的に
+// refreshClaim で mtime を打ち直すので、 5 分無更新 = 所有者は生きていない。
 // 旧値 1h は「クラッシュ後の再起動が同じ JSONL を 1 時間掴めず中継不能」 かつ
 // 「候補枯渇で誤掴みフォールバックを誘発」 する副作用が大きかった。 env override 可。
 const STALE_CLAIM_MS = ((): number => {
   const v = Number(process.env.LICTOR_STALE_CLAIM_MS ?? "");
   return Number.isFinite(v) && v > 0 ? v : 5 * 60 * 1000;
 })();
+// claim の生存確認は JSONL の変化検知 (500ms) と同じ頻度で行う必要がない。
+// 既定 30 秒、 stale 閾値が短く上書きされた場合はその 1/3 以下に収める。
+const CLAIM_REFRESH_INTERVAL_MS = Math.max(
+  POLL_INTERVAL_MS,
+  Math.min(30_000, Math.floor(STALE_CLAIM_MS / 3)),
+);
 
 // relay スタール検知 watchdog の猶予。 セッションが active なのにこの時間を超えて
 // frame を 1 つも送れない (= 束縛先が見失われた / ローテートで死んだファイルを掴み続け
@@ -118,6 +124,37 @@ export function readTranscriptFirstLine(path: string, maxBytes = 262_144): strin
     // cap いっぱいまで読んで改行なし = 行が途切れている (書きかけ or 巨大行)。
     // 壊れた JSON を返すと strict フィルタが誤判定するので「読めない」扱いにする。
     return n === maxBytes ? null : text;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* best-effort */ }
+    }
+  }
+}
+
+/**
+ * append-only transcript の [start, end) だけを読む。
+ *
+ * `readFileSync(path).subarray(start)` は返す部分が小さくても毎 poll ファイル全体を
+ * 読み直すため、長時間セッションほど Defender のリアルタイム検査を増幅する。
+ * この関数は必要な差分だけを allocate/read し、短い read は実際に読めた長さで返す。
+ */
+export function readTranscriptRange(path: string, start: number, end: number): Buffer | null {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start) {
+    return null;
+  }
+  let fd: number | null = null;
+  try {
+    fd = openSync(path, "r");
+    const buf = Buffer.allocUnsafe(end - start);
+    let total = 0;
+    while (total < buf.length) {
+      const n = readSync(fd, buf, total, buf.length - total, start + total);
+      if (n <= 0) break;
+      total += n;
+    }
+    return total === buf.length ? buf : buf.subarray(0, total);
   } catch {
     return null;
   } finally {
@@ -296,7 +333,9 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // `/clear` 等でローテートしても hook 再報告で追従する。
   let pinnedPath: string | null = opts.pinnedTranscriptPath ?? null;
   let claimPath: string | null = null;
+  let lastClaimRefreshAt = 0;
   let offset = 0;
+  let fileIdentity: string | null = null;
   let seq = 0;
   let pending = "";
   let stopped = false;
@@ -394,6 +433,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   const bindPath = (path: string): void => {
     jsonlPath = path;
     offset = 0;
+    fileIdentity = null;
     pending = "";
     lastProgressAt = Date.now();
   };
@@ -680,29 +720,43 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       offset = 0;
       lastProgressAt = Date.now();
     }
-    // active 中は claim の mtime を更新し続け、 stale (1h) 判定で他 wrapper に
-    // 剥がされて「同じ jsonl を 2 wrapper が tail → 別 channel 誤投稿」 になるのを防ぐ。
-    if (claimPath) refreshClaim(claimPath);
-    let size: number;
+    // active 中は claim の mtime を更新し、 stale 判定で他 wrapper に剥がされて
+    // 「同じ jsonl を 2 wrapper が tail → 別 channel 誤投稿」になるのを防ぐ。
+    // 500ms poll ごとの utimes は Defender のファイル監視を増幅するため、claim の
+    // stale 閾値に対して十分短い間隔へ間引く。
+    const now = Date.now();
+    if (claimPath && now - lastClaimRefreshAt >= CLAIM_REFRESH_INTERVAL_MS) {
+      refreshClaim(claimPath);
+      lastClaimRefreshAt = now;
+    }
+    let stat: Stats;
     try {
-      size = statSync(jsonlPath).size;
+      stat = statSync(jsonlPath);
     } catch {
       return; // file went away
     }
-    if (size <= offset) {
+    const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+    if (fileIdentity !== null && fileIdentity !== identity) {
+      // 同じ path が replace された場合は size が旧 offset 以上でも別 transcript として先頭へ戻す。
+      offset = 0;
+      pending = "";
+    }
+    fileIdentity = identity;
+    const size = stat.size;
+    if (size < offset) {
+      // truncate / replace 後は先頭から読み直す。途中行の pending は旧 inode の断片なので破棄。
+      offset = 0;
+      pending = "";
+    }
+    if (size === offset) {
       // 束縛済だが伸びていない。 単なるアイドルなら正常だが、 active なのに長時間ゼロ進捗なら
       // ローテートで死んだファイルを掴み続けている可能性 → watchdog で生 transcript を取り直す。
       maybeRecover();
       return;
     }
-    let chunk: Buffer;
-    try {
-      const fd = readFileSync(jsonlPath); // small per-poll; OK in v1
-      chunk = fd.subarray(offset, size) as Buffer;
-    } catch {
-      return;
-    }
-    offset = size;
+    const chunk = readTranscriptRange(jsonlPath, offset, size);
+    if (!chunk || chunk.length === 0) return;
+    offset += chunk.length;
     lastProgressAt = Date.now(); // 新バイトを読めた = relay 生存。 watchdog の grace をリセット。
     pending += chunk.toString("utf8");
     const lines = pending.split("\n");
