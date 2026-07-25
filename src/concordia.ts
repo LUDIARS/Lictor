@@ -154,7 +154,10 @@ export class ConcordiaClient {
   }
 
   /**
-   * Open a WebSocket to /ws?session=<id> for liveness. Concordia treats an
+   * Open a WebSocket to /ws?session=<id>&enrollment=<spawn-id> for liveness.
+   * `enrollment` must be the same spawn identity registered in the session
+   * metadata. Non-Concordia launches pass null because they have no enrollment.
+   * Concordia treats an
    * active WS as a heartbeat substitute (no need to POST /v1/sessions/:id/heartbeat).
    *
    * If `onMessage` is supplied, broadcast JSON events from Concordia's
@@ -164,8 +167,12 @@ export class ConcordiaClient {
    * Returns an object with close() and an isOpen indicator. Reconnects on
    * unexpected close with exponential backoff capped at 30s.
    */
-  openLiveness(id: string, onMessage?: WsMessageHandler): LivenessHandle {
-    return new LivenessHandle(this.cfg, id, onMessage);
+  openLiveness(
+    id: string,
+    enrollment: string | null,
+    onMessage?: WsMessageHandler,
+  ): LivenessHandle {
+    return new LivenessHandle(this.cfg, id, enrollment, onMessage);
   }
 
   private async fetchJson<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -191,6 +198,23 @@ export class ConcordiaClient {
 
 export type WsMessageHandler = (msg: unknown) => void;
 
+export function buildLivenessUrl(
+  cfg: Pick<ConcordiaConfig, "host" | "port">,
+  sessionId: string,
+  enrollment: string | null,
+): string {
+  const params = new URLSearchParams({ session: sessionId });
+  if (enrollment) params.set("enrollment", enrollment);
+  return `ws://${cfg.host}:${cfg.port}/ws?${params.toString()}`;
+}
+
+export function isTerminalLivenessClose(code: number): boolean {
+  // Concordia uses WebSocket policy violation for a missing or invalid
+  // enrollment. The credential is immutable for this wrapper, so reconnecting
+  // can only repeat the same authentication failure.
+  return code === 1008;
+}
+
 export class LivenessHandle {
   private ws: WebSocket | null = null;
   private closed = false;
@@ -200,6 +224,7 @@ export class LivenessHandle {
   constructor(
     private readonly cfg: ConcordiaConfig,
     private readonly sessionId: string,
+    private readonly enrollment: string | null,
     private readonly onMessage?: WsMessageHandler,
   ) {
     this.connect();
@@ -227,7 +252,7 @@ export class LivenessHandle {
 
   private connect(): void {
     if (this.closed) return;
-    const wsUrl = `ws://${this.cfg.host}:${this.cfg.port}/ws?session=${encodeURIComponent(this.sessionId)}`;
+    const wsUrl = buildLivenessUrl(this.cfg, this.sessionId, this.enrollment);
     try {
       // Node 22+ ships a global WebSocket.
       const ws = new WebSocket(wsUrl);
@@ -235,8 +260,19 @@ export class LivenessHandle {
       ws.addEventListener("open", () => {
         this.retryMs = 1000;
       });
-      ws.addEventListener("close", () => {
+      ws.addEventListener("close", (event) => {
         this.ws = null;
+        if (isTerminalLivenessClose(event.code)) {
+          this.closed = true;
+          try {
+            process.stderr.write(
+              "lictor: Concordia WebSocket authentication failed; reconnect disabled for this session.\n",
+            );
+          } catch {
+            // Authentication already failed closed; diagnostic output is best-effort.
+          }
+          return;
+        }
         if (!this.closed) this.scheduleReconnect();
       });
       ws.addEventListener("error", () => {
@@ -275,7 +311,8 @@ export class LivenessHandle {
 export function openLiveness(
   cfg: ConcordiaConfig,
   id: string,
+  enrollment: string | null,
   onMessage?: WsMessageHandler,
 ): LivenessHandle {
-  return new LivenessHandle(cfg, id, onMessage);
+  return new LivenessHandle(cfg, id, enrollment, onMessage);
 }

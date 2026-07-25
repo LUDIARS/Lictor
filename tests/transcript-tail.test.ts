@@ -12,6 +12,7 @@ import {
   readTranscriptRange,
   startTranscriptTail,
   decideCodexInitialBind,
+  isTranscriptDebugEnabled,
 } from "../src/transcript-tail.js";
 import { PROVIDERS, makeLocalLlmProvider } from "../src/provider.js";
 import { claudeTranscriptStatePath } from "../src/active-repos.js";
@@ -19,6 +20,12 @@ import { claudeTranscriptStatePath } from "../src/active-repos.js";
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+test("transcript debug logging is opt-in through the existing flag", () => {
+  assert.equal(isTranscriptDebugEnabled({}), false);
+  assert.equal(isTranscriptDebugEnabled({ LICTOR_DEBUG_TRANSCRIPT: "0" }), false);
+  assert.equal(isTranscriptDebugEnabled({ LICTOR_DEBUG_TRANSCRIPT: "1" }), true);
+});
 
 test("readTranscriptRange: 大きい transcript でも指定した追記差分だけを返す", () => {
   const dir = mkdtempSync(join(tmpdir(), "lictor-range-"));

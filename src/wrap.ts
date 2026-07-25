@@ -286,8 +286,10 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // WS reactor — attach AFTER ctx so the dispatcher can read live state.
   if (concordia) {
     concordia.liveness.close(); // close the pre-ctx liveness opened by tryRegisterConcordia
-    concordia.liveness = concordia.client.openLiveness(concordia.id, (msg) =>
-      reactToEvent(msg, {
+    concordia.liveness = concordia.client.openLiveness(
+      concordia.id,
+      concordia.enrollment,
+      (msg) => reactToEvent(msg, {
         meta: ctx.meta,
         titleState: ctx.titleState,
         notifyState: ctx.notifyState,
@@ -942,6 +944,8 @@ function signalNumberToName(signal: number): NodeJS.Signals {
 interface ConcordiaSlot {
   client: ConcordiaClient;
   id: string;
+  /** Spawn identity already registered with Concordia; never log this value. */
+  enrollment: string | null;
   persona: Meta["persona"];
   roleLabel: string | null;
   /** Mutable — wrap.ts swaps this out after ctx is built to attach the reactor. */
@@ -973,6 +977,8 @@ async function tryRegisterConcordia(
   const id = `lictor-${randomUUID()}`;
   try {
     const stat0 = gatherRepoStat(meta.cwd);
+    const spawnMetadata = concordiaSpawnSessionMetadata(process.env);
+    const enrollment = spawnMetadata.concordia_spawn_id ?? null;
     const registered = await client.register({
       id,
       provider: provider.concordiaProvider,
@@ -992,13 +998,14 @@ async function tryRegisterConcordia(
         ...delegationSessionMetadata(process.env),
         // Cc からの interactive spawn なら一意 id + cwd 指定有無を返す。
         // Concordia はこれを根拠に対象セッションだけへ project 特定 instruction を inject する。
-        ...concordiaSpawnSessionMetadata(process.env),
+        ...spawnMetadata,
       },
     });
-    const liveness = client.openLiveness(id);
+    const liveness = client.openLiveness(id, enrollment);
     return {
       client,
       id: registered.id,
+      enrollment,
       persona: registered.persona,
       roleLabel: registered.roleLabel,
       liveness,
