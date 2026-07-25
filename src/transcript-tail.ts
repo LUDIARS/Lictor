@@ -93,9 +93,11 @@ const TRANSCRIPT_RESOLVE_GRACE_MS = ((): number => {
 })();
 
 // 別セッション誤投稿 (= 2 wrapper が同じ jsonl を tail) の原因特定用ログ.
-// 既定 ON。 安定確認後に撤去 PR で消す (verbose-logging-bootstrap)。CONCORDIA→Discord
-// で「別 channel に混在」 が出たらこのログで「同一 path を 2 owner が claim」 を確認する。
-const CLAIM_DEBUG = process.env.LICTOR_DEBUG_TRANSCRIPT !== "0";
+// 500ms discovery loop 内でも出るため既定 OFF。必要な調査時だけ既存フラグで明示的に有効化する。
+export function isTranscriptDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.LICTOR_DEBUG_TRANSCRIPT === "1";
+}
+const CLAIM_DEBUG = isTranscriptDebugEnabled();
 function claimDbg(msg: string): void {
   if (!CLAIM_DEBUG) return;
   try { process.stderr.write(`[verbose-transcript] ${msg}\n`); } catch { /* best-effort */ }
