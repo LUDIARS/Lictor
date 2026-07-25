@@ -130,7 +130,7 @@ async function main() {
     // session-id-hook も同様に LICTOR_PORT を要求せず、 失敗しても起動を止めない
     // (SessionStart hook)。 現 claude session_id を state ファイルに記録する。
     if (rest[0] === "session-id-hook") {
-      await runSessionIdHook();
+      await runSessionIdHook(rest.slice(1));
       return;
     }
     // `lictor local` provider が pty で起動する内部サブコマンド (= ローカル LLM REPL)。
