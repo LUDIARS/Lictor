@@ -31,23 +31,31 @@ test("resolveHarnessGuard: 上位の .claude/hooks/harness-guard.mjs を辿っ�
 });
 
 test("buildLictorHookSettings: guard 無しは既定 2 フックのみ", () => {
-  const s = buildLictorHookSettings(null);
+  const s = buildLictorHookSettings(null, "E:\\Document\\Ars\\.claude\\state");
   const pre = s.hooks.PreToolUse;
   assert.equal(pre.length, 2);
   assert.ok(!pre.some((m) => m.matcher === "Bash"));
 });
 
 test("buildLictorHookSettings: SessionStart に session-id-hook を注入する", () => {
-  const s = buildLictorHookSettings(null);
+  const stateDir = "E:\\Document\\Ars With Spaces\\.claude\\state";
+  const s = buildLictorHookSettings(null, stateDir);
   const ss = s.hooks.SessionStart;
   assert.equal(ss.length, 1);
   // 全 source (startup/clear/resume/compact) に効かせるため matcher は持たない。
   assert.equal(ss[0].matcher, undefined);
-  assert.equal(ss[0].hooks[0].command, "lictor cli session-id-hook");
+  const command = ss[0].hooks[0].command;
+  assert.match(command, /^lictor cli session-id-hook --state-dir-b64 [A-Za-z0-9_-]+$/);
+  const encoded = command.split(" ").at(-1);
+  assert.ok(encoded);
+  assert.equal(Buffer.from(encoded, "base64url").toString("utf8"), stateDir);
 });
 
 test("buildLictorHookSettings: guard ありは PreToolUse(Bash) を追加", () => {
-  const s = buildLictorHookSettings("E:\\Document\\Ars\\.claude\\hooks\\harness-guard.mjs");
+  const s = buildLictorHookSettings(
+    "E:\\Document\\Ars\\.claude\\hooks\\harness-guard.mjs",
+    "E:\\Document\\Ars\\.claude\\state",
+  );
   const pre = s.hooks.PreToolUse;
   assert.equal(pre.length, 3);
   const guard = pre[pre.length - 1];

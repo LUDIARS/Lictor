@@ -12,6 +12,7 @@
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { encodeSessionStateDirArgument } from "./session-state-authority.js";
 
 export interface HookCommand {
   type: "command";
@@ -51,6 +52,7 @@ export function resolveHarnessGuard(cwd: string): string | null {
  */
 export function buildLictorHookSettings(
   harnessGuard: string | null,
+  sessionStateDir: string,
 ): LictorHookSettings {
   const preToolUse: HookMatcher[] = [
     {
@@ -81,7 +83,11 @@ export function buildLictorHookSettings(
   // 全 source に効かせる)。
   const sessionStart: HookMatcher[] = [
     {
-      hooks: [{ type: "command", command: "lictor cli session-id-hook", timeout: 10 }],
+      hooks: [{
+        type: "command",
+        command: `lictor cli session-id-hook ${encodeSessionStateDirArgument(sessionStateDir)}`,
+        timeout: 10,
+      }],
     },
   ];
 

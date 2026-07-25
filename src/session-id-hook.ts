@@ -27,11 +27,42 @@ import {
   claudeTranscriptStatePath,
   resolveActiveReposDir,
 } from "./active-repos.js";
+import { decodeSessionStateDirArgument } from "./session-state-authority.js";
 
 interface HookInput {
   session_id?: string;
   /** claude が書き出している transcript JSONL の絶対パス (SessionStart hook payload)。 */
   transcript_path?: string;
+}
+
+export function resolveSessionIdHookStateDir(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return decodeSessionStateDirArgument(args) ?? resolveActiveReposDir(env);
+}
+
+export function recordSessionIdHookPayload(
+  raw: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const input = JSON.parse(raw) as HookInput;
+  const sid = (input.session_id ?? "").trim();
+  if (!sid) return;
+  const lictorId = (env.LICTOR_SESSION_ID ?? "").trim();
+  if (!lictorId) return;
+  const stateDir = resolveSessionIdHookStateDir(args, env);
+  try {
+    mkdirSync(stateDir, { recursive: true });
+  } catch {
+    /* best-effort — 既存 / 権限 */
+  }
+  writeFileSync(claudeSessionStatePath(stateDir, lictorId), sid, "utf8");
+  const transcriptPath = (input.transcript_path ?? "").trim();
+  if (transcriptPath) {
+    writeFileSync(claudeTranscriptStatePath(stateDir, lictorId), transcriptPath, "utf8");
+  }
 }
 
 /** stdin を読み切る. hook の stdin が来ない異常系で固まらないよう短い timeout 付き. */
@@ -53,29 +84,15 @@ async function readStdin(timeoutMs = 2000): Promise<string> {
   });
 }
 
-export async function runSessionIdHook(): Promise<void> {
+export async function runSessionIdHook(args: readonly string[] = []): Promise<void> {
   try {
     const raw = await readStdin();
-    const input = JSON.parse(raw) as HookInput;
-    const sid = (input.session_id ?? "").trim();
-    if (!sid) return;
     // Lictor が spawn 時に env export 済 (wrap.ts: env.LICTOR_SESSION_ID = concordia.id)。
     // 非 Lictor 起動の claude では未設定 → no-op (この hook は Lictor 注入時のみ意味を持つ)。
-    const lictorId = (process.env.LICTOR_SESSION_ID ?? "").trim();
-    if (!lictorId) return;
-    const stateDir = resolveActiveReposDir();
-    try {
-      mkdirSync(stateDir, { recursive: true });
-    } catch {
-      /* best-effort — 既存 / 権限 */
-    }
-    writeFileSync(claudeSessionStatePath(stateDir, lictorId), sid, "utf8");
-    // transcript JSONL の実パス (権威ソース)。 hook payload が持つときだけ書き出す。
-    // transcript-tail はこれを読んで tail 対象を束縛する (mtime 推測を排除)。
-    const transcriptPath = (input.transcript_path ?? "").trim();
-    if (transcriptPath) {
-      writeFileSync(claudeTranscriptStatePath(stateDir, lictorId), transcriptPath, "utf8");
-    }
+    // wrap が settings 生成時に選んだ正本を優先する。Claude hook 実行時には
+    // CLAUDE_PROJECT_DIR が追加されるため、ここで env から再解決すると wrap の
+    // LUDIARS_ROOT 由来 path と分岐する。CLI 引数が無い旧 settings だけ従来解決へ戻す。
+    recordSessionIdHookPayload(raw, args);
   } catch {
     // SessionStart hook は絶対に起動をブロックしない。
   }

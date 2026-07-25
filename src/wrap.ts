@@ -450,6 +450,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   if (provider.name === "codex" && !env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE) {
     env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE = codexOriginatorMarker(concordia?.id ?? null);
   }
+  // SessionStart hook 実行時に Claude が CLAUDE_PROJECT_DIR を追加しても正本が
+  // 分岐しないよう、wrap 側で一度だけ決定して hook command と tail の両方へ渡す。
+  const activeReposStateDir = resolveActiveReposDir(env);
 
   // Spawn-arg injection. Two pieces compose here:
   //   1. --add-dir <sessionDir> for the claude-add-dir strategy (Codex
@@ -469,7 +472,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   let extraSettingsPath: string | null = null;
   if (concordia && injector && provider.name === "claude") {
     try {
-      extraSettingsPath = writePermissionHookSettings(injector.sessionDir, meta.cwd);
+      extraSettingsPath = writePermissionHookSettings(
+        injector.sessionDir,
+        meta.cwd,
+        activeReposStateDir,
+      );
     } catch (err) {
       process.stderr.write(
         `lictor: permission-hook settings write failed: ${(err as Error).message}\n`,
@@ -684,7 +691,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     const concordiaBaseUrl = concordia.client.cfg.baseUrl;
     const lictorTranscriptStatePath =
       provider.name === "claude"
-        ? claudeTranscriptStatePath(resolveActiveReposDir(env), concordia.id)
+        ? claudeTranscriptStatePath(activeReposStateDir, concordia.id)
         : null;
     transcriptTail = startTranscriptTail({
       cwd: meta.cwd,
@@ -710,8 +717,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       // tail 対象を束縛する権威ソース。 SessionStart hook (lictor cli session-id-hook) が
       // claude の実 transcript_path をこのファイルへ書く。 これにより --session-id uuid と
       // 実ファイル名が不一致でも実ファイルを掴め、 /clear ローテートも追従し、 mtime 推測を
-      // 排除して別セッション混入 (crosstalk) を構造的に防ぐ。 env は wrap の spawn env と
-      // 同じものを渡し、 hook 側の state dir 解決と一致させる。
+      // 排除して別セッション混入 (crosstalk) を構造的に防ぐ。state dir は wrapper が
+      // 一度だけ解決し、生成した hook command にも明示して同じ正本を使わせる。
       lictorTranscriptStatePath,
       onUserMessage: () => submitWatchdog.noteUserMessage(),
       onPickerQuestionRegistered: (qid) => {
@@ -893,11 +900,15 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
  * `mcp__`. Read-only tools (Read/Glob/Grep) are intentionally NOT gated
  * — they would explode the modal count and add no value.
  */
-function writePermissionHookSettings(sessionDir: string, cwd: string): string {
+function writePermissionHookSettings(
+  sessionDir: string,
+  cwd: string,
+  sessionStateDir: string,
+): string {
   const path = `${sessionDir}/lictor-hook-settings.json`;
   // cwd から上位を辿って .claude/hooks/harness-guard.mjs を見つけたら PreToolUse(Bash)
   // に注入する (HARNESS §4 の地雷を着手前に止める)。無ければ従来どおり 2 フックのみ。
-  const settings = buildLictorHookSettings(resolveHarnessGuard(cwd));
+  const settings = buildLictorHookSettings(resolveHarnessGuard(cwd), sessionStateDir);
   writeFileSync(path, JSON.stringify(settings, null, 2), "utf8");
   return path;
 }
