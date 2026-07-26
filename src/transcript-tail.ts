@@ -406,17 +406,23 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // フィルタ未定義 provider / 先頭行が読めない・形式不明の場合は許可し、 従来どおり
   // claim ガードに委ねる (fail-open)。 claim より先に判定して、 別セッションの
   // ファイルへ claim を置いてしまう副作用ごと避ける。
+  //
+  // 先頭行 (最大 256 KiB) は「候補として受理するか」 と 「session_id を取り出す」 の両方で
+  // 要るため、 ここで 1 度だけ読んで呼び出し側へ返す。 旧実装は判定用と session_id 用で
+  // 同じ候補を 2 度読んでおり、 discover 1 回あたり候補数 × 512 KiB を読んでいた。
   const expectedOriginator = opts.expectedCodexOriginator?.trim() || null;
-  const candidateAccepted = (path: string, st?: Stats): boolean => {
+  const readCandidateMeta = (path: string, st?: Stats): { accepted: boolean; first: string | null } => {
     const accepts = opts.provider.transcriptMetaAccepts;
-    if (!accepts) return true;
     const first = readTranscriptFirstLine(path);
+    if (!accepts) return { accepted: true, first };
     // originator 施錠モードでは先頭行が読めない候補を掴まない (fail-open すると
     // mtime 推測束縛が復活する)。 自分の rollout の書きかけは次回 poll で読める。
-    if (first === null) return !expectedOriginator;
-    if (accepts(first, { cwd: opts.cwd, startedAtMs: startedAt, mtimeMs: st?.mtimeMs, expectedOriginator })) return true;
+    if (first === null) return { accepted: !expectedOriginator, first };
+    if (accepts(first, { cwd: opts.cwd, startedAtMs: startedAt, mtimeMs: st?.mtimeMs, expectedOriginator })) {
+      return { accepted: true, first };
+    }
     claimDbg(`candidate rejected by meta filter path=${path} owner=${opts.sessionId}`);
-    return false;
+    return { accepted: false, first };
   };
 
   // codex 束縛を拒否したときの fail-loud (沈黙死禁止)。 曖昧 (同 cwd 並走) /
@@ -461,9 +467,9 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => {
       // 過去セッションの継承を防ぐ recency 下限。候補が複数なら mtime で最新を選ぶ。
       if (st.mtimeMs < startedAt - 5_000) return;
-      if (!candidateAccepted(p, st)) return; // cwd / exec / head-ts
-      const first = readTranscriptFirstLine(p);
-      const metaSid = first ? opts.provider.transcriptMetaSessionId?.(first) ?? null : null;
+      const meta = readCandidateMeta(p, st); // cwd / exec / head-ts (先頭行は 1 度だけ読む)
+      if (!meta.accepted) return;
+      const metaSid = meta.first ? opts.provider.transcriptMetaSessionId?.(meta.first) ?? null : null;
       const fileSid = sessionIdFromTranscriptPath(p);
       const sid = metaSid ?? fileSid;
       candidates.push({ path: p, sessionId: sid, fileSessionId: fileSid, mtime: st.mtimeMs });
@@ -678,6 +684,13 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       claimDbg(`codex stall-recovery rebind to ${found} owner=${opts.sessionId}`);
       return { ok: true, path: found };
     }
+    // 取り直しても束縛先が変わらなかった (= 束縛は正しく、 進捗ゼロはアイドル等の外的要因)。
+    // ここで進捗時刻を打ち直さないと STALL_RECOVERY_MS 経過後は **毎 poll (500ms)**
+    // discoverCodex が走り続け、 sessions ツリーの全 statSync と候補の先頭 256 KiB 読みを
+    // 秒間数十 MB 発生させる。 2026-07-26 の実害: codex 3 セッションが合計 32 MB/s を
+    // read し続け、 Defender のリアルタイム検査が張り付いた。 authority (recoverByAuthority)
+    // と pin (recoverByPin) は既に同じ打ち直しをしており、 codex 経路だけ抜けていた。
+    lastProgressAt = Date.now();
     return { ok: false, path: jsonlPath };
   };
 
