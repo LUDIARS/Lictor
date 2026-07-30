@@ -53,10 +53,10 @@ test("resolveActiveReposDir falls back to LUDIARS_ROOT/.claude/state", () => {
 
 test("resolveActiveReposDir falls back to process.cwd()/.claude/state when env empty (no E: hardcode)", () => {
   const dir = resolveActiveReposDir({} as NodeJS.ProcessEnv);
-  // 旧実装の個人パス直書き (E:\Document\Ars\.claude\state) を返さないこと。
-  assert.ok(!/^E:/i.test(dir), `must not hardcode E: drive: ${dir}`);
-  assert.ok(dir.endsWith(".claude/state") || dir.endsWith(".claude\\state"), `unexpected: ${dir}`);
-  assert.ok(dir.startsWith(process.cwd()), `should derive from cwd: ${dir}`);
+  // 旧実装は個人パス (E:\Document\Ars\.claude\state) を直書きしていた。 cwd 由来で
+  // あることを exact 一致で示せば十分。 「E: で始まらない」 判定は実行場所依存で、
+  // cwd が E: 上にある環境 (Revisor worktree 含む) では正当な fallback を誤検知した。
+  assert.equal(dir, join(process.cwd(), ".claude", "state"));
 });
 
 test("activeReposPath composes <dir>/active-repos-<sid>.txt", () => {

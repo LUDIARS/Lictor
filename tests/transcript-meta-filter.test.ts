@@ -42,6 +42,42 @@ test("rejects: codex exec (delegation ヘッドレス実行) の rollout は cwd
   assert.equal(codexTranscriptMetaAccepts(bySource, { cwd: CWD }), false);
   const byOriginator = metaLine({ session_id: "x", cwd: "E:\\Document\\Ars", originator: "codex_exec" });
   assert.equal(codexTranscriptMetaAccepts(byOriginator, { cwd: CWD }), false);
+  // 新しめの codex は payload.source を variant オブジェクトで書く。 文字列形式しか
+  // 見ていないと exec 除外が静かに無効化される。
+  const bySourceObj = metaLine({ session_id: "x", cwd: "E:\\Document\\Ars", source: { exec: {} } });
+  assert.equal(codexTranscriptMetaAccepts(bySourceObj, { cwd: CWD }), false);
+});
+
+test("rejects: subagent rollout (guardian 等) は originator/cwd 一致でも除外", () => {
+  // 2026-07-30 実害: guardian subagent の rollout は session_id / originator /
+  // cwd / timestamp が親対話と全部一致するため全フィルタを素通りし、 誤束縛で
+  // Discord リレーが停止した。 実物と同じ形 (thread_source + source オブジェクト +
+  // parent_thread_id) で再現する。
+  const ctx = { cwd: CWD, expectedOriginator: "lictor:lictor-abc" };
+  const guardian = metaLine({
+    session_id: "parent-1",
+    id: "child-1",
+    parent_thread_id: "parent-1",
+    cwd: "E:\\Document\\Ars",
+    originator: "lictor:lictor-abc",
+    thread_source: "subagent",
+    source: { subagent: { other: "guardian" } },
+  });
+  assert.equal(codexTranscriptMetaAccepts(guardian, ctx), false);
+  assert.equal(codexTranscriptMetaAccepts(guardian, { cwd: CWD }), false);
+  // 判定キーはどれか 1 つでも落ちる (旧形式 codex は thread_source を書かない)
+  const bySourceObj = metaLine({ cwd: "E:\\Document\\Ars", source: { subagent: {} } });
+  assert.equal(codexTranscriptMetaAccepts(bySourceObj, { cwd: CWD }), false);
+  const byParentThread = metaLine({ cwd: "E:\\Document\\Ars", parent_thread_id: "parent-1" });
+  assert.equal(codexTranscriptMetaAccepts(byParentThread, { cwd: CWD }), false);
+  // 親対話 (thread_source: "user"、 parent_thread_id 無し) は従来どおり許可
+  const parent = metaLine({
+    session_id: "parent-1",
+    cwd: "E:\\Document\\Ars",
+    originator: "lictor:lictor-abc",
+    thread_source: "user",
+  });
+  assert.equal(codexTranscriptMetaAccepts(parent, ctx), true);
 });
 
 test("fail-open: parse 不能 / session_meta 以外 / cwd 欠落は許可 (claim ガードに委ねる)", () => {

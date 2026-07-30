@@ -195,9 +195,16 @@ export function normalizePathForCompare(p: string): string {
  * Codex rollout JSONL の先頭行 (`type: "session_meta"`) を読んで、 この
  * セッションの候補たりうるかを判定する ({@link ProviderConfig.transcriptMetaAccepts})。
  *
- *  - `payload.source === "exec"` / `originator === "codex_exec"`: ヘッドレス
- *    実行 (Concordia delegation 等) の rollout。 対話ウインドウの transcript
+ *  - `payload.source` が `exec` variant (文字列 `"exec"` / オブジェクト
+ *    `{ exec: ... }`) / `originator === "codex_exec"`: ヘッドレス実行
+ *    (Concordia delegation 等) の rollout。 対話ウインドウの transcript
  *    ではないので除外。
+ *  - `payload.thread_source === "subagent"` / `payload.source.subagent` /
+ *    `payload.parent_thread_id` あり: 親対話から fork した subagent (guardian 等)
+ *    の rollout。 session_id / originator / cwd / timestamp が親と全部一致する
+ *    ため他のフィルタを素通りするが、 assistant の人間向け返信は親側にしか
+ *    載らない。 これを掴むと Discord リレーが「途中から」止まって見える
+ *    (2026-07-30 実害: 対話 codex 2 セッションが guardian rollout に誤束縛)。
  *  - `payload.cwd` が自分の cwd と不一致: 別リポ / 別ディレクトリのウインドウ。
  *    除外。
  *  - `payload.timestamp` が wrapper 起動より HEAD_TS_GRACE_MS 以上古い: 自分より
@@ -233,10 +240,22 @@ export function codexTranscriptMetaAccepts(
   const payload = rec.payload;
   if (typeof payload !== "object" || payload === null) return !strict;
   const p = payload as Record<string, unknown>;
-  const source = typeof p.source === "string" ? p.source : "";
+  // payload.source は旧形式が文字列 ("cli" / "exec")、 新しめの codex は variant
+  // オブジェクト ({ subagent: {...} } 等) を書く。 どちらの形でも同じ判定を効かせる
+  // ため、 variant 名を一括で取り出して照合する (オブジェクト形式を見落とすと
+  // exec 除外が静かに無効化される)。
+  const sourceVariants = typeof p.source === "string"
+    ? [p.source]
+    : typeof p.source === "object" && p.source !== null && !Array.isArray(p.source)
+      ? Object.keys(p.source as Record<string, unknown>)
+      : [];
   const originator = typeof p.originator === "string" ? p.originator : "";
   if (strict && originator !== ctx.expectedOriginator) return false;
-  if (source === "exec" || originator === "codex_exec") return false;
+  if (sourceVariants.includes("exec") || originator === "codex_exec") return false;
+  // subagent rollout (thread_source は新しめの codex のみ書く。 旧形式は
+  // parent_thread_id / source の subagent variant で判定する)
+  if (p.thread_source === "subagent" || sourceVariants.includes("subagent")) return false;
+  if (typeof p.parent_thread_id === "string" && p.parent_thread_id.length > 0) return false;
   if (typeof p.cwd === "string" && p.cwd.length > 0) {
     if (normalizePathForCompare(p.cwd) !== normalizePathForCompare(ctx.cwd)) return false;
   }
