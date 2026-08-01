@@ -22,6 +22,10 @@ CI（`.github/workflows/ci.yml`）で build / typecheck / unit / smoke-sidecar �
 - **Concordia 連携**: `concordia.test.ts`（登録）、`event-reactor.test.ts`、
   `task-relay.test.ts`、`discord-channels.test.ts`、`ask-question-relay.test.ts`、
   `permission-proxy.test.ts`、`delegation-inject.test.ts`、`transcript-tail.test.ts`。
+- **vendored ビルド**: `build-vendored-deps.test.ts`（`dist` vs `src` の鮮度判定・
+  import 時に副作用が無いこと）。実際の `npm install` / `npm run build` の起動は
+  対象外なので、`npm run setup` と `bin/lictor.mjs` の自己修復経路自体は
+  素の clone での実インストールでしか確認できない。
 - **その他**: `active-repos.test.ts`、`auto-title.test.ts`、`version.test.ts`。
 
 ### 3. smoke（CI 必須・Concordia 不在）

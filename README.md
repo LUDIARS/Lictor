@@ -336,6 +336,8 @@ Not yet published to npm; install from source.
 ```sh
 git clone https://github.com/LUDIARS/Lictor.git
 cd Lictor
+git submodule update --init   # lib/vestigium (vendored dep)
+npm run setup                 # builds lib/vestigium (npm does not build file: deps)
 npm install
 npm run build
 npm link   # exposes `lictor` on PATH
