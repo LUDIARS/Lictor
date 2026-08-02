@@ -6,7 +6,7 @@ import { runAskQuestionHook } from "./ask-question-hook.js";
 import { runSessionIdHook } from "./session-id-hook.js";
 import { runLocalAgent } from "./local-agent/index.js";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
-import { install as installVestigium } from "@ludiars/vestigium";
+import { installVestigiumBestEffort } from "./vestigium.js";
 
 const HELP = `lictor — per-session sidecar for agent TUI CLIs (LUDIARS / Li)
 
@@ -85,12 +85,14 @@ Notes:
     with CONCORDIA_HOST / CONCORDIA_PORT.
 `;
 
+/**
+ * 単一 entrypoint。 短命な `lictor cli ...` (title / rename / task / hook) は観測基盤を
+ * 読み込まず、 Vestigium の初期化は long-running な provider ラッパと `cli local-agent`
+ * の起動境界に限定する — 観測 package の build 状態が session control を止めないため。
+ *
+ * @implements TASK-CLI-ENTRYPOINT-BOUNDARY (spec/feature/task-protocol.md)
+ */
 async function main() {
-  installVestigium({
-    serviceCode: "lictor",
-    captureConsole: true,
-    pinoTransport: false,
-  });
   const argv = process.argv.slice(2);
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     process.stdout.write(HELP);
@@ -107,6 +109,7 @@ async function main() {
   // Provider commands: `lictor claude [args]`, `lictor codex [args]`, etc.
   const provider = getProvider(cmd);
   if (provider) {
+    await installVestigiumBestEffort();
     await runWrapped(rest, provider);
     return;
   }
@@ -136,6 +139,7 @@ async function main() {
     // `lictor local` provider が pty で起動する内部サブコマンド (= ローカル LLM REPL)。
     // 直接ユーザが叩くことも可。LICTOR_PORT 等は wrap が env で渡す。
     if (rest[0] === "local-agent") {
+      await installVestigiumBestEffort();
       await runLocalAgent();
       return;
     }

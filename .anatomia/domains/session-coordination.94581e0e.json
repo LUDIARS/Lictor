@@ -1,0 +1,36 @@
+{
+  "name": "session-coordination",
+  "description": "Per-session CLI and sidecar control paths that declare work to Concordia while keeping optional observability outside the control dependency chain.",
+  "presetRules": [
+    {
+      "preset": "couplingCap",
+      "params": {
+        "targetPattern": "src/(cli|task-relay|vestigium)\\.ts$",
+        "by": "path",
+        "maxFanOut": 9007199254740991
+      }
+    },
+    {
+      "preset": "couplingCap",
+      "params": {
+        "targetPattern": "tests/(task-relay|vestigium-optional)\\.test\\.ts$",
+        "by": "path",
+        "maxFanOut": 9007199254740991
+      }
+    }
+  ],
+  "templateRules": [],
+  "cardTemplate": "Summarise the session-coordination domain: task declaration remains available independently of optional observability artifacts.",
+  "source": "spec-draft",
+  "mechanics": [
+    "task-declaration",
+    "sidecar-relay",
+    "optional-observability"
+  ],
+  "specRefs": [
+    "タスク宣言プロトコル",
+    "セットアップ — 観測 (Vestigium) は best-effort"
+  ],
+  "rationale": "Short-lived task commands belong to the session-control path and must not import the optional Vestigium build artifact. Long-running providers may initialize the adapter at their entry boundary without making observability a prerequisite for task declaration.",
+  "updatedAt": "2026-08-02T00:00:00.000Z"
+}

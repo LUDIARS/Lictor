@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "project": "lictor",
+  "iterations": 1,
+  "domains": [
+    {
+      "name": "session-coordination",
+      "description": "Per-session CLI and sidecar control paths that declare work to Concordia while keeping optional observability outside the control dependency chain.",
+      "modules": [
+        {
+          "name": "task-declaration-cli",
+          "description": "Short-lived CLI entrypoint and sidecar relay for task get/set declarations.",
+          "paths": [
+            "(^|/)src/cli\\.ts$",
+            "(^|/)src/task-relay\\.ts$",
+            "(^|/)tests/task-relay\\.test\\.ts$"
+          ]
+        },
+        {
+          "name": "optional-observability-boundary",
+          "description": "Best-effort Vestigium adapter used only by long-running providers and the local agent, never by short-lived task declaration commands.",
+          "paths": [
+            "(^|/)src/vestigium\\.ts$",
+            "(^|/)tests/vestigium-optional\\.test\\.ts$"
+          ]
+        }
+      ]
+    }
+  ],
+  "unassigned": {
+    "count": 0,
+    "sample": []
+  }
+}

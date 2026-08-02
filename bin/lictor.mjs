@@ -3,9 +3,9 @@
  * Lictor エントリ。 `dist/cli.js` を読むだけ … に加えて、 vendored 依存が
  * 未ビルドだった場合の自己修復を持つ。
  *
- * なぜここに置くか: `@ludiars/vestigium` は `file:./lib/vestigium` 依存なので、
- * その dist が無いと本 CLI は起動時に必ず落ちる。 そして npm のライフサイクル
- * フックでは救えない — npm は file: 依存の reify (依存側 `prepare` の実行を含む)
+ * なぜここに置くか: vendored な `file:` 依存 (現状は `lib/vestigium`) の dist が
+ * 無いと、 それを静的に import する経路は起動時に必ず落ちる。 そして npm のライフ
+ * サイクルフックでは救えない — npm は file: 依存の reify (依存側 `prepare` の実行を含む)
  * を **ルートの preinstall/postinstall より先に** 完了させるため、 親側のどの
  * フックも「install の前に vendored 依存をビルドする」 用途には間に合わない
  * (2026-08-01 実測で確認)。
@@ -16,6 +16,12 @@
  * 直前の実障害では、 この失敗が SessionStart hook を黙って殺し、 transcript の
  * 束縛が書かれず、 利用者から見える症状は 「Discord に返事が返らない」 だけだった。
  * 原因から遠い場所にしか出ない以上、 気づける形にするより自動で直すほうが速い。
+ *
+ * ただし Vestigium 自体はもうこの経路に来ない。 v0.7.0 以降 `src/vestigium.ts` が
+ * dynamic import で縮退を吸収するため、 dist 欠落は ERR_MODULE_NOT_FOUND として
+ * ここまで浮上せず、 観測が静かに落ちるだけになる (spec/setup/setup.md
+ * §SETUP-VESTIGIUM-OPTIONAL)。 この自己修復は 「静的に import される vendored 依存」
+ * 一般に対する保険として残す。 復旧は `npm run setup` が正道。
  *
  * @implements SETUP-VENDORED-BUILD (spec/setup/setup.md)
  */

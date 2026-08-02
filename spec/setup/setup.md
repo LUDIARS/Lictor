@@ -76,6 +76,24 @@ node_modules に symlink を張るだけでビルドしない。submodule を ch
 | `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Concordia `/v1/delegation/invoke` が描画した prompt ファイル。TUI 起動後に貼付+送信 |
 | `LICTOR_DELEGATION_INJECT_DELAY_MS` | `2500` | 初回 pty 出力後、委託 prompt 注入までの遅延（TUI 描画待ち） |
 | `CLAUDE_CODE_GIT_BASH_PATH` | — | Windows で Node から claude を spawn する際に必須 |
+| `LICTOR_DEBUG` | (unset) | `1` で縮退理由 (例: Vestigium 読込失敗) を stderr へ出す |
+
+## SETUP-VESTIGIUM-OPTIONAL: 観測 (Vestigium) は best-effort
+
+`@ludiars/vestigium` は `file:./lib/vestigium` の submodule package で、その `dist` は
+git 管理外。 checkout / submodule 更新直後は存在しないことがある。 このため Vestigium は
+**long-running な provider ラッパ (`lictor claude` 等) と `lictor cli local-agent` の
+起動時にだけ dynamic import** し、 失敗しても観測を落とすだけで session control は続行する
+(`src/vestigium.ts`)。 短命な `lictor cli ...` 系 (title / rename / task / hook) は
+Vestigium を読み込まないので、 dist 欠落でも動く。 縮退理由は `LICTOR_DEBUG=1` のときだけ
+stderr に 1 行出る。
+
+これにより Vestigium の dist 欠落は `bin/lictor.mjs` の自己修復 (SETUP-VENDORED-BUILD)
+にはもう到達しない — 起動が落ちないので `ERR_MODULE_NOT_FOUND` が表面化しないため。
+観測を戻すには `npm run setup` を明示的に回す。 「観測ログが来ない」 と気づいたときの
+一次診断は `LICTOR_DEBUG=1` を付けて provider ラッパ (`lictor claude` 等) を起動し、
+縮退 1 行が出るかを見ること — 短命な `lictor cli ...` は Vestigium を読まないので、
+そちらに `LICTOR_DEBUG=1` を付けても何も出ない。
 
 ## 環境変数（子プロセスへ注入）
 

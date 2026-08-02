@@ -180,6 +180,7 @@ stripped first).
 | `LICTOR_PIN_TRANSCRIPT`      | (unset)     | Set to `1` to pin the session-id (`--session-id`) and export `LICTOR_TRANSCRIPT_FILE` to the child even when Concordia is disabled. For headless workers that need to read their own transcript |
 | `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Set by Concordia `/v1/delegation/invoke` to a rendered prompt file. Lictor reads it and pastes+submits it into the wrapped CLI once the TUI is up (delegation auto-inject) |
 | `LICTOR_DELEGATION_INJECT_DELAY_MS` | `2500` | Delay after first pty output before the delegation prompt is injected (lets the TUI finish drawing) |
+| `LICTOR_DEBUG`               | (unset)     | Set to `1` to print degradation reasons (e.g. Vestigium failed to load) as a single stderr line. Only the provider wrappers and `cli local-agent` load Vestigium, so short-lived `lictor cli ...` prints nothing either way. Off by default so hook paths stay clean |
 | `LICTOR_SUBMIT_WATCHDOG_MS`  | `2000`      | After a relay text inject (`submitInject`), silently retry `\r` at this interval until a `user` frame appears (bracketed-paste fallback). `0` disables. See DESIGN "Submit watchdog" |
 
 ### Following `/clear` (transcript re-pin)
