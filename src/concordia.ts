@@ -2,6 +2,7 @@ import type {
   ConcordiaChatPayload,
   ConcordiaConflictsResponse,
   ConcordiaEventPayload,
+  ConcordiaInquiryPayload,
   ConcordiaPersona,
   ConcordiaSessionRegister,
   ConcordiaSessionResponse,
@@ -118,6 +119,10 @@ export class ConcordiaClient {
       `/v1/sessions/${encodeURIComponent(id)}/event`,
       payload,
     );
+  }
+
+  async inquiry(payload: ConcordiaInquiryPayload): Promise<unknown> {
+    return this.fetchJson("POST", "/v1/inquiry", payload);
   }
 
   /**

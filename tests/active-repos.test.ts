@@ -2,14 +2,16 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   activeReposPath,
   claudeSessionStatePath,
+  createActiveRepoRootResolver,
   pickActiveRepo,
   readActiveRepos,
   readClaudeSessionId,
   resolveActiveReposDir,
+  resolveActiveRepoRoots,
 } from "../src/active-repos.js";
 
 test("claudeSessionStatePath: lictor id ごとの追跡ファイル名", () => {
@@ -112,4 +114,31 @@ test("pickActiveRepo returns last entry when list non-empty", () => {
 
 test("pickActiveRepo returns fallback when list empty", () => {
   assert.equal(pickActiveRepo([], "/fallback"), "/fallback");
+});
+
+test("active repo root resolver handles normal checkout and linked worktree shapes", () => {
+  const main = resolve("C:/workspace/Lictor");
+  const worktree = resolve("C:/workspace/.wt-Li-inquiry");
+  const resolver = createActiveRepoRootResolver((repo) => (
+    repo === worktree ? join(main, ".git") : ".git"
+  ));
+  assert.equal(resolver(main), main);
+  assert.equal(resolver(worktree), main);
+});
+
+test("active repo root resolver caches success and preserves input on git failure", () => {
+  let calls = 0;
+  const resolver = createActiveRepoRootResolver((repo) => {
+    calls++;
+    return repo === "/repo" ? ".git" : null;
+  });
+  assert.equal(resolver("/repo"), resolve("/repo"));
+  assert.equal(resolver("/repo"), resolve("/repo"));
+  assert.equal(resolver("/not-a-repo"), "/not-a-repo");
+  assert.equal(calls, 2);
+});
+
+test("resolveActiveRepoRoots preserves order and deduplicates canonical roots", () => {
+  const roots = resolveActiveRepoRoots([process.cwd(), process.cwd()]);
+  assert.equal(roots.length, 1);
 });

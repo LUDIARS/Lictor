@@ -77,6 +77,12 @@ export interface ConcordiaEventPayload {
   ts?: number;
 }
 
+export interface ConcordiaInquiryPayload {
+  session_id: string;
+  category: "タスク";
+  context: string;
+}
+
 export interface ConcordiaConflictsResponse {
   conflicts?: Array<Record<string, unknown>>;
   branches?: Array<{ branch: string; count: number }>;
@@ -100,6 +106,7 @@ export interface SessionPatch {
   branch?: string;
   repo_path?: string;
   repo_origin?: string | null;
+  active_repos?: string[];
   /**
    * Shallow merge into Concordia's session.metadata. `null` value deletes
    * a key. Lictor uses this to publish `lictor_port` post-spawn — see

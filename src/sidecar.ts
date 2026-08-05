@@ -12,6 +12,7 @@ import { relayTask } from "./task-relay.js";
 import { fsRead, fsList, fsGrep } from "./fs-rpc.js";
 import type { TranscriptReadResult } from "./transcript-tail.js";
 import { extractPendingQuestions, postPendingQuestion } from "./ask-question-relay.js";
+import { parseShutdownRequest, type SessionShutdown } from "./session-shutdown.js";
 
 export interface TitleState {
   manualOverride: string | null;
@@ -92,6 +93,7 @@ export interface SidecarContext {
    * `immediate: true` で従来の即時 kill。pty 無し harness では null。
    */
   requestGracefulExit: ((opts?: { immediate?: boolean }) => void) | null;
+  shutdown?: SessionShutdown | null;
 }
 
 export interface Sidecar {
@@ -644,7 +646,35 @@ async function handle(
     return;
   }
 
+  if (method === "POST" && url === "/v1/shutdown") {
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    if (!ctx.shutdown) return writeJson(res, 503, { error: "shutdown not available" });
+    const request = parseShutdownRequest(body.value);
+    if (!request) return writeJson(res, 400, { error: "invalid shutdown request" });
+    await ctx.shutdown.run(request, (result) => writeJsonAndWait(res, 200, result));
+    return;
+  }
+
   writeJson(res, 404, { error: "not found" });
+}
+
+function writeJsonAndWait(
+  res: http.ServerResponse,
+  status: number,
+  body: unknown,
+): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    res.once("finish", settle);
+    res.once("close", settle);
+    writeJson(res, status, body);
+  });
 }
 
 function randomUuid(): string {

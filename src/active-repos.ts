@@ -15,7 +15,10 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+
+// @implements spec/feature/active-repo-reporting.md
 
 /**
  * State dir の解決. 優先順:
@@ -131,6 +134,64 @@ export function readActiveRepos(filePath: string): string[] {
     out.push(line);
   }
   return out;
+}
+
+export type GitCommonDirReader = (repoPath: string) => string | null;
+
+/**
+ * git が返す common dir は通常 checkout 基準の相対パス、 linked worktree では
+ * 本体 `.git` の絶対パスになる。どちらも dirname を取れば正準リポ root になる。
+ */
+function readGitCommonDir(repoPath: string): string | null {
+  try {
+    const result = spawnSync(
+      "git",
+      ["-C", repoPath, "rev-parse", "--git-common-dir"],
+      { encoding: "utf8", windowsHide: true, timeout: 5_000 },
+    );
+    if (result.status !== 0) return null;
+    const value = result.stdout.trim();
+    return value || null;
+  } catch {
+    // git 未導入・非リポ・一時的な spawn 失敗は入力パスへの縮退で扱う。
+    return null;
+  }
+}
+
+/**
+ * 1 プロセス内で checkout → 本体 root の解決結果を保持する resolver を作る。
+ * relay tick ごとの `git` 起動を避けつつ、テストでは git 応答だけ差し替えられる。
+ */
+export function createActiveRepoRootResolver(
+  readCommonDir: GitCommonDirReader = readGitCommonDir,
+): (repoPath: string) => string {
+  const cache = new Map<string, string>();
+  return (repoPath) => {
+    const cached = cache.get(repoPath);
+    if (cached !== undefined) return cached;
+    const commonDir = readCommonDir(repoPath);
+    const root = commonDir
+      ? dirname(isAbsolute(commonDir) ? commonDir : resolve(repoPath, commonDir))
+      : repoPath;
+    cache.set(repoPath, root);
+    return root;
+  };
+}
+
+const resolveActiveRepoRoot = createActiveRepoRootResolver();
+
+/** Resolve observed checkouts to cached Git common-directory roots. */
+export function resolveActiveRepoRoots(repos: string[]): string[] {
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const repo of repos) {
+    const root = resolveActiveRepoRoot(repo);
+    const key = process.platform === "win32" ? resolve(root).toLowerCase() : resolve(root);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    roots.push(root);
+  }
+  return roots;
 }
 
 /**

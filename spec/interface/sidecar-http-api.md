@@ -28,6 +28,7 @@
 | DELETE | `/v1/skill/<name>` | — | 注入 skill を削除 |
 | GET | `/v1/lictor/task` | — | 現在タスク状態 `{branch, desc, updatedAt}` |
 | POST | `/v1/lictor/task` | `{branch?, desc?}` | Concordia session を PATCH + event 発火 + `lictor-current-task` skill 更新 |
+| POST | `/v1/shutdown` | `{reason?: string, archive?: boolean}` | Cc unregister → CLI 即時終了 → transcript flush（最大 5 秒）→ archive → sidecar 終了を開始。重複時は `{ok:true, already:true}` |
 | GET | `/v1/lictor/state` | — | `{notify, conflict, task}` スナップショット |
 | GET | `/v1/transcript` | `?limit=N&raw=0\|1` | ラップ中 CLI の transcript（Claude/Codex JSONL）。`limit` 1–500（既定 50）。`raw=1` でパース済オブジェクト、既定は slim frame。`{path, available, total_lines, returned, frames\|lines}`。transcript-tail 非活性時 503 |
 

@@ -49,6 +49,8 @@ export interface ReactorContext {
    * built-in AskUserQuestion pickers to keystroke confirmation.
    */
   onAnswerQuestion?: (answer: { questionId: number; index: number; text: string }) => void;
+  /** Cc completion ブラックボックスが完了と判定したときだけ発火する。 */
+  onTaskCompletion?: (completion: { prNumber: number | null; outcome: string }) => void;
 }
 
 /**
@@ -88,6 +90,16 @@ export function reactToEvent(ev: unknown, ctx: ReactorContext): void {
       typeof ev.answer_index === "number" && Number.isInteger(ev.answer_index) ? ev.answer_index : -1;
     const text = typeof ev.answer_text === "string" ? ev.answer_text : "";
     ctx.onAnswerQuestion?.({ questionId: ev.question_id, index, text });
+    return;
+  }
+
+  if (ev.type === "taskflow.completion_detected") {
+    if (typeof ev.session_id !== "string" || ev.session_id !== ctx.ownSessionId) return;
+    if (typeof ev.outcome !== "string") return;
+    const prNumber = typeof ev.pr_number === "number" && Number.isInteger(ev.pr_number)
+      ? ev.pr_number
+      : null;
+    ctx.onTaskCompletion?.({ prNumber, outcome: ev.outcome });
     return;
   }
 

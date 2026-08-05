@@ -29,6 +29,9 @@ import {
 import { type ProviderConfig, PROVIDERS, resolveBinary } from "./provider.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
 import { scheduleGracefulExit, type GracefulExitHandle } from "./graceful-exit.js";
+import { archiveSessionLog } from "./session-archive.js";
+import { SessionShutdown } from "./session-shutdown.js";
+import { reportTaskInquiry } from "./task-inquiry.js";
 import { PendingQuestionGate } from "./pending-question-gate.js";
 import {
   createDelegationInjector,
@@ -42,6 +45,7 @@ import {
   claudeTranscriptStatePath,
   pickActiveRepo,
   readActiveRepos,
+  resolveActiveRepoRoots,
   resolveActiveReposDir,
 } from "./active-repos.js";
 import { createSubmitWatchdog } from "./submit-watchdog.js";
@@ -206,6 +210,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     repinTranscript: null,
     forceExit: null,
     requestGracefulExit: null,
+    shutdown: null,
   };
 
   const sidecar = await startSidecar(ctx);
@@ -300,6 +305,21 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           if (ctx.concordia && ctx.sessionId && ctx.injector) {
             void refreshPendingTasksSkill(ctx.concordia, ctx.sessionId, ctx.injector);
           }
+        },
+        onTaskCompletion: ({ prNumber, outcome }) => {
+          const activeRepos = resolveActiveRepoRoots(
+            ctx.activeRepoState.lastList.length > 0
+              ? ctx.activeRepoState.lastList
+              : [ctx.meta.cwd],
+          );
+          const stat = gatherRepoStat(ctx.activeRepoState.lastActive ?? ctx.meta.cwd);
+          void reportTaskInquiry(ctx.concordia, ctx.sessionId, {
+            activeRepos,
+            branch: stat.branch ?? ctx.taskState.branch,
+            hasUncommittedChanges: stat.dirty,
+            recentPr: prNumber === null ? null : { number: prNumber, outcome },
+            task: ctx.taskState.desc,
+          });
         },
         onInject: (text, source) => {
           if (!ctx.ptyWriter) return;
@@ -624,6 +644,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   const ptyArgs = isWindows ? ["/d", "/s", "/c", effectiveBinary, ...providerArgs] : providerArgs;
 
   const { cols, rows } = currentSize();
+  let childExited = false;
+  let shutdownRequested = false;
   let child: pty.IPty;
   try {
     child = pty.spawn(ptyFile, ptyArgs, {
@@ -755,6 +777,40 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     ctx.repinTranscript = () => tail.forceRediscover();
   }
 
+  ctx.shutdown = new SessionShutdown({
+    onStart: () => {
+      shutdownRequested = true;
+    },
+    unregister: async () => {
+      if (ctx.concordia && ctx.sessionId) await ctx.concordia.unregister(ctx.sessionId);
+    },
+    isCliAlive: () => !childExited,
+    kill: () => {
+      ctx.forceExit?.();
+    },
+    flush: async () => {
+      transcriptTail?.stop();
+      if (codexTranscriptSink) await codexTranscriptSink.flush();
+    },
+    archive: async (reason) => archiveSessionLog({
+      sessionId: ctx.sessionId ?? `lictor-${process.pid}`,
+      claudeSessionId: ctx.getClaudeSessionId?.() ?? null,
+      meta,
+      activeRepos: resolveActiveRepoRoots(
+        ctx.activeRepoState.lastList.length > 0
+          ? ctx.activeRepoState.lastList
+          : [meta.cwd],
+      ),
+      reason,
+      transcriptPath: transcriptTail?.getTranscriptPath() ?? null,
+      stateDir: activeReposStateDir,
+    }).path,
+    scheduleExit: () => {
+      setTimeout(() => process.exit(0), 50);
+    },
+    warn: (message) => process.stderr.write(`lictor: ${message}\n`),
+  });
+
   // pty → real terminal stdout.
   const onData = (data: string) => {
     // First output from the wrapped CLI means its TUI is alive; arm the
@@ -818,7 +874,6 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   };
   process.stdout.on("resize", onResize);
 
-  let childExited = false;
   const cleanup = async () => {
     transcriptTail?.stop();
     gracefulExit?.cancel();
@@ -860,6 +915,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
 
   child.onExit(({ exitCode, signal }) => {
     childExited = true;
+    // /v1/shutdown が所有する unregister → kill → flush → archive → exit の途中。
+    // 通常 onExit cleanup を競合させると archive 前に process.exit し得るため任せる。
+    if (shutdownRequested) return;
     void cleanup().finally(() => {
       if (signal && process.platform !== "win32") {
         // POSIX: re-raise so wait status mirrors the child's.
@@ -1209,23 +1267,28 @@ async function pollLiveState(ctx: SidecarContext): Promise<void> {
   if (activeChanged) {
     ctx.meta.cwd = activeCwd;
     if (ctx.injector) syncSessionContextSkill(ctx.injector, activeCwd);
+  }
+  if (activeChanged || listChanged) {
+    const previous = ctx.activeRepoState.lastActive;
+    const canonicalRepos = resolveActiveRepoRoots(activeRepos);
+    ctx.activeRepoState.lastActive = activeCwd;
+    ctx.activeRepoState.lastList = activeRepos.slice();
     try {
-      await ctx.concordia.patchSession(ctx.sessionId, { repo_path: activeCwd });
+      await ctx.concordia.patchSession(ctx.sessionId, {
+        ...(activeChanged ? { repo_path: activeCwd } : {}),
+        active_repos: canonicalRepos,
+      });
       await ctx.concordia.event(ctx.sessionId, {
         kind: "lictor.active_repo.changed",
         payload: {
           active: activeCwd,
-          previous: ctx.activeRepoState.lastActive,
-          repos: activeRepos,
+          previous,
+          repos: canonicalRepos,
         },
       });
     } catch {
       // best-effort
     }
-  }
-  if (activeChanged || listChanged) {
-    ctx.activeRepoState.lastActive = activeCwd;
-    ctx.activeRepoState.lastList = activeRepos.slice();
   }
 
   // 残り branch / conflicts / 標題は active repo を基準に計算する。

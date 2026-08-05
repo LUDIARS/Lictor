@@ -20,7 +20,7 @@
 export const SESSION_END_SKILL_NAME = "session-end";
 
 export const SESSION_END_SKILL_DESCRIPTION =
-  "セッション終了の一連処理 — 受付応答 → 残作業報告 → セッションログ保存 → memory 更新 → 独白. Codex CLI には slash command 機構が無いため、 ユーザが「session-end して」 等と頼んだら自発的にこの skill を回す.";
+  "セッション終了の一連処理 — 受付応答 → 残作業報告 → セッションログ保存 → memory 更新 → 独白 → Lictor shutdown. Codex CLI には slash command 機構が無いため、 ユーザが「session-end して」 等と頼んだら自発的にこの skill を回す.";
 
 export const SESSION_END_SKILL_BODY = `# session-end
 
@@ -71,11 +71,25 @@ export const SESSION_END_SKILL_BODY = `# session-end
 トーン: 今回 assign された persona / role に沿う. 内容は当日のハイライト /
 引っかかったこと / 明日への一言 等. 長くしない (3-5 文程度).
 
+## 6. Lictor に shutdown を送る (最後・必須)
+
+ここまで終わったら、 Lictor に終了を通告する。 これをやらないと
+セッションプロセスが最大 30 分居座る。
+
+    POST http://127.0.0.1:<LICTOR_PORT>/v1/shutdown  {"reason":"session-end"}
+
+Lictor が CLI プロセスの停止・ログのアーカイブ・自身の終了までを行う。
+応答が返ったらこのセッションでやることは無い。 追加の作業を始めない。
+
+\`LICTOR_PORT\` は環境変数 / 現在の sidecar 情報から取得し、推測やハードコードを
+しない。
+
 ## やらないこと
 
 - session-logs のリポ commit / push は **行わない** (ローカル運用、 必要なら
   ユーザ指示でコミット).
 - 関連リポの commit / push もこの skill では行わない.
+- shutdown を送る前に新しい作業を始めない.
 
 ## 起動
 

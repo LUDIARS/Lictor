@@ -182,6 +182,24 @@ test("reactToEvent: question.answered with index 0 (first option) still fires", 
   assert.deepEqual(ctx.answerQuestionCalls, [{ questionId: 3, index: 0, text: "A" }]);
 });
 
+test("reactToEvent: own completion-blackbox result triggers task inquiry callback", () => {
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    { type: "taskflow.completion_detected", session_id: "me", pr_number: 12, outcome: "merged", ts: 1 },
+    ctx,
+  );
+  assert.deepEqual(ctx.taskCompletionCalls, [{ prNumber: 12, outcome: "merged" }]);
+});
+
+test("reactToEvent: another session completion is ignored", () => {
+  const ctx = makeReactorCtx({ ownSessionId: "me" });
+  reactToEvent(
+    { type: "taskflow.completion_detected", session_id: "other", pr_number: null, outcome: "open", ts: 1 },
+    ctx,
+  );
+  assert.deepEqual(ctx.taskCompletionCalls, []);
+});
+
 test("applyTitleWithMarks: respects manual override", () => {
   const titleState = { manualOverride: "[manual]" };
   // applyTitleWithMarks is a no-op when there's a manual override; we
@@ -209,6 +227,8 @@ interface FakeReactorCtx {
   injectCalls: Array<{ text: string; source: string | null }>;
   onAnswerQuestion: (answer: { questionId: number; index: number; text: string }) => void;
   answerQuestionCalls: Array<{ questionId: number; index: number; text: string }>;
+  onTaskCompletion: (completion: { prNumber: number | null; outcome: string }) => void;
+  taskCompletionCalls: Array<{ prNumber: number | null; outcome: string }>;
 }
 
 function makeReactorCtx(opts: { ownSessionId?: string | null }): FakeReactorCtx {
@@ -234,6 +254,10 @@ function makeReactorCtx(opts: { ownSessionId?: string | null }): FakeReactorCtx 
       ctx.answerQuestionCalls.push(answer);
     },
     answerQuestionCalls: [],
+    onTaskCompletion: (completion) => {
+      ctx.taskCompletionCalls.push(completion);
+    },
+    taskCompletionCalls: [],
   };
   return ctx;
 }

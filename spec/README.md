@@ -33,3 +33,6 @@ spec/
 | [delegation-inject.md](feature/delegation-inject.md) | 委託 prompt の自動貼付・送信 |
 | [codex-first-turn-transcript-sequence.md](feature/codex-first-turn-transcript-sequence.md) | App ServerでのCodex ID確定、delegation/interactive分岐、初回`transcript_logs`永続化 |
 | [task-protocol.md](feature/task-protocol.md) | 現在タスク/ブランチの宣言と skill 反映 |
+| [active-repo-reporting.md](feature/active-repo-reporting.md) | worktreeを本体repo rootへ正準化してCcへ一覧報告 |
+| [session-shutdown.md](feature/session-shutdown.md) | unregister・CLI終了・archive・sidecar終了の順序制御 |
+| [task-inquiry.md](feature/task-inquiry.md) | Cc completion通知から固定語彙のお伺いを送信 |
