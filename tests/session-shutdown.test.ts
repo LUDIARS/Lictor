@@ -10,7 +10,7 @@ test("shutdown responds after unregister, kill, flush, and archive, then exits",
     unregister: async () => {
       steps.push("unregister");
     },
-    kill: () => {
+    kill: async () => {
       steps.push("kill");
     },
     flush: async () => {
@@ -19,6 +19,9 @@ test("shutdown responds after unregister, kill, flush, and archive, then exits",
     archive: async (reason) => {
       steps.push(`archive:${reason}`);
       return "/archive";
+    },
+    cleanup: async () => {
+      steps.push("cleanup");
     },
     scheduleExit: () => {
       steps.push("exit");
@@ -35,7 +38,7 @@ test("shutdown responds after unregister, kill, flush, and archive, then exits",
   );
   assert.deepEqual(
     steps,
-    ["unregister", "kill", "flush", "archive:session-end", "response", "exit"],
+    ["unregister", "kill", "flush", "archive:session-end", "response", "cleanup", "exit"],
   );
 });
 
@@ -99,6 +102,29 @@ test("shutdown continues after unregister and archive failures", async () => {
   assert.deepEqual(await shutdown.run(), { ok: true, archived: null });
   assert.deepEqual(steps, ["unregister", "kill", "archive", "exit"]);
   assert.equal(warnings.length, 2);
+});
+
+test("shutdown continues to exit after session resource cleanup fails", async () => {
+  const steps: string[] = [];
+  const warnings: string[] = [];
+  const shutdown = new SessionShutdown({
+    unregister: async () => undefined,
+    kill: () => undefined,
+    archive: async () => null,
+    cleanup: async () => {
+      steps.push("cleanup");
+      throw new Error("cleanup failed");
+    },
+    scheduleExit: () => {
+      steps.push("exit");
+    },
+    warn: (message) => warnings.push(message),
+  });
+
+  await shutdown.run();
+
+  assert.deepEqual(steps, ["cleanup", "exit"]);
+  assert.deepEqual(warnings, ["session resource cleanup failed: cleanup failed"]);
 });
 
 test("archive=false skips the archive stage", async () => {

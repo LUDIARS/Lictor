@@ -11,9 +11,10 @@ export interface ShutdownDependencies {
   onStart?: () => void;
   unregister: () => Promise<void>;
   isCliAlive?: () => boolean;
-  kill: () => void;
+  kill: () => Promise<void> | void;
   flush?: () => Promise<void>;
   archive: (reason: string) => Promise<string | null>;
+  cleanup?: () => Promise<void>;
   scheduleExit: () => void;
   warn?: (message: string) => void;
   flushTimeoutMs?: number;
@@ -47,7 +48,9 @@ export class SessionShutdown {
 
     await this.bestEffort("Concordia unregister", this.deps.unregister);
     if (this.deps.isCliAlive?.() !== false) {
-      await this.bestEffort("wrapped process termination", async () => this.deps.kill());
+      await this.bestEffort("wrapped process termination", async () => {
+        await this.deps.kill();
+      });
     }
     const flush = this.deps.flush;
     if (flush) {
@@ -67,9 +70,12 @@ export class SessionShutdown {
     }
 
     const result: ShutdownResult = { ok: true, archived };
-    // sidecar route は response の finish/close を待つ responder を渡す。ユニット利用で
-    // responder が無い場合も、1-3 完了後に同じ終了段階へ進む。
+    // sidecar route は response の finish/close を待つ responder を渡す。応答後なら
+    // cleanup が HTTP listener を閉じても response を途中で切らない。
     await respond?.(result);
+    if (this.deps.cleanup) {
+      await this.bestEffort("session resource cleanup", this.deps.cleanup);
+    }
     try {
       this.deps.scheduleExit();
     } catch (error) {

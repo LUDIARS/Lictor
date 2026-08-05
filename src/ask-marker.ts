@@ -33,6 +33,19 @@ export interface AskMarker {
 }
 
 /**
+ * pending-question 登録失敗時に通常 transcript として再送する正規化済みマーカー。
+ *
+ * @implements SPEC-ASK-MARKER-RELAY-CONTRACT
+ */
+export function renderAskMarkerFallback(marker: AskMarker): string {
+  // JSON permits backticks verbatim, but Markdown does not: a model-provided
+  // triple-backtick sequence would close the outer fence early. Keep the raw
+  // relay payload inside one fence while preserving the parsed marker values.
+  const json = JSON.stringify(marker).replace(/`/g, "\\u0060");
+  return `\`\`\`ask\n${json}\n\`\`\``;
+}
+
+/**
  * **共通** (全 provider) のステアリング本文。「ユーザに選択肢を求めるときは ask
  * マーカーで質問しろ」。AskUserQuestion には触れない (Claude 固有なので addendum 側)。
  */
@@ -63,7 +76,15 @@ export const ASK_MARKER_CLAUDE_ADDENDUM = `
 /** Claude の \`--append-system-prompt-file\` に渡す本文 (共通 + AskUserQuestion 禁止)。 */
 export const ASK_MARKER_CLAUDE_SYSTEM_PROMPT = ASK_MARKER_COMMON + ASK_MARKER_CLAUDE_ADDENDUM;
 
-/** Codex 等、skill 注入で共通ルールを配る provider 用の SKILL メタ + 本文 (共通のみ)。 */
+/**
+ * Codex 等、skill 注入で共通ルールを配る provider 用の SKILL メタ + 本文 (共通のみ)。
+ *
+ * NOTE: Codex は `skillStrategy: "none"` (共有 skill 汚染回避) なので、Lictor は
+ * **この skill をセッションに書かない**。Codex への steering は `~/.agents/skills/` に
+ * 手動配置された同名のグローバル skill が担う前提で、ここはその正本本文。未使用に
+ * 見えても消さないこと (消すとグローバル skill の出所が失われる)。SPEC-ASK-MARKER-ACTIVATION
+ * のとおり、検出可否はこの注入の有無とは独立。
+ */
 export const ASK_MARKER_SKILL_NAME = "lictor-ask-marker";
 export const ASK_MARKER_SKILL_DESCRIPTION =
   "ユーザに選択肢や判断を求めるときは ask マーカー (```ask + JSON) で質問する。Lictor がリモート回答に変換する。";

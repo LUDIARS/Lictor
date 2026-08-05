@@ -17,6 +17,8 @@ import {
 import { PROVIDERS, makeLocalLlmProvider } from "../src/provider.js";
 import { claudeTranscriptStatePath } from "../src/active-repos.js";
 
+// @implements SPEC-ASK-MARKER-RELAY-CONTRACT
+
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -890,6 +892,68 @@ test("startTranscriptTail: AskUserQuestion 検出後に onPickerQuestionRegister
       // poll が検出 → HTTP POST → .then → callback まで待つ。
       await sleep(1200);
       assert.deepEqual(pickerQids, [99], "AskUserQuestion 登録後に question_id=99 で呼ばれる");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("startTranscriptTail: ask登録失敗時は質問をraw markerとして中継する", async () => {
+  const server = createServer((req, res) => {
+    if (req.method === "POST" && req.url?.includes("pending-question")) {
+      res.writeHead(503);
+      res.end();
+      return;
+    }
+    res.writeHead(204);
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  const concordiaBaseUrl = `http://127.0.0.1:${port}`;
+
+  const dir = mkdtempSync(join(tmpdir(), "lictor-ask-fallback-"));
+  const frames: Array<{ kind: string; payload: unknown }> = [];
+  try {
+    const ownUuid = "cececece-cece-4cec-8cec-cececececece";
+    const pinnedPath = join(dir, `${ownUuid}.jsonl`);
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-ask-fallback-session",
+      concordiaBaseUrl,
+      provider,
+      pinnedTranscriptPath: pinnedPath,
+      askMarkerEnabled: true,
+      transcriptSink: {
+        post: async (kind, payload) => {
+          frames.push({ kind, payload });
+          return { seq: frames.length, persisted: true };
+        },
+        flush: async () => undefined,
+      },
+    });
+    try {
+      const line = JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "text",
+            text: '確認します。\n\n```ask\n{"question":"進めますか?","options":[{"label":"はい"},{"label":"いいえ"}]}\n```',
+          }],
+        },
+      });
+      writeFileSync(pinnedPath, line + "\n", "utf8");
+
+      await sleep(1200);
+      assert.equal(frames.length, 2);
+      assert.equal((frames[0]?.payload as { text?: string }).text, "確認します。");
+      const fallbackText = (frames[1]?.payload as { text?: string }).text ?? "";
+      assert.match(fallbackText, /^```ask\n/);
+      assert.match(fallbackText, /進めますか\?/);
     } finally {
       tail.stop();
     }

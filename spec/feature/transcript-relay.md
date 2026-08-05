@@ -49,5 +49,22 @@ stall 復帰も同じ束縛キーで取り直す（Claude=hook権威 / Codex=App
 - 壊れた JSONL 行は捨て、空行は母数に含めない（`transcript-tail.test.ts` で固定）。
 - dedup は message id（`msg_xxx`）基準。
 
+## SPEC-ASK-MARKER-ACTIVATION: 検出可否と steering 注入の分離
+
+- Concordia 連携中の Codex は、session-scoped `SkillInjector` の有無にかかわらず ask
+  マーカー検出を有効にする。ルールをモデルへ伝える仕組みと transcript の検出能力は別の
+  capability として扱い、一方の不在で他方を無効にしない。
+- 判定は provider 名 / Concordia 有無 / injector 有無だけに依存する純関数に置き
+  （[`../../src/ask-marker-activation.ts`](../../src/ask-marker-activation.ts)）、
+  起動時に provider・enabled・reason を必ずログへ出す（無効化は無言で起きない）。
+
+## SPEC-ASK-MARKER-RELAY-CONTRACT: ask マーカーの中継契約
+
+- Lictor は正常な ask マーカーを transcript 本文から消費し、散文があれば先に通常本文として
+  中継したうえで、構造化した質問を pending-question API へ1回だけ投稿する。登録に失敗した
+  場合は質問部分を raw ask として通常経路へ戻し、Concordia の fail-loud 表示へつなぐ。
+- 生の ask マーカーが Concordia の transcript relay まで到達した場合は正常系ではない。
+  Concordia はそれを黙って除去せず、回答可能な fail-loud 本文として残す。
+
 Codex thread の作成、最初の prompt 投入、最初の Concordia `transcript_logs` 永続化の前後関係は
 [`codex-first-turn-transcript-sequence.md`](codex-first-turn-transcript-sequence.md) を参照。

@@ -3,12 +3,29 @@
 `POST /v1/shutdown` は session-end の終局処理を次の順で所有する。
 
 1. Concordia unregister（失敗しても続行）
-2. wrapped CLI の即時終了と transcript sink の最大5秒 flush
-3. transcript、session state、metadata の archive
-4. HTTP 応答後の Lictor process 終了予約
+2. wrapped CLI の process tree を即時終了
+   - Windows は node-pty の direct kill だけに依存せず `taskkill /F /T /PID <pty pid>` を待つ。
+   - `taskkill` 失敗時は direct kill へ縮退し、失敗を warning として観測可能にする。
+   - POSIX は既存の node-pty signal 経路を維持する。
+3. transcript sink の最大5秒 flush
+4. transcript、session state、metadata の archive
+5. HTTP 応答後に timer、listener、sidecar、session skill directory、terminal raw mode 等を cleanup
+6. Lictor process 終了予約
 
 二重要求は `{ ok: true, already: true }` で no-op とする。CLI が既に終了している
 場合は kill を省略し、archive 失敗時は `archived: null` と警告を返して終了を続ける。
+
+process tree の所有範囲は Lictor が起動した wrapped CLI とその子孫に限る。Excubitor が
+所有する常駐serviceはsession treeへ含めず、Concordiaのprocess reaperはLictor crashや
+shutdown不達時の外部保険として維持する。
+
+## SPEC-SESSION-PROCESS-TREE: wrapped CLI tree termination
+
+- Windows の wrapped CLI 終了は、有効な PTY child PID だけを root に
+  `taskkill /F /T /PID <pid>` で非同期に完了を待つ。shell は使わない。
+- `taskkill` が失敗または timeout した場合は node-pty の direct kill を試し、元の
+  失敗は warning として残す。両方失敗した場合も shutdown の残りの段階は継続する。
+- Windows 以外では既存の node-pty signal 経路を使う。
 
 archive は `<workspace-root>/session-logs/archive/<date>/<session-id>/` に置き、元ファイルを
 コピーする。gzip 結果が100MBを超える transcript は元データの先頭・末尾50MBを残して

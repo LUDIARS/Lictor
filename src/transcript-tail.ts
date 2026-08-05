@@ -45,7 +45,7 @@ import {
   postResolveQuestion,
   providerSupportsAskUserQuestion,
 } from "./ask-question-relay.js";
-import { parseAskMarkerText } from "./ask-marker.js";
+import { parseAskMarkerText, renderAskMarkerFallback } from "./ask-marker.js";
 import { stripAskBlock } from "./ask-json.js";
 import type { TranscriptFrameSink } from "./transcript-sink.js";
 
@@ -822,18 +822,22 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       // これで Discord 側の「カードが説明より先に出る」順序逆転と、説明メッセージへの
       // raw JSON 二重表示を解消する。元フレーム (raw JSON 入り) は再送しない。
       // user テキストはローカル返信とみなし、開いている marker 質問を resolve させる。
+      // @implements SPEC-ASK-MARKER-RELAY-CONTRACT
       if (opts.askMarkerEnabled && frame.kind === "text") {
         const p = frame.payload as { role?: unknown; text?: unknown };
         if (p.role === "assistant" && typeof p.text === "string") {
           const marker = parseAskMarkerText(p.text);
           if (marker) {
             // 1. 説明テキスト (ask ブロック除去済) を先に送る。中身が空なら省略。
+            // 送信失敗は onRelayError で既に表面化しているので握り潰す。ここで throw すると
+            // 同一 chunk の残り行が (offset 進行済のため) 二度と中継されず、質問カードの
+            // 投稿にも到達できない。
             const stripped = stripAskBlock(p.text);
             if (stripped) {
               await sendFrame("text", {
                 ...(frame.payload as object),
                 text: stripped,
-              });
+              }).catch(() => undefined);
             }
             // 2. 質問カードを最後に送る (説明の後に届くよう await 後に投稿)。
             const qid = await postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, {
@@ -842,8 +846,19 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
               options: marker.options,
               multiSelect: marker.multiSelect,
             });
-            if (qid != null) opts.onAskMarkerPosted?.(qid);
-            continue; // raw JSON を含む元フレームは送らない (分割済み)
+            if (qid != null) {
+              opts.onAskMarkerPosted?.(qid);
+            } else {
+              // 説明本文はすでに送信済みなので、質問部分だけを正規化して再送する。
+              // Concordia は raw ask を構造化失敗として警告付き通常本文へ変換する。
+              // 送信失敗は onRelayError で既に表面化しているので握り潰す。ここで throw すると
+              // 同一 chunk の残り行が (offset 進行済のため) 二度と中継されない。
+              await sendFrame("text", {
+                ...(frame.payload as object),
+                text: renderAskMarkerFallback(marker),
+              }).catch(() => undefined);
+            }
+            continue; // 元フレームは送らない (成功時=カード化、失敗時=正規化済みrawを送信済み)
           }
         } else if (p.role === "user" && typeof p.text === "string") {
           opts.onUserReply?.();

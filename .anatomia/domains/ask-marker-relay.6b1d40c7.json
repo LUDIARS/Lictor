@@ -1,0 +1,46 @@
+{
+  "name": "ask-marker-relay",
+  "description": "Text-protocol question relay: ask marker steering, activation planning, parsing, and pending-question egress with a fail-loud raw fallback.",
+  "presetRules": [
+    {
+      "preset": "couplingCap",
+      "params": {
+        "targetPattern": "src/(ask-marker|ask-marker-activation|ask-json|ask-question-relay)\\.ts$",
+        "by": "path",
+        "maxFanOut": 9007199254740991
+      }
+    },
+    {
+      "preset": "couplingCap",
+      "params": {
+        "targetPattern": "tests/(ask-marker|ask-marker-activation)\\.test\\.ts$",
+        "by": "path",
+        "maxFanOut": 9007199254740991
+      }
+    }
+  ],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/(ask-marker|ask-marker-activation|ask-json|ask-question-relay|transcript-tail|wrap)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)tests/(ask-marker|ask-marker-activation|ask-question-relay|transcript-tail)\\.test\\.ts$"
+    }
+  ],
+  "cardTemplate": "Summarise the ask-marker-relay domain: marker detection is a capability independent of provider steering injection, and a question never disappears silently.",
+  "source": "spec-draft",
+  "mechanics": [
+    "activation-planning",
+    "marker-parsing",
+    "pending-question-egress",
+    "raw-ask-fallback"
+  ],
+  "specRefs": [
+    "SPEC-ASK-MARKER-ACTIVATION",
+    "SPEC-ASK-MARKER-RELAY-CONTRACT",
+    "AskQuestion pending gate"
+  ],
+  "rationale": "Detecting ask markers in a transcript and steering the model to emit them are separate capabilities. Codex has no session-scoped SkillInjector by design, so activation must be planned from provider identity plus Concordia availability, not from injector presence. When pending-question registration fails, the question is re-emitted as a raw ask block so it stays fail-loud instead of being dropped.",
+  "updatedAt": "2026-08-03T00:00:00.000Z"
+}

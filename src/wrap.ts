@@ -31,6 +31,7 @@ import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tai
 import { scheduleGracefulExit, type GracefulExitHandle } from "./graceful-exit.js";
 import { archiveSessionLog } from "./session-archive.js";
 import { SessionShutdown } from "./session-shutdown.js";
+import { terminateProcessTree } from "./process-tree.js";
 import { reportTaskInquiry } from "./task-inquiry.js";
 import { PendingQuestionGate } from "./pending-question-gate.js";
 import {
@@ -49,12 +50,8 @@ import {
   resolveActiveReposDir,
 } from "./active-repos.js";
 import { createSubmitWatchdog } from "./submit-watchdog.js";
-import {
-  ASK_MARKER_SKILL_BODY,
-  ASK_MARKER_SKILL_DESCRIPTION,
-  ASK_MARKER_SKILL_NAME,
-  writeAskMarkerPrompt,
-} from "./ask-marker.js";
+import { writeAskMarkerPrompt } from "./ask-marker.js";
+import { planAskMarkerActivation } from "./ask-marker-activation.js";
 import { postResolveQuestion } from "./ask-question-relay.js";
 import {
   closeCodexAppServerSession,
@@ -530,42 +527,34 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // 読むこと。
   const pinnedTranscriptPath: string | null = null;
 
-  // ask マーカー ステアリング注入 (concordia 連携時のみ = リモート回答対象)。
+  // ask マーカーの検出と provider 固有のステアリング注入。
   //   - claude: 共通マーカールール + 組み込み AskUserQuestion 禁止 を常時
   //     --append-system-prompt-file で注入 (ファイル経由で Windows の cmd.exe
   //     クォート問題を回避)。
-  //   - codex : 共通マーカールールを skill 注入 (Codex は ~/.agents/skills を自動探索)。
+  //   - codex : グローバル skill / セッション外 steering を利用するため、session-scoped
+  //     SkillInjector の有無とは独立して transcript 検出を有効にする。
   // gemini は注入機構が無いので skip。検出側 (transcript-tail) は askMarkerActive と連動。
-  let askMarkerActive = false;
-  if (concordia && injector) {
-    if (provider.name === "claude") {
-      try {
-        const promptPath = writeAskMarkerPrompt(injector.sessionDir);
-        providerArgs.push("--append-system-prompt-file", promptPath);
-        askMarkerActive = true;
-      } catch (err) {
-        process.stderr.write(
-          `lictor: ask-marker system-prompt write failed: ${(err as Error).message}\n`,
-        );
-      }
-    } else if (provider.name === "codex") {
-      try {
-        injector.writeSkill(
-          ASK_MARKER_SKILL_NAME,
-          renderSkillMd({
-            name: ASK_MARKER_SKILL_NAME,
-            description: ASK_MARKER_SKILL_DESCRIPTION,
-            body: ASK_MARKER_SKILL_BODY,
-          }),
-        );
-        askMarkerActive = true;
-      } catch (err) {
-        process.stderr.write(
-          `lictor: ask-marker skill seed failed: ${(err as Error).message}\n`,
-        );
-      }
+  // @implements SPEC-ASK-MARKER-ACTIVATION
+  const askMarkerPlan = planAskMarkerActivation(
+    provider.name,
+    concordia !== null,
+    injector !== null,
+  );
+  let askMarkerActive = askMarkerPlan.enabled;
+  let askMarkerReason: string = askMarkerPlan.reason;
+  if (askMarkerPlan.injection === "claude-system-prompt") {
+    try {
+      if (!injector) throw new Error("activation plan requires session injector");
+      const promptPath = writeAskMarkerPrompt(injector.sessionDir);
+      providerArgs.push("--append-system-prompt-file", promptPath);
+    } catch (err) {
+      askMarkerActive = false;
+      askMarkerReason = `system-prompt-write-failed:${(err as Error).message}`;
     }
   }
+  process.stderr.write(
+    `lictor: ask-marker provider=${provider.name} enabled=${askMarkerActive} reason=${askMarkerReason}\n`,
+  );
 
   const delegationPrompt = loadDelegationPrompt(env);
   let codexAppServerSession: CodexAppServerSession | null = null;
@@ -785,8 +774,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       if (ctx.concordia && ctx.sessionId) await ctx.concordia.unregister(ctx.sessionId);
     },
     isCliAlive: () => !childExited,
-    kill: () => {
-      ctx.forceExit?.();
+    kill: async () => {
+      gracefulExit?.cancel();
+      await terminateProcessTree(child.pid, {
+        terminateDirect: () => terminatePty(child, "SIGTERM"),
+      });
     },
     flush: async () => {
       transcriptTail?.stop();
@@ -805,6 +797,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       transcriptPath: transcriptTail?.getTranscriptPath() ?? null,
       stateDir: activeReposStateDir,
     }).path,
+    cleanup: cleanupSessionResources,
     scheduleExit: () => {
       setTimeout(() => process.exit(0), 50);
     },
@@ -874,16 +867,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   };
   process.stdout.on("resize", onResize);
 
-  const cleanup = async () => {
+  async function cleanupSessionResources(): Promise<void> {
     transcriptTail?.stop();
     gracefulExit?.cancel();
-    if (codexTranscriptSink) {
-      try {
-        await codexTranscriptSink.flush();
-      } catch (error) {
-        process.stderr.write(`lictor: transcript flush failed during cleanup: ${(error as Error).message}\n`);
-      }
-    }
     await cleanupShared();
     stdin.off("data", onStdin);
     process.stdout.off("resize", onResize);
@@ -895,6 +881,19 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       }
     }
     stdin.pause();
+  }
+
+  const cleanup = async () => {
+    transcriptTail?.stop();
+    gracefulExit?.cancel();
+    if (codexTranscriptSink) {
+      try {
+        await codexTranscriptSink.flush();
+      } catch (error) {
+        process.stderr.write(`lictor: transcript flush failed during cleanup: ${(error as Error).message}\n`);
+      }
+    }
+    await cleanupSessionResources();
     if (concordia) {
       try {
         const reply = await concordia.client.unregister(concordia.id);

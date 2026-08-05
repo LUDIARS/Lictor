@@ -17,3 +17,32 @@ keeping optional observability outside the control dependency chain.
 The command contract and dependency boundary are specified in
 [`task-protocol.md`](./task-protocol.md). Vestigium degradation behavior is specified
 in [`../setup/setup.md`](../setup/setup.md).
+
+## ask-marker-relay
+
+The text-protocol question path: deciding whether ask markers are detectable,
+steering the model to emit them, parsing them out of the transcript, and getting
+them to Concordia without ever dropping a question silently.
+
+- **activation-planning**: pure provider/Concordia/injector → enabled + injection
+  decision (`src/ask-marker-activation.ts`). Detection capability is deliberately
+  independent of session-scoped skill injection, because Codex declares
+  `supportsSkills: false` and therefore has no `SkillInjector`.
+- **marker-parsing**: steering bodies, prompt file writing, lenient JSON extraction
+  and the raw-ask fallback rendering (`src/ask-marker.ts`, `src/ask-json.ts`).
+- **pending-question-egress**: pending-question POST / resolve and option
+  normalization (`src/ask-question-relay.ts`).
+
+The relay contract (split send order, single card post, raw fallback on registration
+failure, and which side strips raw markers) is specified in
+[`transcript-relay.md`](./transcript-relay.md) (`SPEC-ASK-MARKER-ACTIVATION`,
+`SPEC-ASK-MARKER-RELAY-CONTRACT`). Gate behavior for
+registered questions is specified in
+[`askquestion-pending-gate.md`](./askquestion-pending-gate.md).
+
+### Analyzer policy boundary
+
+Lictor does not adopt Anatomia's built-in `transition-guard-example` policy. Names such as
+`NotifyState` and `TaskState` are ordinary immutable state values; calls that construct them
+from `runWrapped` are not forbidden direct state mutation. The tracked local override keeps
+that example policy rule-free so it cannot block unrelated wrapper changes.

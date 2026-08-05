@@ -9,8 +9,39 @@ import {
   ASK_MARKER_SKILL_BODY,
   detectAskMarker,
   parseAskMarkerText,
+  renderAskMarkerFallback,
   writeAskMarkerPrompt,
 } from "../src/ask-marker.js";
+
+// @implements SPEC-ASK-MARKER-RELAY-CONTRACT
+
+test("renderAskMarkerFallback: parsed question remains relayable as a raw ask marker", () => {
+  const text = renderAskMarkerFallback({
+    question: "進めますか?",
+    multiSelect: false,
+    options: [{ label: "はい" }, { label: "いいえ", description: "停止する" }],
+  });
+  assert.match(text, /^```ask\n/);
+  assert.deepEqual(parseAskMarkerText(text), {
+    question: "進めますか?",
+    multiSelect: false,
+    options: [{ label: "はい" }, { label: "いいえ", description: "停止する" }],
+  });
+});
+
+test("renderAskMarkerFallback: model text cannot close the raw Markdown fence", () => {
+  const marker = {
+    question: "Use ```example``` before continuing?",
+    multiSelect: false,
+    options: [{ label: "Continue" }],
+  };
+
+  const text = renderAskMarkerFallback(marker);
+
+  assert.equal((text.match(/```/g) ?? []).length, 2);
+  assert.match(text, /\\u0060\\u0060\\u0060example/);
+  assert.deepEqual(parseAskMarkerText(text), marker);
+});
 
 test("parseAskMarkerText: 正常な ```ask ブロックを構造化", () => {
   const text = [
