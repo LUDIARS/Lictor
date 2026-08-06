@@ -12,6 +12,10 @@ slash command / 回答 / リネーム等を行う。**第 2 の trust boundary**
 - `POST /v1/answer {choice, escape_first?}` — `AskUserQuestion` picker 回答。
   `choice` は 1-based（1–50）、Down×(choice-1) + Enter を送る
   ([`../../src/ask-question-relay.ts`](../../src/ask-question-relay.ts))。
+- `POST /v1/runtime/model-effort {model, effort}` — Claude の `/model` と
+  `/effort` を順に注入する。`model` は識別子 grammar、`effort` は許可済み値に
+  限定し、同じ PTY への複数切替は対ごとに直列化する。Codex は picker を自動操作
+  せず 409 を返す。
 
 ## Trust boundary（必須サニタイズ）
 `ctx.ptyWriter(rawUserInput)` を直接呼んではいけない。注入前に必ず

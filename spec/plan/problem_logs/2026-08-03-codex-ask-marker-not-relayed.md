@@ -78,6 +78,18 @@ pending-question登録失敗時は質問部分だけをraw askとして通常中
 - 修正版Lictorをbuild・配備した後、既存セッションには再起動が必要。
 - 修正反映まではCodexセッションで `ask` マーカーだけに依存せず、通常本文でも判断依頼を伝える。
 
+## 2026-08-06 recurrence: stale root dist
+
+同じユーザ可視症状が再発した。対象sessionは2026-08-06 17:04 JST開始で、正常なCodex
+`ask` final outputはtranscriptに存在したが、Ccログには`pending-question` POSTが無く、
+Discordにはfail-loud本文だけが出た。Lictor mainには2026-08-03のactivation修正が存在する一方、
+実行入口が読む`dist/cli.js`、`dist/wrap.js`、`dist/transcript-tail.js`は2026-08-03 01:14 JSTの
+生成物で、修正sourceより古かった。
+
+sourceだけを修正してもgit管理外のroot distが更新されなければ、`bin/lictor.mjs`は古いruntimeを
+正常にimportしてしまう。そこで`SETUP-ROOT-BUILD-FRESHNESS`を追加し、source checkoutの入口で
+stale distを検出してbuildする。build不能時は古いruntimeへ黙ってフォールバックせずfail-fastする。
+
 ## Revisor review follow-up
 
 登録済みtest/typecheckは全件通過した。初回レビューでは自動生成された`ask-marker-relay`

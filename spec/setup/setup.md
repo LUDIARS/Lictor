@@ -19,6 +19,17 @@ npx lictor codex    # codex CLI をラップ
 ```
 エントリは `bin/lictor.mjs`（`dist/cli.js` を読む）。
 
+### SETUP-ROOT-BUILD-FRESHNESS: source checkout の dist 同期
+
+`bin/lictor.mjs` は `dist/cli.js` をimportする前に、root `src/` の最新mtimeと
+`dist/cli.js` を比較する。source checkoutでdistが無い、またはsourceの方が新しい場合は、
+local TypeScriptで `tsc -p tsconfig.json` を実行してから起動する。build後もdistが古い場合、
+またはTypeScriptが無い場合は、古いruntimeを黙って起動せず明示的に失敗する。
+
+公開済みのdist-only packageは`src/`を持たないため、`dist/cli.js`が存在すれば再buildしない。
+この境界により、mainのsource修正後にgit管理外のdistだけが古く残り、修正済みの
+ask-marker relayなどが実行時に巻き戻ることを防ぐ。
+
 ### SETUP-VENDORED-BUILD: vendored 依存の自動ビルド
 `@ludiars/vestigium` は `file:./lib/vestigium`（git submodule）依存で、npm は
 node_modules に symlink を張るだけでビルドしない。submodule を checkout した

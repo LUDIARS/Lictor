@@ -17,6 +17,7 @@
 | POST | `/v1/title/auto` | — | 手動オーバーライド解除（次 stat 周期で auto 再開） |
 | POST | `/v1/rename` | `{text}` | claude TUI stdin に `/rename <text>\r` 注入（実セッション非ラップ時 503） |
 | POST | `/v1/slash` | `{cmd, args?}` | 汎用 slash 注入 `/<cmd> <args>\r`。`cmd` 正規表現 `^[a-z][a-z0-9-]{0,40}$` |
+| POST | `/v1/runtime/model-effort` | `{model, effort}` | CcのGenius確認後の切替。Claudeは同一 PTY への切替を直列化して`/model`→`/effort`を送信。Codex TUIは`/model`がpickerのため正確な遠隔指定をせず409 |
 | POST | `/v1/keys` | `{data}` | 生キーストローク注入（C0 制御は `\t \n \r \b ESC` 以外除去、Ctrl-C はドロップ） |
 | POST | `/v1/answer` | `{choice, escape_first?}` | `AskUserQuestion` picker 回答（`choice` 1-based, 1–50。Down×(choice-1)+Enter） |
 | POST | `/v1/chat` | `{channel, text, author_label?, in_reply_to?, scope?}` | Concordia `/v1/chat` へ中継。`session_id` を権威付与 + 保持 `discord_channel_id` 解決 + `author_label` 自動補完（混線防止） |
@@ -37,7 +38,7 @@
 
 ## セキュリティ不変条件
 - 全エンドポイントは `127.0.0.1` バインド + ハンドラ先頭で loopback 検証。
-- TUI へ書き込む系（rename/slash/keys/answer）は注入前に必ずサニタイズ
+- TUI へ書き込む系（rename/slash/runtime model-effort/keys/answer）は注入前に必ずサニタイズ
   （C0/DEL 除去・先頭 `/` 除去で slash チェイン防止・長さ cap）。詳細は
   [`../feature/keystroke-injection.md`](../feature/keystroke-injection.md)。
 - Concordia 依存は best-effort（落ちても 503 で劣化、stack trace を出さない）。

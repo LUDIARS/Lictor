@@ -11,12 +11,14 @@ export interface ProviderRuntimeMetadata {
  * provider CLI remains authoritative for accepted identifiers and effort
  * levels. Empty values and values that are actually another option are
  * ignored. As with the CLI, a later nonempty occurrence wins.
+ *
+ * @implements SPEC-RUNTIME-MODEL-EFFORT
  */
 export function providerRuntimeMetadata(
   providerName: string,
   args: readonly string[],
 ): ProviderRuntimeMetadata {
-  if (providerName !== "claude") return {};
+  if (providerName !== "claude" && providerName !== "codex") return {};
 
   const metadata: ProviderRuntimeMetadata = {};
   for (let index = 0; index < args.length; index += 1) {
@@ -37,20 +39,50 @@ export function providerRuntimeMetadata(
       continue;
     }
 
-    const effort = optionValue(arg, "--effort");
-    if (effort !== null) {
-      if (effort !== "") metadata.effort = effort;
+    if (providerName === "claude") {
+      const effort = optionValue(arg, "--effort");
+      if (effort !== null) {
+        if (effort !== "") metadata.effort = effort;
+        continue;
+      }
+      if (arg === "--effort") {
+        const value = separateOptionValue(args[index + 1]);
+        if (value !== null) {
+          metadata.effort = value;
+          index += 1;
+        }
+      }
       continue;
     }
-    if (arg === "--effort") {
-      const value = separateOptionValue(args[index + 1]);
-      if (value !== null) {
-        metadata.effort = value;
+
+    const inlineConfig = optionValue(arg, "--config");
+    if (inlineConfig !== null) {
+      const effort = codexEffortConfig(inlineConfig);
+      if (effort) metadata.effort = effort;
+      continue;
+    }
+    if (arg === "-c" || arg === "--config") {
+      const value = args[index + 1];
+      if (value !== undefined && !value.startsWith("--")) {
+        const effort = codexEffortConfig(value);
+        if (effort) metadata.effort = effort;
         index += 1;
       }
     }
   }
   return metadata;
+}
+
+/** @implements SPEC-RUNTIME-MODEL-EFFORT */
+function codexEffortConfig(value: string): string | null {
+  const match = /^model_reasoning_effort\s*=\s*(.+)$/u.exec(value.trim());
+  if (!match) return null;
+  const raw = match[1].trim();
+  const unquoted = (
+    (raw.startsWith('"') && raw.endsWith('"'))
+    || (raw.startsWith("'") && raw.endsWith("'"))
+  ) ? raw.slice(1, -1) : raw;
+  return unquoted.trim() || null;
 }
 
 function optionValue(arg: string, option: string): string | null {

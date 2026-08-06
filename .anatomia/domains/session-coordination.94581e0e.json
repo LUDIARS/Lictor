@@ -1,6 +1,17 @@
 {
   "name": "session-coordination",
-  "description": "Per-session CLI and sidecar control paths that declare work to Concordia while keeping optional observability outside the control dependency chain.",
+  "description": "Per-session CLI and sidecar control paths that declare work to Concordia, apply confirmed provider settings, and keep optional observability outside the control dependency chain.",
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/(cli|task-relay|vestigium|sidecar|provider-runtime-metadata|runtime-model-effort)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)(bin/lictor|scripts/ensure-root-build)\\.mjs$"
+    },
+    {
+      "pathPattern": "(^|/)tests/(task-relay|vestigium-optional|provider-runtime-metadata|runtime-model-effort|root-build-freshness)\\.test\\.ts$"
+    }
+  ],
   "presetRules": [
     {
       "preset": "couplingCap",
@@ -25,12 +36,16 @@
   "mechanics": [
     "task-declaration",
     "sidecar-relay",
-    "optional-observability"
+    "optional-observability",
+    "runtime-model-effort-control",
+    "root-build-freshness"
   ],
   "specRefs": [
     "タスク宣言プロトコル",
-    "セットアップ — 観測 (Vestigium) は best-effort"
+    "セットアップ — 観測 (Vestigium) は best-effort",
+    "SPEC-RUNTIME-MODEL-EFFORT",
+    "SETUP-ROOT-BUILD-FRESHNESS"
   ],
-  "rationale": "Short-lived task commands belong to the session-control path and must not import the optional Vestigium build artifact. Long-running providers may initialize the adapter at their entry boundary without making observability a prerequisite for task declaration.",
-  "updatedAt": "2026-08-02T00:00:00.000Z"
+  "rationale": "Session coordination owns task declaration and application of already-confirmed provider runtime settings. Cc retains Genius judgment and confirmation UI. The executable boundary must refuse stale root build artifacts, while optional observability remains outside the control dependency chain.",
+  "updatedAt": "2026-08-06T00:00:00.000Z"
 }

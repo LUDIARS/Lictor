@@ -13,6 +13,7 @@ import { fsRead, fsList, fsGrep } from "./fs-rpc.js";
 import type { TranscriptReadResult } from "./transcript-tail.js";
 import { extractPendingQuestions, postPendingQuestion } from "./ask-question-relay.js";
 import { parseShutdownRequest, type SessionShutdown } from "./session-shutdown.js";
+import { applyRuntimeModelEffort } from "./runtime-model-effort.js";
 
 export interface TitleState {
   manualOverride: string | null;
@@ -262,6 +263,28 @@ async function handle(
     }
     ctx.ptyWriter(line);
     writeJson(res, 200, { ok: true, sent: line.trimEnd() });
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/runtime/model-effort") {
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { model?: unknown; effort?: unknown };
+    if (typeof payload.model !== "string" || typeof payload.effort !== "string") {
+      return writeJson(res, 400, { error: "body.model and body.effort (string) are required" });
+    }
+    const result = await applyRuntimeModelEffort({
+      provider: ctx.meta.provider,
+      request: { model: payload.model, effort: payload.effort },
+      write: ctx.ptyWriter,
+    });
+    if (!result.ok) {
+      return writeJson(res, result.status, {
+        error: result.error,
+        ...(result.message ? { message: result.message } : {}),
+      });
+    }
+    writeJson(res, result.status, { ok: true, message: result.message });
     return;
   }
 

@@ -28,6 +28,16 @@
 
 const CLI = "../dist/cli.js";
 
+// A source checkout can move forward while ignored dist/ remains from an older
+// commit. Importing that stale CLI silently resurrects fixed relay bugs, so make
+// the build artifact current before loading any long-running module.
+try {
+  const { ensureRootBuildFresh } = await import("../scripts/ensure-root-build.mjs");
+  ensureRootBuildFresh();
+} catch (error) {
+  fail(error);
+}
+
 try {
   await import(CLI);
 } catch (error) {

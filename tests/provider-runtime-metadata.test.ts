@@ -62,7 +62,7 @@ test("providerRuntimeMetadata ignores options after the argument delimiter", () 
   );
 });
 
-test("providerRuntimeMetadata does not infer runtime metadata for other providers", () => {
+test("providerRuntimeMetadata reads Codex model values", () => {
   assert.deepEqual(
     providerRuntimeMetadata("codex", [
       "--model",
@@ -70,6 +70,30 @@ test("providerRuntimeMetadata does not infer runtime metadata for other provider
       "--effort",
       "xhigh",
     ]),
+    {
+      model: "gpt-5.6-sol",
+    },
+  );
+});
+
+test("providerRuntimeMetadata reads Codex reasoning effort from config", () => {
+  assert.deepEqual(
+    providerRuntimeMetadata("codex", [
+      "--model=gpt-5.6-sol",
+      "-c",
+      'model_reasoning_effort = "xhigh"',
+      "--config=model_reasoning_effort=high",
+    ]),
+    {
+      model: "gpt-5.6-sol",
+      effort: "high",
+    },
+  );
+});
+
+test("providerRuntimeMetadata ignores runtime metadata for other providers", () => {
+  assert.deepEqual(
+    providerRuntimeMetadata("other", ["--model", "untrusted", "--effort=high"]),
     {},
   );
 });

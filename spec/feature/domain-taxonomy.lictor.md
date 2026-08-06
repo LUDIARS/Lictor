@@ -6,17 +6,26 @@ it does not move code or add architecture gates.
 
 ## session-coordination
 
-Per-session CLI and sidecar control paths that declare work to Concordia while
-keeping optional observability outside the control dependency chain.
+Per-session CLI and sidecar control paths that declare work to Concordia, apply
+confirmed provider settings, and keep optional observability outside the control
+dependency chain.
 
 - **task-declaration-cli**: short-lived `lictor cli task get/set` dispatch and the
   sidecar task relay (`src/cli.ts`, `src/task-relay.ts`).
 - **optional-observability-boundary**: best-effort Vestigium loading for long-running
   providers and `cli local-agent` only (`src/vestigium.ts`).
+- **runtime-model-effort-control**: validate and apply an already-confirmed model/effort
+  pair to the wrapped provider, serialize PTY writes, and report explicit runtime
+  metadata (`src/runtime-model-effort.ts`, `src/provider-runtime-metadata.ts`,
+  `src/sidecar.ts`). Genius judgment and confirmation UI remain Cc responsibilities.
+- **root-build-freshness**: prevent the source checkout from starting an older ignored
+  `dist/` bundle (`bin/lictor.mjs`, `scripts/ensure-root-build.mjs`).
 
 The command contract and dependency boundary are specified in
 [`task-protocol.md`](./task-protocol.md). Vestigium degradation behavior is specified
-in [`../setup/setup.md`](../setup/setup.md).
+in [`../setup/setup.md`](../setup/setup.md). Runtime provider application is specified
+in [`runtime-model-effort.md`](./runtime-model-effort.md); root build freshness is
+specified by `SETUP-ROOT-BUILD-FRESHNESS`.
 
 ## ask-marker-relay
 
