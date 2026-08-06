@@ -92,6 +92,15 @@ const TRANSCRIPT_RESOLVE_GRACE_MS = ((): number => {
   return Number.isFinite(v) && v >= 0 ? v : 20000;
 })();
 
+// Codex は同一ターンの assistant 出力を event_msg.agent_message と
+// response_item.message(role=assistant) の 2 経路で書くことがあり、 どちらも
+// lineToFrame で text frame 化されるため seq が別々に振られて重複配信される
+// (2026-07-28 実害: 直近 2000 frame 中 73/146 が重複、 連続 seq・同一 timestamp・
+// 同一 phase・同一本文)。 二重経路は同一ターン内で近接して現れるため、 直近 N 件の
+// dedupe key だけ覚えておけば足りる。 小さく上限を切って長時間セッションでも
+// 無制限に育たないようにする (spec/plan/problem_logs/2026-07-28-codex-transcript-double-relay.md)。
+const CODEX_ASSISTANT_DEDUPE_WINDOW = 8;
+
 // 別セッション誤投稿 (= 2 wrapper が同じ jsonl を tail) の原因特定用ログ.
 // 500ms discovery loop 内でも出るため既定 OFF。必要な調査時だけ既存フラグで明示的に有効化する。
 export function isTranscriptDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -341,6 +350,9 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   let seq = 0;
   let pending = "";
   let stopped = false;
+  // Codex response_item/event_msg 二重経路の dedupe key (直近 CODEX_ASSISTANT_DEDUPE_WINDOW
+  // 件のみ保持。 Set の挿入順 = 古い順なので先頭を捨てれば FIFO で回る)。
+  const recentAssistantDedupeKeys = new Set<string>();
   // hook 権威が設定済なのに猶予内に transcript を束縛できなかったとき、 1 度だけ
   // fail-loud 警告を出すためのフラグ (沈黙死禁止)。
   let relayUnresolvedWarned = false;
@@ -807,6 +819,22 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       }
       const frame = lineToFrame(line);
       if (!frame) continue;
+      // Codex は同一ターンの assistant 出力を response_item / event_msg の 2 経路で
+      // 書くことがある (二重に text frame 化される)。 seq を振る前にここで弾く。
+      // extractCodexAssistantDedupeKey は timestamp を含む key を返すため、 別ターンの
+      // 偶然の同文 (timestamp が異なる) は誤って落とさない。 判定不能 (claude / 非
+      // assistant-text / timestamp 欠落) は null を返し fail-open (従来どおり送る)。
+      if (frame.kind === "text" && (frame.payload as { role?: unknown }).role === "assistant") {
+        const dedupeKey = extractCodexAssistantDedupeKey(line);
+        if (dedupeKey !== null) {
+          if (recentAssistantDedupeKeys.has(dedupeKey)) continue; // 同一ターンの二重経路 — 破棄
+          recentAssistantDedupeKeys.add(dedupeKey);
+          if (recentAssistantDedupeKeys.size > CODEX_ASSISTANT_DEDUPE_WINDOW) {
+            const oldest = recentAssistantDedupeKeys.values().next().value;
+            if (oldest !== undefined) recentAssistantDedupeKeys.delete(oldest);
+          }
+        }
+      }
       // user ロールのメッセージが出た = 端末入力 or 注入テキストが submit されて
       // LLM ターンが始まった汎用シグナル。 submit-watchdog の武装解除に使う
       // (askMarkerEnabled に依らず常時発火)。
@@ -1176,9 +1204,12 @@ export function lineToFrame(line: string): Frame | null {
     // task_started, tool_call, etc. は raw 扱い (将来必要なら拡張).
   }
 
-  // response_item は SDK レベルの 生 message. event_msg と二重に流すと
-  // Web UI で重複するが、 system/developer メッセージ等は event_msg に乗らない
-  // ので、 重複は許容して両方流す方が情報量が多い.
+  // response_item は SDK レベルの 生 message. event_msg と同じ assistant 出力を
+  // 表現することがある (system/developer メッセージ等 event_msg に乗らない種別も
+  // あるため両方の path を維持する)。 完全一致の重複は startTranscriptTail の poll
+  // ループが extractCodexAssistantDedupeKey で seq 採番前に弾く (2026-07-28 実害:
+  // 直近 2000 frame 中 73/146 が重複)。 lineToFrame 自体は 1 行 1 frame の純関数の
+  // ままにし、 dedupe 状態は呼び出し側 (tail の poll ループ) に閉じ込める。
   if (type === "response_item" && msg.payload && typeof msg.payload === "object") {
     const p: any = msg.payload;
     const pType = typeof p.type === "string" ? p.type : "";
@@ -1249,6 +1280,46 @@ function extractCodexMessageText(content: unknown): string | null {
     }
   }
   return out.length > 0 ? out.join("\n") : null;
+}
+
+/**
+ * Codex の `event_msg.agent_message` / `response_item.message(role=assistant)` が
+ * 同一ターンの assistant 出力を表しているとき、 同じ dedupe key を返す純関数
+ * (raw JSONL 行 → `timestamp|phase|text`)。 どちらの経路も生 JSONL の `timestamp`
+ * フィールドを継承するため、 同一ターンなら timestamp が一致する。 これを key に
+ * 含めることで、 「別ターンでたまたま同じ発言を繰り返す」 (timestamp が異なる) ケースを
+ * 誤って重複扱いしない (2026-07-28 実害 spec/plan/problem_logs/2026-07-28-codex-transcript-double-relay.md
+ * の fix requirement: distinct turn の同文は保持する)。
+ *
+ * 判定不能 (JSON parse 失敗 / timestamp 欠落 / assistant text 以外) は null を返す
+ * (fail-open — 呼び出し側は dedupe せず従来どおり送る)。
+ */
+export function extractCodexAssistantDedupeKey(line: string): string | null {
+  let msg: any;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!msg || typeof msg !== "object") return null;
+  const timestamp = typeof msg.timestamp === "string" && msg.timestamp ? msg.timestamp : null;
+  if (!timestamp) return null;
+  const type = typeof msg.type === "string" ? msg.type : "";
+  const payload = msg.payload;
+  if (!payload || typeof payload !== "object") return null;
+  const p: any = payload;
+
+  if (type === "event_msg" && p.type === "agent_message" && typeof p.message === "string") {
+    const phase = typeof p.phase === "string" ? p.phase : "";
+    return `${timestamp}|${phase}|${p.message}`;
+  }
+  if (type === "response_item" && p.type === "message" && normalizeCodexRole(p.role) === "assistant") {
+    const text = extractCodexMessageText(p.content);
+    if (!text) return null;
+    const phase = typeof p.phase === "string" ? p.phase : "";
+    return `${timestamp}|${phase}|${text}`;
+  }
+  return null;
 }
 
 function previewJson(v: unknown): string {

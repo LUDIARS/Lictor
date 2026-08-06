@@ -13,6 +13,7 @@ import {
   startTranscriptTail,
   decideCodexInitialBind,
   isTranscriptDebugEnabled,
+  extractCodexAssistantDedupeKey,
 } from "../src/transcript-tail.js";
 import { PROVIDERS, makeLocalLlmProvider } from "../src/provider.js";
 import { claudeTranscriptStatePath } from "../src/active-repos.js";
@@ -267,6 +268,61 @@ test("lineToFrame: codex multi-part content joins with newline", () => {
     },
   }));
   assert.deepEqual(f, { kind: "text", payload: { role: "user", text: "first\nsecond" } });
+});
+
+// ─── extractCodexAssistantDedupeKey (Memoria #650 / 2026-07-28 二重中継の dedupe key) ──
+
+test("extractCodexAssistantDedupeKey: event_msg.agent_message と response_item.message(assistant) の同一ターンは同じ key になる", () => {
+  const ts = "2026-07-28T09:00:00.000Z";
+  const eventMsgKey = extractCodexAssistantDedupeKey(JSON.stringify({
+    timestamp: ts,
+    type: "event_msg",
+    payload: { type: "agent_message", message: "了解しました", phase: "commentary" },
+  }));
+  const responseItemKey = extractCodexAssistantDedupeKey(JSON.stringify({
+    timestamp: ts,
+    type: "response_item",
+    payload: {
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "了解しました" }],
+      phase: "commentary",
+    },
+  }));
+  assert.ok(eventMsgKey);
+  assert.equal(eventMsgKey, responseItemKey);
+});
+
+test("extractCodexAssistantDedupeKey: timestamp が異なれば別ターンとして別 key になる", () => {
+  const a = extractCodexAssistantDedupeKey(JSON.stringify({
+    timestamp: "2026-07-28T09:00:00.000Z",
+    type: "event_msg",
+    payload: { type: "agent_message", message: "了解しました" },
+  }));
+  const b = extractCodexAssistantDedupeKey(JSON.stringify({
+    timestamp: "2026-07-28T09:05:00.000Z",
+    type: "event_msg",
+    payload: { type: "agent_message", message: "了解しました" },
+  }));
+  assert.ok(a && b);
+  assert.notEqual(a, b);
+});
+
+test("extractCodexAssistantDedupeKey: timestamp 欠落 / user role / 非 codex 行は null (fail-open)", () => {
+  assert.equal(extractCodexAssistantDedupeKey(JSON.stringify({
+    type: "event_msg",
+    payload: { type: "agent_message", message: "no timestamp" },
+  })), null);
+  assert.equal(extractCodexAssistantDedupeKey(JSON.stringify({
+    timestamp: "2026-07-28T09:00:00.000Z",
+    type: "event_msg",
+    payload: { type: "user_message", message: "user turn" },
+  })), null);
+  assert.equal(extractCodexAssistantDedupeKey(JSON.stringify({
+    type: "assistant",
+    message: { role: "assistant", content: [{ type: "text", text: "claude message" }] },
+  })), null);
+  assert.equal(extractCodexAssistantDedupeKey("not json"), null);
 });
 
 // ─── tryClaimJsonl: 並走 wrapper の jsonl pick 排他 ───────────────────
@@ -1462,6 +1518,181 @@ test("startTranscriptTail(codex): expected App Server thread id exact-binds inst
       assert.equal(tail.getSessionUuid(), "thread-expected");
       assert.equal(existsSync(`${expected}.lictor-claim`), true);
       assert.equal(existsSync(`${decoy}.lictor-claim`), false);
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ─── guardian subagent rollout の誤束縛 (Memoria #660, 2026-07-30) ──────────
+// 親対話と guardian subagent が session_id / originator / cwd を全部共有し、
+// guardian rollout が親の 1 秒後に作られる実物形状 (2026-07-30 実害: 対話 codex
+// 2 セッションが guardian に誤束縛され Discord 返信が消えた)。 codexTranscriptMetaAccepts
+// の thread_source/source.subagent/parent_thread_id 除外 (provider.ts) が候補選定の
+// 時点で guardian を弾くことを、 startTranscriptTail 経由の統合テストで固定する
+// (tests/transcript-meta-filter.test.ts は codexTranscriptMetaAccepts 単体のみを見る)。
+
+test("startTranscriptTail(codex): guardian subagent rollout (同一 session_id/originator) を束縛せず親の assistant 出力だけを relay する (Memoria #660)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-codex-guardian-"));
+  try {
+    const provider = { ...PROVIDERS.codex, transcriptDir: () => dir };
+    const frames: { kind: string; payload: any }[] = [];
+    const sharedSessionId = "parent-thread-1";
+    const originator = "lictor:lictor-guardian-test";
+    const now = Date.now() / 1000;
+
+    const parent = writeCodexRolloutWithPayload(
+      dir,
+      "rollout-2026-07-30T08-11-27-parent.jsonl",
+      { session_id: sharedSessionId, cwd: dir, originator, thread_source: "user" },
+      [
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "parent reply to user" }],
+          },
+        },
+      ],
+    );
+    utimesSync(parent, now, now);
+
+    const guardian = writeCodexRolloutWithPayload(
+      dir,
+      "rollout-2026-07-30T08-11-28-guardian.jsonl",
+      {
+        session_id: sharedSessionId,
+        id: "guardian-child-1",
+        parent_thread_id: sharedSessionId,
+        cwd: dir,
+        originator,
+        thread_source: "subagent",
+        source: { subagent: { other: "guardian" } },
+      },
+      [
+        {
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "{\"approved\":true}" }],
+          },
+        },
+      ],
+    );
+    utimesSync(guardian, now + 1, now + 1); // 親の 1 秒後に作られる実物形状
+
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-guardian-test",
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+      transcriptSink: {
+        post: async (kind, payload) => {
+          frames.push({ kind, payload });
+          return { seq: frames.length, persisted: true };
+        },
+        flush: async () => undefined,
+      },
+    });
+    try {
+      await sleep(900);
+      assert.equal(tail.getTranscriptPath(), parent, "guardian ではなく親 rollout を束縛する");
+      const assistantTexts = frames
+        .filter((f) => f.kind === "text" && f.payload?.role === "assistant")
+        .map((f) => f.payload.text);
+      assert.deepEqual(assistantTexts, ["parent reply to user"], "guardian の承認 JSON は relay されない (Discord 返信不達の原因を再現しない)");
+      assert.equal(existsSync(`${guardian}.lictor-claim`), false, "guardian rollout は claim すら取らない");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ─── Codex transcript 二重中継 (Memoria #650, 2026-07-28) ────────────────────
+// response_item と event_msg が同一ターンの同一 assistant 出力を表すとき、 relay
+// (transcriptSink.post、 seq 採番あり) は 1 回だけ呼ばれるべき。 直近 2000 frame 中
+// 73/146 が重複した実害の再現フィクスチャ (同一 timestamp・同一 phase・同一本文).
+
+test("startTranscriptTail(codex): response_item と event_msg が同一ターンの同一 assistant 出力なら relay は 1 回だけ (Memoria #650)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-codex-dedupe-"));
+  try {
+    const provider = { ...PROVIDERS.codex, transcriptDir: () => dir };
+    const frames: { kind: string; payload: any }[] = [];
+    const ts = "2026-07-28T09:00:00.000Z";
+    writeCodexRollout(dir, "rollout-2026-07-28-dup.jsonl", "S-dup", dir, [
+      { timestamp: ts, type: "event_msg", payload: { type: "agent_message", message: "duplicate reply", phase: "commentary" } },
+      {
+        timestamp: ts,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "duplicate reply" }],
+          phase: "commentary",
+        },
+      },
+    ]);
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-codex-dedupe",
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+      transcriptSink: {
+        post: async (kind, payload) => {
+          frames.push({ kind, payload });
+          return { seq: frames.length, persisted: true };
+        },
+        flush: async () => undefined,
+      },
+    });
+    try {
+      await sleep(900);
+      const dup = frames.filter(
+        (f) => f.kind === "text" && f.payload?.role === "assistant" && f.payload?.text === "duplicate reply",
+      );
+      assert.equal(dup.length, 1, "response_item / event_msg の同一ターン重複は relay 1 回に収束する");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("startTranscriptTail(codex): timestamp が異なる別ターンの同文 assistant 出力は dedupe で誤って落とさない", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-codex-distinct-turns-"));
+  try {
+    const provider = { ...PROVIDERS.codex, transcriptDir: () => dir };
+    const frames: { kind: string; payload: any }[] = [];
+    writeCodexRollout(dir, "rollout-2026-07-28-repeat.jsonl", "S-repeat", dir, [
+      { timestamp: "2026-07-28T09:00:00.000Z", type: "event_msg", payload: { type: "agent_message", message: "了解しました" } },
+      { timestamp: "2026-07-28T09:05:00.000Z", type: "event_msg", payload: { type: "agent_message", message: "了解しました" } },
+    ]);
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-codex-distinct-turns",
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+      transcriptSink: {
+        post: async (kind, payload) => {
+          frames.push({ kind, payload });
+          return { seq: frames.length, persisted: true };
+        },
+        flush: async () => undefined,
+      },
+    });
+    try {
+      await sleep(900);
+      const repeats = frames.filter(
+        (f) => f.kind === "text" && f.payload?.role === "assistant" && f.payload?.text === "了解しました",
+      );
+      assert.equal(repeats.length, 2, "timestamp が異なる別ターンの同文は誤って重複除去しない");
     } finally {
       tail.stop();
     }
