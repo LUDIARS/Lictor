@@ -84,8 +84,11 @@ test("seedTaskProtocolSkill writes a usable instruction skill", () => {
   seedTaskProtocolSkill(injector);
   const md = readFileSync(join(injector.skillsDir, "lictor-task-protocol", "SKILL.md"), "utf8");
   assert.match(md, /^---\nname: lictor-task-protocol\n/);
+  assert.match(md, /lictor cli implement begin/);
+  assert.match(md, /lictor cli implement service/);
+  assert.match(md, /lictor cli implement review/);
   assert.match(md, /lictor cli task set/);
-  assert.match(md, /60 seconds/);
+  assert.match(md, /Do not enable this workflow for ordinary conversation/);
   injector.cleanup();
   rmSync(root, { recursive: true, force: true });
 });

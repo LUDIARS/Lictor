@@ -51,6 +51,14 @@ Usage:
                                        (PATCH session + emit event + refresh
                                        lictor-current-task skill). Branch is
                                        auto-detected if omitted.
+  lictor cli implement begin [--cwd <path>] --task <text>
+                                       Use the Cc implementation fast path.
+                                       Repo, origin, branch, and
+                                       project code are resolved automatically.
+  lictor cli implement service <code> <start|stop|restart> [--note <text>]
+                                       Run Excubitor control with Cc testing
+                                       claim/release in one tool request.
+  lictor cli implement review          Submit or retry the Revisor local PR.
   lictor cli state                     Print live notify/conflict/task state.
 
   lictor cli slash <cmd> [args...]     Inject \`/<cmd> <args>CR\` into the wrapped

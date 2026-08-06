@@ -30,6 +30,9 @@
 | POST | `/v1/lictor/task` | `{branch?, desc?}` | Concordia session を PATCH + event 発火 + `lictor-current-task` skill 更新 |
 | POST | `/v1/shutdown` | `{reason?: string, archive?: boolean}` | Cc unregister → CLI 即時終了 → transcript flush（最大 5 秒）→ archive → sidecar 終了を開始。重複時は `{ok:true, already:true}` |
 | GET | `/v1/lictor/state` | — | `{notify, conflict, task}` スナップショット |
+| POST | `/v1/implementation-tools/bind` | `{cwd, task}` | repo/origin/branch/project codeをCcで自動解決し既存session bindingを更新 |
+| POST | `/v1/implementation-tools/service` | `{service_code, action, note?}` | testing claim → Excubitor control → release を一括実行 |
+| POST | `/v1/implementation-tools/review` | — | Revisor local PR を初回提出または再審査 |
 | GET | `/v1/transcript` | `?limit=N&raw=0\|1` | ラップ中 CLI の transcript（Claude/Codex JSONL）。`limit` 1–500（既定 50）。`raw=1` でパース済オブジェクト、既定は slim frame。`{path, available, total_lines, returned, frames\|lines}`。transcript-tail 非活性時 503 |
 
 ## セキュリティ不変条件

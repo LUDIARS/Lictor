@@ -455,6 +455,60 @@ async function handle(
     return;
   }
 
+  if (method === "POST" && url === "/v1/implementation-tools/bind") {
+    if (!ctx.concordia || !ctx.sessionId) {
+      return writeJson(res, 503, { error: "Concordia not registered for this session" });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { cwd?: unknown; task?: unknown };
+    if (
+      typeof payload.cwd !== "string" ||
+      payload.cwd.length === 0 ||
+      typeof payload.task !== "string" ||
+      payload.task.trim().length === 0
+    ) {
+      return writeJson(res, 400, { error: "non-empty cwd and task (string) required" });
+    }
+    writeJson(res, 200, await ctx.concordia.bindImplementation(ctx.sessionId, {
+      cwd: payload.cwd,
+      task: payload.task,
+    }));
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/implementation-tools/service") {
+    if (!ctx.concordia || !ctx.sessionId) {
+      return writeJson(res, 503, { error: "Concordia not registered for this session" });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { service_code?: unknown; action?: unknown; note?: unknown };
+    if (typeof payload.service_code !== "string" || payload.service_code.trim().length === 0) {
+      return writeJson(res, 400, { error: "non-empty service_code (string) required" });
+    }
+    if (payload.action !== "start" && payload.action !== "stop" && payload.action !== "restart") {
+      return writeJson(res, 400, { error: "action must be start, stop, or restart" });
+    }
+    if (payload.note !== undefined && typeof payload.note !== "string") {
+      return writeJson(res, 400, { error: "note must be a string when provided" });
+    }
+    writeJson(res, 200, await ctx.concordia.controlImplementationService(ctx.sessionId, {
+      service_code: payload.service_code,
+      action: payload.action,
+      ...(typeof payload.note === "string" ? { note: payload.note } : {}),
+    }));
+    return;
+  }
+
+  if (method === "POST" && url === "/v1/implementation-tools/review") {
+    if (!ctx.concordia || !ctx.sessionId) {
+      return writeJson(res, 503, { error: "Concordia not registered for this session" });
+    }
+    writeJson(res, 200, await ctx.concordia.submitImplementationReview(ctx.sessionId));
+    return;
+  }
+
   // Pull the wrapped agent's recent transcript. transcript-tail normally only
   // *pushes* frames to Concordia; this lets a local caller (e.g. a delegation
   // monitor) ask "what is this session doing right now?" without parsing the

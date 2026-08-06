@@ -89,31 +89,31 @@ export async function relayTask(opts: {
  */
 export function seedTaskProtocolSkill(injector: SkillInjector): void {
   const body = `\
-When the user instructs you to work on something and you've decided on the
-implementation branch, declare it to Lictor so other LUDIARS sessions and the
-Concordia dashboard can see what this session is doing.
+When the user asks for an implementation, use the Cc-backed implementation
+fast path. It resolves the repository, origin, checkout branch, and project code
+from cwd, so do not search PROJECT-CODES.md or assemble a manual claim first.
 
 \`\`\`sh
-# minimal — only declare the task description (branch is auto-detected from HEAD)
-lictor cli task set --desc "Cernere auth bug fix (#142)"
-
-# explicit branch + description
-lictor cli task set --branch feat/cernere-auth-fix --desc "Cernere auth bug fix (#142)"
+lictor cli implement begin --task "Cernere auth bug fix (#142)"
 \`\`\`
 
-If you skip this, Lictor will catch the branch change automatically within
-60 seconds (via \`git rev-parse\` polling), but the **task description**
-slot in Concordia will stay empty — the dashboard will show "feat/x" without
-context. One \`lictor cli task set --desc "..."\` per task fixes that.
+Use \`lictor cli implement service <code> <start|stop|restart>\` for a
+service operation and \`lictor cli implement review\` after committing.
+Cc batches testing claim/release and Revisor submit/retry over their existing state
+for 60 seconds.
 
-Re-declare whenever you switch task or branch.
+Do not enable this workflow for ordinary conversation, investigation,
+consultation, or judgment sessions. Those sessions keep their normal freedom.
+
+The lower-level \`lictor cli task set\` remains available for non-implementation
+coordination and compatibility.
 `;
   try {
     injector.writeSkill(
       "lictor-task-protocol",
       renderSkillMd({
         name: "lictor-task-protocol",
-        description: "How to declare your current task / branch to Lictor (call this when you start work)",
+        description: "Use implementation fast paths without manual project-code or endpoint lookup",
         body,
       }),
     );

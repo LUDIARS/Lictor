@@ -120,6 +120,8 @@ lictor cli session                    # Concordia session id + persona JSON
 lictor cli chat team "デプロイ前確認" # author_label auto-filled from persona
 lictor cli event branch.created '{"branch":"feat/x"}'
 lictor cli conflicts                  # other sessions on the same repo
+lictor cli implement begin --task "Fix review workflow"
+lictor cli implement review           # submit or retry through Cc/Revisor
 ```
 
 ## Sidecar API (loopback only)
@@ -146,6 +148,9 @@ lictor cli conflicts                  # other sessions on the same repo
 | GET    | `/v1/lictor/task`          | —                                      | Current task state `{branch, desc, updatedAt}` |
 | POST   | `/v1/lictor/task`          | `{branch?, desc?}`                     | PATCH Concordia session + emit event + refresh `lictor-current-task` skill |
 | GET    | `/v1/lictor/state`         | —                                      | `{notify, conflict, task}` snapshot for dashboards |
+| POST   | `/v1/implementation-tools/bind` | `{cwd, task}`                       | Resolve repo/origin/branch/project code and update existing Cc session binding in one request |
+| POST   | `/v1/implementation-tools/service` | `{service_code, action, note?}`  | Run Cc testing claim → Excubitor control → release in one request |
+| POST   | `/v1/implementation-tools/review` | —                                  | Submit or retry this session's Revisor local PR |
 | GET    | `/v1/transcript`           | `?limit=N&raw=0\|1`                     | Read the wrapped agent's recent transcript (Claude / Codex JSONL). `limit` 1–500 (default 50). `raw=1` returns parsed JSONL objects, else slim `lineToFrame` frames. Returns `{path, available, total_lines, returned, frames\|lines}`. 503 when transcript-tail is inactive (no Concordia / no pty). |
 | POST   | `/v1/repin`                | —                                      | Re-pin the transcript relay **without `/clear`**: releases the current (dead/rotated) JSONL claim and re-discovers the live transcript via claim-guarded mtime. Recovers a stalled relay (e.g. after Concordia restarts severed the binding). Returns `{ok, path}` (200 on rebind, 409 if no fresh transcript found). 503 when transcript-tail is inactive. Called by Concordia's re-pin Reaction-Workflow or an operator. |
 | POST   | `/v1/internal/force-exit`  | `{ "immediate"?: bool }`               | Terminate the wrapped AI process. Called by Concordia after session DELETE. **Default is graceful**: waits until the transcript has been idle (`LICTOR_SESSION_END_IDLE_KILL_MS`, default 5 min) so `session-end`'s log save isn't truncated mid-write, with a hard cap (`LICTOR_SESSION_END_MAX_WAIT_MS`, default 30 min). `{"immediate":true}` kills now (SIGTERM). 503 only if sidecar is not wrapping a pty (e.g. smoke harness). |
@@ -316,6 +321,10 @@ reacting to Concordia state and relaying changes back automatically:
 - **Task declaration** — `lictor cli task set --branch <b> --desc <text>`
   for explicit task description (auto branch detection covers the rest).
   Seeded `lictor-task-protocol` skill tells the wrapped claude to call it.
+- **Implementation fast paths** — `lictor cli implement begin --task <text>`
+  batches project-code lookup and git binding; service and review commands batch
+  their existing Cc/Ex/Rv operations. No session-level workflow state is added,
+  so one session may handle multiple implementations.
 - **Session-end report** — `DELETE /v1/sessions/<id>`'s `report` field is
   now printed to stderr on exit.
 

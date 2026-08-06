@@ -57,6 +57,9 @@ export async function runClient(args: string[]): Promise<void> {
     case "task":
       await cmdTask(port, rest);
       return;
+    case "implement":
+      await cmdImplement(port, rest);
+      return;
     case "state":
       process.stdout.write((await getText(port, "/v1/lictor/state")) + "\n");
       return;
@@ -95,10 +98,56 @@ export async function runClient(args: string[]): Promise<void> {
     default:
       process.stderr.write(
         `lictor cli: unknown subcommand '${sub ?? "(none)"}'.\n` +
-          `Available: title, title-auto, rename, meta, health, session, chat, event, conflicts, skill, task, state, version.\n`,
+          `Available: title, title-auto, rename, meta, health, session, chat, event, conflicts, skill, task, implement, state, version.\n`,
       );
       process.exit(2);
   }
+}
+
+async function cmdImplement(port: string, rest: string[]): Promise<void> {
+  const [op, ...more] = rest;
+  if (op === "begin") {
+    let cwd = process.cwd();
+    let task = "";
+    for (let i = 0; i < more.length; i++) {
+      if (more[i] === "--cwd" && more[i + 1]) cwd = more[++i];
+      else if (more[i] === "--task" && more[i + 1]) task = more[++i];
+      else return usage("lictor cli implement begin [--cwd <path>] --task <text>");
+    }
+    if (!task) return usage("lictor cli implement begin [--cwd <path>] --task <text>");
+    process.stdout.write((await postJsonText(port, "/v1/implementation-tools/bind", { cwd, task })) + "\n");
+    return;
+  }
+  if (op === "service") {
+    const serviceCode = more[0];
+    const action = more[1];
+    if (!serviceCode || (action !== "start" && action !== "stop" && action !== "restart")) {
+      return usage("lictor cli implement service <code> <start|stop|restart> [--note <text>]");
+    }
+    let note: string | undefined;
+    if (more.length > 2) {
+      if (more[2] !== "--note" || !more[3] || more.length > 4) {
+        return usage("lictor cli implement service <code> <start|stop|restart> [--note <text>]");
+      }
+      note = more[3];
+    }
+    process.stdout.write((await postJsonText(port, "/v1/implementation-tools/service", {
+      service_code: serviceCode,
+      action,
+      ...(note ? { note } : {}),
+    })) + "\n");
+    return;
+  }
+  if (op === "review" && more.length === 0) {
+    process.stdout.write((await postJsonText(port, "/v1/implementation-tools/review", {})) + "\n");
+    return;
+  }
+  usage("lictor cli implement <begin|service|review>");
+}
+
+function usage(message: string): void {
+  process.stderr.write(`usage: ${message}\n`);
+  process.exitCode = 2;
 }
 
 async function cmdVersion(port: string | undefined): Promise<void> {

@@ -125,6 +125,30 @@ export class ConcordiaClient {
     return this.fetchJson("POST", "/v1/inquiry", payload);
   }
 
+  async bindImplementation(
+    id: string,
+    payload: { cwd: string; task: string },
+  ): Promise<unknown> {
+    return this.fetchJson("POST", "/v1/implementation-tools/bind", {
+      session_id: id,
+      ...payload,
+    });
+  }
+
+  async controlImplementationService(
+    id: string,
+    payload: { service_code: string; action: "start" | "stop" | "restart"; note?: string },
+  ): Promise<unknown> {
+    return this.fetchJson("POST", "/v1/implementation-tools/service", {
+      session_id: id,
+      ...payload,
+    });
+  }
+
+  async submitImplementationReview(id: string): Promise<unknown> {
+    return this.fetchJson("POST", "/v1/implementation-tools/review", { session_id: id });
+  }
+
   /**
    * Notify Concordia that a PreToolUse hook is blocked waiting for a
    * decision. Concordia broadcasts a session-targeted
