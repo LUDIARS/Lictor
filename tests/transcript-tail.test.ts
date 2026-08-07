@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   lineToFrame,
+  lineToFrames,
   tryClaimJsonl,
   refreshClaim,
   readRecentFromFile,
@@ -17,6 +18,7 @@ import {
 } from "../src/transcript-tail.js";
 import { PROVIDERS, makeLocalLlmProvider } from "../src/provider.js";
 import { claudeTranscriptStatePath } from "../src/active-repos.js";
+import { OrderedTranscriptSink } from "../src/transcript-sink.js";
 
 // @implements SPEC-ASK-MARKER-RELAY-CONTRACT
 
@@ -121,6 +123,47 @@ test("lineToFrame: thinking → thinking frame (preview capped at 400)", () => {
   assert.equal(payload.preview.length, 400);
 });
 
+test("lineToFrames: one Claude message preserves thinking followed by assistant text", () => {
+  const frames = lineToFrames(JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        { type: "thinking", thinking: "considering the request" },
+        { type: "text", text: "implemented" },
+      ],
+    },
+  }));
+
+  assert.equal(frames.length, 2);
+  assert.deepEqual(frames.map((frame) => frame.kind), ["thinking", "text"]);
+  assert.equal((frames[1].payload as { text: string }).text, "implemented");
+});
+
+test("lineToFrames: one Claude message preserves text followed by Task tool_use", () => {
+  const frames = lineToFrames(JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        { type: "text", text: "delegating this" },
+        { type: "tool_use", id: "toolu_task1", name: "Task", input: { subagent_type: "general", description: "inspect tests", prompt: "Read the relevant tests first." } },
+      ],
+    },
+  }));
+
+  assert.equal(frames.length, 2);
+  assert.deepEqual(frames.map((frame) => frame.kind), ["text", "tool-use"]);
+  const payload = frames[1].payload as {
+    tool_use_id: string;
+    task: { subagent_type: string; description: string; prompt_head: string };
+  };
+  assert.equal(payload.tool_use_id, "toolu_task1");
+  assert.deepEqual(payload.task, {
+    subagent_type: "general",
+    description: "inspect tests",
+    prompt_head: "Read the relevant tests first.",
+  });
+});
+
 test("lineToFrame: summary → summary frame", () => {
   const f = lineToFrame(JSON.stringify({ type: "summary", summary: "a quick recap" }));
   assert.deepEqual(f, { kind: "summary", payload: { text: "a quick recap" } });
@@ -177,6 +220,28 @@ test("lineToFrame: codex event_msg.agent_message keeps final_answer phase", () =
   assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "done", phase: "final_answer" } });
 });
 
+test("lineToFrames: codex event_msg.task_started is a task frame instead of raw", () => {
+  const frames = lineToFrames(JSON.stringify({
+    type: "event_msg",
+    payload: { type: "task_started", task_id: "task-42", description: "Analyze the transcript" },
+  }));
+
+  assert.deepEqual(frames, [{
+    kind: "task",
+    payload: { status: "started", task_id: "task-42", description: "Analyze the transcript" },
+  }]);
+});
+
+test("lineToFrames: codex command event previews are bounded", () => {
+  const frames = lineToFrames(JSON.stringify({
+    type: "event_msg",
+    payload: { type: "exec_command_end", call_id: "call-42", output: "x".repeat(500) },
+  }));
+
+  assert.equal(frames[0].kind, "tool-result");
+  assert.equal((frames[0].payload as { preview: string }).preview.length, 200);
+});
+
 test("lineToFrame: codex response_item.message(role=user,input_text) → text frame", () => {
   const f = lineToFrame(JSON.stringify({
     timestamp: "2026-05-26T21:44:35.329Z",
@@ -231,6 +296,15 @@ test("lineToFrame: codex response_item.reasoning with summary preview", () => {
   assert.equal(f?.kind, "thinking");
   const p = f?.payload as { preview: string };
   assert.equal(p.preview, "仕様を確認した 次にビルドを試す");
+});
+
+test("lineToFrame: codex reasoning preview is capped at 400", () => {
+  const f = lineToFrame(JSON.stringify({
+    type: "response_item",
+    payload: { type: "reasoning", summary: ["x".repeat(500)] },
+  }));
+
+  assert.equal((f?.payload as { preview: string }).preview.length, 400);
 });
 
 test("lineToFrame: codex response_item.message with developer role falls through to raw", () => {
@@ -489,6 +563,100 @@ test("readRecentFromFile: 末尾 N 行を古い順で frame 化する", () => {
     assert.deepEqual(texts, ["two", "three"]); // 古い順 (tail の前半→後半)
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("startTranscriptTail: one multi-frame line receives consecutive sink seq values", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-multi-frame-seq-"));
+  try {
+    const transcriptPath = join(dir, "session.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: "checking" },
+          { type: "text", text: "finished" },
+        ],
+      },
+    }) + "\n");
+    const sent: Array<{ seq: number; kind: string }> = [];
+    const sink = new OrderedTranscriptSink({
+      baseUrl: "http://127.0.0.1:1",
+      sessionId: "multi-frame-seq",
+      fetchFn: async (_url, init) => {
+        const body = JSON.parse(String(init?.body)) as { seq: number; kind: string };
+        sent.push({ seq: body.seq, kind: body.kind });
+        return new Response(JSON.stringify({ persisted: true }), { status: 200 });
+      },
+    });
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "multi-frame-seq",
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider: { ...PROVIDERS.claude, transcriptDir: () => dir },
+      pinnedTranscriptPath: transcriptPath,
+      transcriptSink: sink,
+    });
+    try {
+      await sleep(700);
+      assert.deepEqual(sent, [
+        { seq: 0, kind: "thinking" },
+        { seq: 1, kind: "text" },
+      ]);
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("startTranscriptTail: one multi-frame line preserves order through the legacy relay", async () => {
+  const received: Array<{ seq: number; kind: string }> = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const frame = JSON.parse(body) as { seq: number; kind: string };
+      received.push({ seq: frame.seq, kind: frame.kind });
+      res.writeHead(204);
+      res.end();
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  const dir = mkdtempSync(join(tmpdir(), "lictor-multi-frame-legacy-"));
+  try {
+    const transcriptPath = join(dir, "session.jsonl");
+    writeFileSync(transcriptPath, JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", thinking: "checking" },
+          { type: "text", text: "finished" },
+        ],
+      },
+    }) + "\n");
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "multi-frame-legacy",
+      concordiaBaseUrl: `http://127.0.0.1:${port}`,
+      provider: { ...PROVIDERS.claude, transcriptDir: () => dir },
+      pinnedTranscriptPath: transcriptPath,
+    });
+    try {
+      await sleep(700);
+      assert.deepEqual(received, [
+        { seq: 0, kind: "thinking" },
+        { seq: 1, kind: "text" },
+      ]);
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
 

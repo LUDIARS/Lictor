@@ -817,82 +817,69 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
           }
         }
       }
-      const frame = lineToFrame(line);
-      if (!frame) continue;
-      // Codex は同一ターンの assistant 出力を response_item / event_msg の 2 経路で
-      // 書くことがある (二重に text frame 化される)。 seq を振る前にここで弾く。
-      // extractCodexAssistantDedupeKey は timestamp を含む key を返すため、 別ターンの
-      // 偶然の同文 (timestamp が異なる) は誤って落とさない。 判定不能 (claude / 非
-      // assistant-text / timestamp 欠落) は null を返し fail-open (従来どおり送る)。
-      if (frame.kind === "text" && (frame.payload as { role?: unknown }).role === "assistant") {
-        const dedupeKey = extractCodexAssistantDedupeKey(line);
-        if (dedupeKey !== null) {
-          if (recentAssistantDedupeKeys.has(dedupeKey)) continue; // 同一ターンの二重経路 — 破棄
-          recentAssistantDedupeKeys.add(dedupeKey);
-          if (recentAssistantDedupeKeys.size > CODEX_ASSISTANT_DEDUPE_WINDOW) {
-            const oldest = recentAssistantDedupeKeys.values().next().value;
-            if (oldest !== undefined) recentAssistantDedupeKeys.delete(oldest);
+      for (const frame of lineToFrames(line)) {
+        // Codex は同一ターンの assistant 出力を response_item / event_msg の 2 経路で
+        // 書くことがある (二重に text frame 化される)。seq を振る前に text frame
+        // だけを弾き、同じ行に含まれる thinking / tool-use は必ず残す。
+        // extractCodexAssistantDedupeKey は timestamp を含む key を返すため、 別ターンの
+        // 偶然の同文 (timestamp が異なる) は誤って落とさない。判定不能 (Claude / 非
+        // assistant-text / timestamp 欠落) は null を返し fail-open (従来どおり送る)。
+        if (frame.kind === "text" && (frame.payload as { role?: unknown }).role === "assistant") {
+          const dedupeKey = extractCodexAssistantDedupeKey(line);
+          if (dedupeKey !== null) {
+            if (recentAssistantDedupeKeys.has(dedupeKey)) continue; // 同一ターンの二重経路 — 破棄
+            recentAssistantDedupeKeys.add(dedupeKey);
+            if (recentAssistantDedupeKeys.size > CODEX_ASSISTANT_DEDUPE_WINDOW) {
+              const oldest = recentAssistantDedupeKeys.values().next().value;
+              if (oldest !== undefined) recentAssistantDedupeKeys.delete(oldest);
+            }
           }
         }
-      }
-      // user ロールのメッセージが出た = 端末入力 or 注入テキストが submit されて
-      // LLM ターンが始まった汎用シグナル。 submit-watchdog の武装解除に使う
-      // (askMarkerEnabled に依らず常時発火)。
-      if (frame.kind === "text" && (frame.payload as { role?: unknown }).role === "user") {
-        opts.onUserMessage?.();
-      }
-      // ask マーカー: assistant テキスト中の ```ask ブロックを pending-question へ。
-      // provider 非依存 — lineToFrame が Claude/Codex の assistant テキストを正規化済。
-      //
-      // 「説明テキストを先に / 質問カード (raw JSON) を最後に分割送信」 する:
-      //   1. ask ブロックを除いた説明テキストを text frame として **先に await 送信**
-      //   2. そのあとで pending-question (質問カード) を送る
-      // これで Discord 側の「カードが説明より先に出る」順序逆転と、説明メッセージへの
-      // raw JSON 二重表示を解消する。元フレーム (raw JSON 入り) は再送しない。
-      // user テキストはローカル返信とみなし、開いている marker 質問を resolve させる。
-      // @implements SPEC-ASK-MARKER-RELAY-CONTRACT
-      if (opts.askMarkerEnabled && frame.kind === "text") {
-        const p = frame.payload as { role?: unknown; text?: unknown };
-        if (p.role === "assistant" && typeof p.text === "string") {
-          const marker = parseAskMarkerText(p.text);
-          if (marker) {
-            // 1. 説明テキスト (ask ブロック除去済) を先に送る。中身が空なら省略。
-            // 送信失敗は onRelayError で既に表面化しているので握り潰す。ここで throw すると
-            // 同一 chunk の残り行が (offset 進行済のため) 二度と中継されず、質問カードの
-            // 投稿にも到達できない。
-            const stripped = stripAskBlock(p.text);
-            if (stripped) {
-              await sendFrame("text", {
-                ...(frame.payload as object),
-                text: stripped,
-              }).catch(() => undefined);
-            }
-            // 2. 質問カードを最後に送る (説明の後に届くよう await 後に投稿)。
-            const qid = await postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, {
-              id: "",
-              question: marker.question,
-              options: marker.options,
-              multiSelect: marker.multiSelect,
-            });
-            if (qid != null) {
-              opts.onAskMarkerPosted?.(qid);
-            } else {
-              // 説明本文はすでに送信済みなので、質問部分だけを正規化して再送する。
-              // Concordia は raw ask を構造化失敗として警告付き通常本文へ変換する。
-              // 送信失敗は onRelayError で既に表面化しているので握り潰す。ここで throw すると
-              // 同一 chunk の残り行が (offset 進行済のため) 二度と中継されない。
-              await sendFrame("text", {
-                ...(frame.payload as object),
-                text: renderAskMarkerFallback(marker),
-              }).catch(() => undefined);
-            }
-            continue; // 元フレームは送らない (成功時=カード化、失敗時=正規化済みrawを送信済み)
-          }
-        } else if (p.role === "user" && typeof p.text === "string") {
-          opts.onUserReply?.();
+        // user ロールのメッセージが出た = 端末入力 or 注入テキストが submit されて
+        // LLM ターンが始まった汎用シグナル。submit-watchdog の武装解除に使う
+        // (askMarkerEnabled に依らず常時発火)。
+        if (frame.kind === "text" && (frame.payload as { role?: unknown }).role === "user") {
+          opts.onUserMessage?.();
         }
+        // ask マーカー: assistant テキスト中の ```ask ブロックを pending-question へ。
+        // provider 非依存 — lineToFrames が Claude/Codex の assistant テキストを正規化済。
+        // @implements SPEC-ASK-MARKER-RELAY-CONTRACT
+        if (opts.askMarkerEnabled && frame.kind === "text") {
+          const p = frame.payload as { role?: unknown; text?: unknown };
+          if (p.role === "assistant" && typeof p.text === "string") {
+            const marker = parseAskMarkerText(p.text);
+            if (marker) {
+              const stripped = stripAskBlock(p.text);
+              if (stripped) {
+                await sendFrame("text", {
+                  ...(frame.payload as object),
+                  text: stripped,
+                }).catch(() => undefined);
+              }
+              const qid = await postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, {
+                id: "",
+                question: marker.question,
+                options: marker.options,
+                multiSelect: marker.multiSelect,
+              });
+              if (qid != null) {
+                opts.onAskMarkerPosted?.(qid);
+              } else {
+                await sendFrame("text", {
+                  ...(frame.payload as object),
+                  text: renderAskMarkerFallback(marker),
+                }).catch(() => undefined);
+              }
+              continue;
+            }
+          } else if (p.role === "user" && typeof p.text === "string") {
+            opts.onUserReply?.();
+          }
+        }
+        // A single JSONL record can now yield several frames. Await each one so
+        // the legacy HTTP transport cannot reorder their sequence numbers.
+        await sendFrame(frame.kind, frame.payload).catch(() => undefined);
       }
-      void sendFrame(frame.kind, frame.payload).catch(() => undefined);
     }
   };
 
@@ -974,7 +961,7 @@ export function decideCodexInitialBind(candidates: CodexBindCandidate[]): CodexB
  *
  * - `jsonlPath` が null (transcript 未 discover) なら available:false で即返す.
  * - 非空行だけを母数にし、 末尾 `limit` 行を古い順で返す.
- * - raw=false: 各行を `lineToFrame` で slim frame 化 (parse 不能行は捨てる).
+ * - raw=false: 各行を `lineToFrames` で slim frame 化 (parse 不能行は捨てる).
  * - raw=true : 各行を `JSON.parse` した生オブジェクト (parse 不能行は捨てる).
  *
  * 副作用は readFileSync 1 回のみ。 sidecar の `GET /v1/transcript` から呼ばれる.
@@ -1008,8 +995,7 @@ export function readRecentFromFile(
   }
   const frames: Frame[] = [];
   for (const l of slice) {
-    const f = lineToFrame(l);
-    if (f) frames.push(f);
+    frames.push(...lineToFrames(l));
   }
   return { path: jsonlPath, available: true, total_lines: allLines.length, returned: frames.length, frames };
 }
@@ -1085,7 +1071,7 @@ function walkJsonl(
   }
 }
 
-interface Frame { kind: string; payload: unknown }
+export interface Frame { kind: string; payload: unknown }
 
 /**
  * Convert one JSONL line into the slim envelope Concordia broadcasts.
@@ -1099,14 +1085,14 @@ interface Frame { kind: string; payload: unknown }
  *
  * 未知の type は最後に `raw` frame として落とす.
  */
-export function lineToFrame(line: string): Frame | null {
+export function lineToFrames(line: string): Frame[] {
   let msg: any;
   try {
     msg = JSON.parse(line);
   } catch {
-    return null;
+    return [];
   }
-  if (!msg || typeof msg !== "object") return null;
+  if (!msg || typeof msg !== "object") return [];
 
   // ─── Lictor ローカル LLM エージェント形式 ──────────────────────────────
   // local-agent (`lictor cli local-agent`) の独自 JSONL は {ts, role, content}
@@ -1118,9 +1104,9 @@ export function lineToFrame(line: string): Frame | null {
     typeof msg.content === "string"
   ) {
     if (msg.role === "assistant" || msg.role === "user") {
-      return { kind: "text", payload: { role: msg.role, text: msg.content.slice(0, 4000) } };
+      return [{ kind: "text", payload: { role: msg.role, text: msg.content.slice(0, 4000) } }];
     }
-    return { kind: "system", payload: { text: msg.content.slice(0, 4000) } };
+    return [{ kind: "system", payload: { text: msg.content.slice(0, 4000) } }];
   }
 
   const type = typeof msg.type === "string" ? msg.type : "unknown";
@@ -1132,15 +1118,29 @@ export function lineToFrame(line: string): Frame | null {
   if (type === "user" || type === "assistant") {
     const content = msg.message?.content;
     if (Array.isArray(content)) {
+      const frames: Frame[] = [];
       for (const part of content) {
         if (part?.type === "text" && typeof part.text === "string") {
-          return { kind: "text", payload: { role: type, text: part.text, claude_uuid: claudeUuid } };
+          frames.push({ kind: "text", payload: { role: type, text: part.text, claude_uuid: claudeUuid } });
         }
         if (part?.type === "tool_use") {
-          return {
+          const task = part.name === "Task" && part.input && typeof part.input === "object"
+            ? {
+                subagent_type: typeof part.input.subagent_type === "string" ? part.input.subagent_type : "",
+                description: typeof part.input.description === "string" ? part.input.description : "",
+                prompt_head: typeof part.input.prompt === "string" ? part.input.prompt.slice(0, 200) : "",
+              }
+            : undefined;
+          frames.push({
             kind: "tool-use",
-            payload: { role: type, name: part.name, input_preview: previewJson(part.input) },
-          };
+            payload: {
+              role: type,
+              name: part.name,
+              tool_use_id: part.id,
+              input_preview: previewJson(part.input),
+              ...(task ? { task } : {}),
+            },
+          });
         }
         if (part?.type === "tool_result") {
           if (Array.isArray(part.content)) {
@@ -1151,38 +1151,39 @@ export function lineToFrame(line: string): Frame | null {
                 typeof c?.source?.data === "string" &&
                 c.source.data.length > 0
               ) {
-                return {
+                frames.push({
                   kind: "image",
                   payload: { media_type: c.source.media_type ?? "image/png", data: c.source.data },
-                };
+                });
               }
             }
           }
-          return {
+          frames.push({
             kind: "tool-result",
             payload: {
               tool_use_id: part.tool_use_id,
               is_error: part.is_error === true,
               preview: previewJson(part.content),
             },
-          };
+          });
         }
         if (part?.type === "thinking" && typeof part.thinking === "string") {
-          return { kind: "thinking", payload: { role: type, preview: part.thinking.slice(0, 400) } };
+          frames.push({ kind: "thinking", payload: { role: type, preview: part.thinking.slice(0, 400) } });
         }
       }
+      return frames;
     } else if (typeof content === "string") {
-      return { kind: "text", payload: { role: type, text: content } };
+      return [{ kind: "text", payload: { role: type, text: content } }];
     }
-    return null;
+    return [];
   }
 
   if (type === "summary") {
-    return { kind: "summary", payload: { text: String(msg.summary ?? "").slice(0, 400) } };
+    return [{ kind: "summary", payload: { text: String(msg.summary ?? "").slice(0, 400) } }];
   }
 
   if (type === "system") {
-    return { kind: "system", payload: { text: String(msg.text ?? msg.content ?? "").slice(0, 400) } };
+    return [{ kind: "system", payload: { text: String(msg.text ?? msg.content ?? "").slice(0, 400) } }];
   }
 
   // ─── Codex CLI 形式 ─────────────────────────────────────────────────
@@ -1192,23 +1193,52 @@ export function lineToFrame(line: string): Frame | null {
     const p: any = msg.payload;
     const pType = typeof p.type === "string" ? p.type : "";
     if (pType === "user_message" && typeof p.message === "string") {
-      return { kind: "text", payload: { role: "user", text: p.message.slice(0, 4000) } };
+      return [{ kind: "text", payload: { role: "user", text: p.message.slice(0, 4000) } }];
     }
     if (pType === "agent_message" && typeof p.message === "string") {
       const phase = typeof p.phase === "string" ? p.phase : undefined;
-      return {
+      return [{
         kind: "text",
         payload: { role: "assistant", text: p.message.slice(0, 4000), ...(phase ? { phase } : {}) },
-      };
+      }];
     }
-    // task_started, tool_call, etc. は raw 扱い (将来必要なら拡張).
+    if (pType === "task_started" || pType === "task_complete") {
+      return [{
+        kind: "task",
+        payload: {
+          status: pType === "task_started" ? "started" : "complete",
+          task_id: extractCodexEventId(p),
+          description: extractCodexEventText(p, "description", "message"),
+        },
+      }];
+    }
+    if (pType === "exec_command_begin") {
+      return [{
+        kind: "tool-use",
+        payload: {
+          name: "exec_command",
+          tool_use_id: extractCodexEventId(p),
+          input_preview: extractCodexEventText(p, "command", "command_line", "message"),
+        },
+      }];
+    }
+    if (pType === "exec_command_end") {
+      return [{
+        kind: "tool-result",
+        payload: {
+          tool_use_id: extractCodexEventId(p),
+          is_error: p.is_error === true || p.exit_code !== undefined && p.exit_code !== 0,
+          preview: extractCodexEventText(p, "output", "message", "command"),
+        },
+      }];
+    }
   }
 
   // response_item は SDK レベルの 生 message. event_msg と同じ assistant 出力を
   // 表現することがある (system/developer メッセージ等 event_msg に乗らない種別も
-  // あるため両方の path を維持する)。 完全一致の重複は startTranscriptTail の poll
+  // あるため両方の path を維持する)。完全一致の重複は startTranscriptTail の poll
   // ループが extractCodexAssistantDedupeKey で seq 採番前に弾く (2026-07-28 実害:
-  // 直近 2000 frame 中 73/146 が重複)。 lineToFrame 自体は 1 行 1 frame の純関数の
+  // 直近 2000 frame 中 73/146 が重複)。lineToFrames 自体は 1 行 0..n frame の純関数で、
   // ままにし、 dedupe 状態は呼び出し側 (tail の poll ループ) に閉じ込める。
   if (type === "response_item" && msg.payload && typeof msg.payload === "object") {
     const p: any = msg.payload;
@@ -1219,10 +1249,10 @@ export function lineToFrame(line: string): Frame | null {
         const text = extractCodexMessageText(p.content);
         if (text) {
           const phase = typeof p.phase === "string" ? p.phase : undefined;
-          return {
+          return [{
             kind: "text",
             payload: { role, text: text.slice(0, 4000), ...(phase ? { phase } : {}) },
-          };
+          }];
         }
       }
     }
@@ -1236,11 +1266,32 @@ export function lineToFrame(line: string): Frame | null {
         else if (typeof s?.text === "string") previewParts.push(s.text);
       }
       const preview = previewParts.join(" ").slice(0, 400);
-      return { kind: "thinking", payload: { role: "assistant", preview: preview || "(encrypted)" } };
+      return [{ kind: "thinking", payload: { role: "assistant", preview: preview || "(encrypted)" } }];
     }
   }
 
-  return { kind: "raw", payload: { type, keys: Object.keys(msg).slice(0, 8) } };
+  return [{ kind: "raw", payload: { type, keys: Object.keys(msg).slice(0, 8) } }];
+}
+
+/** Backward-compatible single-frame view for callers that only need the first frame. */
+export function lineToFrame(line: string): Frame | null {
+  return lineToFrames(line)[0] ?? null;
+}
+
+function extractCodexEventId(payload: Record<string, unknown>): string | undefined {
+  for (const key of ["task_id", "call_id", "id"]) {
+    if (typeof payload[key] === "string") return payload[key];
+  }
+  return undefined;
+}
+
+function extractCodexEventText(payload: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    // These values are rendered as transcript previews. Keep command lines and
+    // command output bounded like the existing Claude tool previews.
+    if (typeof payload[key] === "string") return payload[key].slice(0, 200);
+  }
+  return "";
 }
 
 /**
