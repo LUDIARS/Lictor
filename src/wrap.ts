@@ -8,6 +8,7 @@ import { createUserActivitySignal } from "./user-activity.js";
 import { concordiaSpawnSessionMetadata } from "./spawn-context.js";
 import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./concordia.js";
 import { gatherRepoStat } from "./stat.js";
+import { withRepoOrigin } from "./repo-origin.js";
 import { renderSkillMd, SkillInjector } from "./skill-injector.js";
 import { findRepoMemories, memoryDirForCwd, renderMemoryDigest, repoLeafFromCwd } from "./memory-loader.js";
 import { buildLictorHookSettings, resolveHarnessGuard } from "./harness-hook.js";
@@ -1047,7 +1048,7 @@ async function tryRegisterConcordia(
     const stat0 = gatherRepoStat(meta.cwd);
     const spawnMetadata = concordiaSpawnSessionMetadata(process.env);
     const enrollment = spawnMetadata.concordia_spawn_id ?? null;
-    const registered = await client.register({
+    const registered = await client.register(withRepoOrigin({
       id,
       provider: provider.concordiaProvider,
       repo_path: meta.cwd,
@@ -1068,7 +1069,7 @@ async function tryRegisterConcordia(
         // Concordia はこれを根拠に対象セッションだけへ project 特定 instruction を inject する。
         ...spawnMetadata,
       },
-    });
+    }));
     const liveness = client.openLiveness(id, enrollment);
     return {
       client,
@@ -1274,7 +1275,7 @@ async function pollLiveState(ctx: SidecarContext): Promise<void> {
     ctx.activeRepoState.lastList = activeRepos.slice();
     try {
       await ctx.concordia.patchSession(ctx.sessionId, {
-        ...(activeChanged ? { repo_path: activeCwd } : {}),
+        ...(activeChanged ? withRepoOrigin({ repo_path: activeCwd }) : {}),
         active_repos: canonicalRepos,
       });
       await ctx.concordia.event(ctx.sessionId, {

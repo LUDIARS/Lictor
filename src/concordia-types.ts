@@ -7,6 +7,7 @@ export interface ConcordiaSessionRegister {
   id: string;
   provider: string;
   repo_path: string;
+  repo_origin: string | null;
   host: string;
   branch?: string | null;
   transcript_path?: string | null;
