@@ -60,6 +60,9 @@ export async function runClient(args: string[]): Promise<void> {
     case "implement":
       await cmdImplement(port, rest);
       return;
+    case "pr":
+      await cmdPr(port, rest);
+      return;
     case "state":
       process.stdout.write((await getText(port, "/v1/lictor/state")) + "\n");
       return;
@@ -98,10 +101,32 @@ export async function runClient(args: string[]): Promise<void> {
     default:
       process.stderr.write(
         `lictor cli: unknown subcommand '${sub ?? "(none)"}'.\n` +
-          `Available: title, title-auto, rename, meta, health, session, chat, event, conflicts, skill, task, implement, state, version.\n`,
+          `Available: title, title-auto, rename, meta, health, session, chat, event, conflicts, skill, task, implement, pr, state, version.\n`,
       );
       process.exit(2);
   }
+}
+
+/**
+ * Direct local PR submission. Unlike `implement review` this does not require
+ * the session to be bound to the repository — repo_path + branch alone reach
+ * Concordia's `/v1/prs/local/direct`, so a branch prepared outside the
+ * implementation fast path (or by another session) can still go to review.
+ */
+async function cmdPr(port: string, rest: string[]): Promise<void> {
+  const [op, ...more] = rest;
+  if (op !== "submit") return usage("lictor cli pr submit [--repo <path>] [--branch <name>]");
+  let repo = process.cwd();
+  let branch: string | undefined;
+  for (let i = 0; i < more.length; i++) {
+    if (more[i] === "--repo" && more[i + 1]) repo = more[++i];
+    else if (more[i] === "--branch" && more[i + 1]) branch = more[++i];
+    else return usage("lictor cli pr submit [--repo <path>] [--branch <name>]");
+  }
+  process.stdout.write((await postJsonText(port, "/v1/pr/submit", {
+    repo_path: repo,
+    ...(branch ? { branch } : {}),
+  })) + "\n");
 }
 
 async function cmdImplement(port: string, rest: string[]): Promise<void> {

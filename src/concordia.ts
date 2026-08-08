@@ -150,6 +150,23 @@ export class ConcordiaClient {
   }
 
   /**
+   * Direct local PR submission (repo_path + branch, session binding optional).
+   * The session id is attached so the review's terminal result is injected
+   * back here, but Concordia does not require this session to be bound to the
+   * repository — that is the point of the direct path.
+   */
+  async submitDirectLocalPr(
+    id: string,
+    payload: { repo_path: string; branch?: string },
+  ): Promise<unknown> {
+    return this.fetchJson("POST", "/v1/prs/local/direct", {
+      repo_path: payload.repo_path,
+      ...(payload.branch ? { branch: payload.branch } : {}),
+      session_id: id,
+    });
+  }
+
+  /**
    * Notify Concordia that a PreToolUse hook is blocked waiting for a
    * decision. Concordia broadcasts a session-targeted
    * `session.permission_request` event so the Web UI modal shows up.

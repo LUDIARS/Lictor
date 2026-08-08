@@ -532,6 +532,25 @@ async function handle(
     return;
   }
 
+  // Direct local PR submission — repo_path + branch だけで Revisor へ出す
+  // (Cc POST /v1/prs/local/direct の proxy)。 implement review と違い session の
+  // repo binding を要求しない。 session id は審査結果 inject の戻り先として付ける。
+  if (method === "POST" && url === "/v1/pr/submit") {
+    if (!ctx.concordia || !ctx.sessionId) {
+      return writeJson(res, 503, { error: "Concordia not registered for this session" });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { repo_path?: unknown; branch?: unknown } | null;
+    const repoPath = typeof payload?.repo_path === "string" ? payload.repo_path.trim() : "";
+    if (!repoPath) return writeJson(res, 400, { error: "repo_path (string) required" });
+    writeJson(res, 200, await ctx.concordia.submitDirectLocalPr(ctx.sessionId, {
+      repo_path: repoPath,
+      ...(typeof payload?.branch === "string" && payload.branch.trim() ? { branch: payload.branch.trim() } : {}),
+    }));
+    return;
+  }
+
   // Pull the wrapped agent's recent transcript. transcript-tail normally only
   // *pushes* frames to Concordia; this lets a local caller (e.g. a delegation
   // monitor) ask "what is this session doing right now?" without parsing the

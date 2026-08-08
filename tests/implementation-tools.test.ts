@@ -36,12 +36,13 @@ async function withSidecar<T>(
   }
 }
 
-test("implementation tools require a registered Concordia session", async () => {
+test("implementation and direct PR tools require a registered Concordia session", async () => {
   await withSidecar({}, async (port) => {
     for (const path of [
       "/v1/implementation-tools/bind",
       "/v1/implementation-tools/service",
       "/v1/implementation-tools/review",
+      "/v1/pr/submit",
     ]) {
       const response = await fetch(`http://127.0.0.1:${port}${path}`, {
         method: "POST",
@@ -52,7 +53,7 @@ test("implementation tools require a registered Concordia session", async () => 
   });
 });
 
-test("implementation tools validate input and forward the authoritative session id", async () => {
+test("implementation and direct PR tools validate input and forward the authoritative session id", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const concordia = {
     bindImplementation: async (...args: unknown[]) => {
@@ -65,6 +66,10 @@ test("implementation tools validate input and forward the authoritative session 
     },
     submitImplementationReview: async (...args: unknown[]) => {
       calls.push({ method: "review", args });
+      return { ok: true };
+    },
+    submitDirectLocalPr: async (...args: unknown[]) => {
+      calls.push({ method: "direct-pr", args });
       return { ok: true };
     },
   } as unknown as SidecarContext["concordia"];
@@ -100,6 +105,24 @@ test("implementation tools validate input and forward the authoritative session 
       body: "{}",
     });
     assert.equal(review.status, 200);
+
+    const malformedDirectPr = await fetch(`http://127.0.0.1:${port}/v1/pr/submit`, {
+      method: "POST",
+      body: "{",
+    });
+    assert.equal(malformedDirectPr.status, 400);
+
+    const invalidDirectPr = await fetch(`http://127.0.0.1:${port}/v1/pr/submit`, {
+      method: "POST",
+      body: JSON.stringify({ repo_path: "   " }),
+    });
+    assert.equal(invalidDirectPr.status, 400);
+
+    const directPr = await fetch(`http://127.0.0.1:${port}/v1/pr/submit`, {
+      method: "POST",
+      body: JSON.stringify({ repo_path: " C:\\work\\Lictor ", branch: " feature/direct-pr " }),
+    });
+    assert.equal(directPr.status, 200);
   });
 
   assert.deepEqual(calls, [
@@ -112,5 +135,9 @@ test("implementation tools validate input and forward the authoritative session 
       args: ["session-123", { service_code: "Li", action: "restart", note: "verify fix" }],
     },
     { method: "review", args: ["session-123"] },
+    {
+      method: "direct-pr",
+      args: ["session-123", { repo_path: "C:\\work\\Lictor", branch: "feature/direct-pr" }],
+    },
   ]);
 });
