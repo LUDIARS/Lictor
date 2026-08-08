@@ -17,6 +17,7 @@
  */
 
 import { request } from "node:http";
+import { usesClaudeNativeAutoPermissions } from "./permission-mode.js";
 
 interface HookInput {
   tool_name?: string;
@@ -29,6 +30,15 @@ interface HookInput {
 interface DecisionReply {
   decision: "allow" | "deny" | "ask";
   reason?: string;
+}
+
+/** Return whether this hook must ask Lictor's coordinator for a decision. */
+export function shouldProxyPermissionRequest(input: { permission_mode?: unknown }): boolean {
+  return !usesClaudeNativeAutoPermissions(input.permission_mode);
+}
+
+function isHookInput(value: unknown): value is HookInput {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 async function readStdin(): Promise<string> {
@@ -82,12 +92,19 @@ async function askSidecar(port: number, input: HookInput): Promise<DecisionReply
 export async function runPermissionHook(): Promise<void> {
   const port = process.env.LICTOR_PORT ? Number(process.env.LICTOR_PORT) : NaN;
   const stdinRaw = await readStdin();
-  let input: HookInput = {};
+  let input: HookInput;
   try {
-    input = JSON.parse(stdinRaw) as HookInput;
+    const parsed: unknown = JSON.parse(stdinRaw);
+    if (!isHookInput(parsed)) return;
+    input = parsed;
   } catch {
     // Malformed stdin — emit no decision (claude falls through).
     process.exit(0);
+  }
+  if (!shouldProxyPermissionRequest(input)) {
+    // Claude's auto mode can decide this request itself. Emitting any hook
+    // decision here would replace that path with Lictor's coordinator wait.
+    return;
   }
   if (!Number.isFinite(port) || port <= 0) {
     // No sidecar — emit no decision (claude falls through to its own perms).

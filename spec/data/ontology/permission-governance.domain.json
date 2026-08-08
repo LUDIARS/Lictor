@@ -1,0 +1,15 @@
+{
+  "name": "permission-governance",
+  "description": "Claude PreToolUse permission routing, including the boundary between Claude-native automatic decisions and Lictor's coordinator-backed proxy.",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/permission-(hook|classify|mode)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)tests/permission-(proxy|classify|mode)\\.test\\.ts$"
+    }
+  ],
+  "cardTemplate": "Summarise the permission-governance domain: Claude-native auto decisions bypass Lictor's coordinator proxy, while other permission modes retain the existing coordinator flow."
+}

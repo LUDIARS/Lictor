@@ -27,6 +27,22 @@ in [`../setup/setup.md`](../setup/setup.md). Runtime provider application is spe
 in [`runtime-model-effort.md`](./runtime-model-effort.md); root build freshness is
 specified by `SETUP-ROOT-BUILD-FRESHNESS`.
 
+## permission-governance
+
+Claude Code's PreToolUse permission routing. This domain owns the boundary between
+Claude-native automatic permission decisions and the coordinator-backed permission
+proxy.
+
+- **claude-native-auto-boundary**: normalize and recognize Claude's current
+  `permission_mode: "auto"`, then emit no hook decision so Claude Code applies its
+  own permission policy (`src/permission-hook.ts`, `src/permission-mode.ts`).
+- The coordinator-backed proxy remains responsible for every other permission mode
+  (`src/permission-hook.ts`, `src/permission-classify.ts`); it is deliberately not
+  allowed to reinterpret Claude-native `auto` as a human-confirmation request.
+
+The behavioral contract is [`permission-proxy.md`](./permission-proxy.md)
+(`SPEC-PERMISSION-PROXY`).
+
 ## ask-marker-relay
 
 The text-protocol question path: deciding whether ask markers are detectable,
