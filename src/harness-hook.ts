@@ -56,9 +56,10 @@ export function buildLictorHookSettings(
 ): LictorHookSettings {
   const preToolUse: HookMatcher[] = [
     {
-      // 書き込み系 + MCP を Lictor の権限ゲートに通す (Read/Glob/Grep は対象外)。
-      matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|mcp__.*",
-      hooks: [{ type: "command", command: "lictor cli permission-hook", timeout: 65 }],
+      // 自動許可モードでは無害な読み取りを遅延通知できるよう、Read/Glob/Grep も含める。
+      // 人による確認は最大 10 分待つため、hook 自体には終了処理用の余裕を加える。
+      matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|Read|Glob|Grep|mcp__.*",
+      hooks: [{ type: "command", command: "lictor cli permission-hook", timeout: 610 }],
     },
     {
       // AskUserQuestion を picker-open 時に検知して Concordia へ早期投稿する。

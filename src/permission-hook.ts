@@ -21,6 +21,8 @@ import { request } from "node:http";
 interface HookInput {
   tool_name?: string;
   tool_input?: unknown;
+  permission_mode?: unknown;
+  guard_result?: unknown;
   hook_event_name?: string;
 }
 
@@ -42,7 +44,8 @@ async function askSidecar(port: number, input: HookInput): Promise<DecisionReply
   const body = JSON.stringify({
     tool_name: input.tool_name,
     tool_input: input.tool_input,
-    timeout_ms: 60_000,
+    permission_mode: input.permission_mode,
+    guard_result: input.guard_result,
   });
   return new Promise((resolve) => {
     const req = request(

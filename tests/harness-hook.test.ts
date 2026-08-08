@@ -35,6 +35,10 @@ test("buildLictorHookSettings: guard 無しは既定 2 フックのみ", () => {
   const pre = s.hooks.PreToolUse;
   assert.equal(pre.length, 2);
   assert.ok(!pre.some((m) => m.matcher === "Bash"));
+  const permissionHook = pre.find((m) => m.hooks[0].command === "lictor cli permission-hook");
+  assert.ok(permissionHook);
+  assert.equal(permissionHook.matcher, "Bash|Edit|Write|MultiEdit|NotebookEdit|Read|Glob|Grep|mcp__.*");
+  assert.equal(permissionHook.hooks[0].timeout, 610);
 });
 
 test("buildLictorHookSettings: SessionStart に session-id-hook を注入する", () => {

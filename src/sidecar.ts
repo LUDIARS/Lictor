@@ -14,6 +14,18 @@ import type { TranscriptReadResult } from "./transcript-tail.js";
 import { extractPendingQuestions, postPendingQuestion } from "./ask-question-relay.js";
 import { parseShutdownRequest, type SessionShutdown } from "./session-shutdown.js";
 import { applyRuntimeModelEffort } from "./runtime-model-effort.js";
+import {
+  classifyPermissionRequest,
+  type PermissionRequestKind,
+} from "./permission-classify.js";
+
+export const PERMISSION_DEFER_MS = readPermissionDeferMs(process.env);
+const USER_CONFIRMATION_TIMEOUT_MS = 600_000;
+
+export function readPermissionDeferMs(env: NodeJS.ProcessEnv): number {
+  const configured = Number(env.PERMISSION_DEFER_MS ?? "5000");
+  return Number.isFinite(configured) && configured >= 0 ? configured : 5000;
+}
 
 export interface TitleState {
   manualOverride: string | null;
@@ -22,6 +34,11 @@ export interface TitleState {
 export interface PermissionDecision {
   decision: "allow" | "deny" | "ask";
   reason?: string;
+}
+
+export interface PermissionTiming {
+  deferMs: number;
+  sleep: (ms: number) => Promise<void>;
 }
 
 export interface SidecarContext {
@@ -54,6 +71,8 @@ export interface SidecarContext {
    * fires (default-allow).
    */
   pendingPermissions: Map<string, (decision: PermissionDecision) => void>;
+  /** Injectable timing seam for deterministic permission-defer tests. */
+  permissionTiming?: PermissionTiming;
   /**
    * v0.8 active-repo relay — ホスト PostToolUse hook が `<state-dir>/active-
    * repos-<claude-sid>.txt` に書き込んだ repo root を読み取って Concordia に
@@ -641,14 +660,39 @@ async function handle(
     }
     const body = await readJson(req);
     if (!body.ok) return writeJson(res, 400, { error: body.error });
-    const payload = body.value as { tool_name?: unknown; tool_input?: unknown; timeout_ms?: unknown };
+    const payload = body.value as {
+      tool_name?: unknown;
+      tool_input?: unknown;
+      permission_mode?: unknown;
+      guard_result?: unknown;
+      timeout_ms?: unknown;
+    };
     if (typeof payload.tool_name !== "string") {
       return writeJson(res, 400, { error: "tool_name (string) required" });
     }
     const requestId = randomUuid();
-    const timeoutMs = typeof payload.timeout_ms === "number" && payload.timeout_ms > 0
-      ? Math.min(payload.timeout_ms, 600_000)
-      : 60_000;
+    const kind = classifyPermissionRequest(payload);
+    const timing = ctx.permissionTiming ?? defaultPermissionTiming();
+
+    if (kind === "self-processable") {
+      const before = readTranscriptProgress(ctx);
+      await timing.sleep(timing.deferMs);
+      const after = readTranscriptProgress(ctx);
+      if (transcriptProgressed(before, after)) {
+        writePermissionLog({
+          action: "suppressed-progressed",
+          request_id: requestId,
+          kind,
+          tool_name: payload.tool_name,
+          permission_mode: payload.permission_mode,
+          deferred_ms: timing.deferMs,
+        });
+        return writeJson(res, 200, {
+          decision: "allow",
+          reason: "session progressed during deferred permission check",
+        });
+      }
+    }
 
     // Post the request to Concordia so the Web UI modal can show up.
     try {
@@ -664,17 +708,24 @@ async function handle(
       });
     }
 
-    const decision = await new Promise<{ decision: "allow" | "deny" | "ask"; reason?: string }>((resolve) => {
-      const timer = setTimeout(() => {
-        ctx.pendingPermissions.delete(requestId);
-        resolve({ decision: "allow", reason: "timeout (default-allow)" });
-      }, timeoutMs);
-      ctx.pendingPermissions.set(requestId, (d) => {
-        clearTimeout(timer);
-        ctx.pendingPermissions.delete(requestId);
-        resolve(d);
-      });
+    writePermissionLog({
+      action: kind === "self-processable" ? "posted-after-defer" : "posted-immediately",
+      request_id: requestId,
+      kind,
+      tool_name: payload.tool_name,
+      permission_mode: payload.permission_mode,
+      deferred_ms: kind === "self-processable" ? timing.deferMs : 0,
     });
+    const waitOptions = kind === "user-confirmation"
+      ? {
+          timeoutMs: USER_CONFIRMATION_TIMEOUT_MS,
+          onTimeout: { decision: "ask" as const, reason: "human confirmation timed out" },
+        }
+      : {
+          timeoutMs: resolveSelfProcessableTimeout(payload.timeout_ms),
+          onTimeout: { decision: "allow" as const, reason: "timeout (default-allow)" },
+        };
+    const decision = await waitForPermissionDecision(ctx, requestId, waitOptions);
     writeJson(res, 200, decision);
     return;
   }
@@ -890,6 +941,73 @@ export function buildAnswerSequence(choice: number, escapeFirst = false): string
 function writeJson(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+interface TranscriptProgress {
+  path: string | null;
+  totalLines: number;
+  available: boolean;
+}
+
+function defaultPermissionTiming(): PermissionTiming {
+  return {
+    deferMs: PERMISSION_DEFER_MS,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  };
+}
+
+function readTranscriptProgress(ctx: SidecarContext): TranscriptProgress | null {
+  if (!ctx.getTranscript) return null;
+  const transcript = ctx.getTranscript(1, true);
+  return {
+    path: transcript.path,
+    totalLines: transcript.total_lines,
+    available: transcript.available,
+  };
+}
+
+/** A changed transcript path or additional JSONL line is observed session progress. */
+function transcriptProgressed(before: TranscriptProgress | null, after: TranscriptProgress | null): boolean {
+  if (!before || !after || !before.available || !after.available) return false;
+  return before.path !== after.path || after.totalLines > before.totalLines;
+}
+
+function resolveSelfProcessableTimeout(requested: unknown): number {
+  if (typeof requested !== "number" || !Number.isFinite(requested) || requested <= 0) return 60_000;
+  return Math.min(requested, USER_CONFIRMATION_TIMEOUT_MS);
+}
+
+async function waitForPermissionDecision(
+  ctx: SidecarContext,
+  requestId: string,
+  opts: { timeoutMs: number; onTimeout: PermissionDecision },
+): Promise<PermissionDecision> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      ctx.pendingPermissions.delete(requestId);
+      resolve(opts.onTimeout);
+    }, opts.timeoutMs);
+    ctx.pendingPermissions.set(requestId, (decision) => {
+      clearTimeout(timer);
+      ctx.pendingPermissions.delete(requestId);
+      resolve(decision);
+    });
+  });
+}
+
+function writePermissionLog(entry: {
+  action: "suppressed-progressed" | "posted-after-defer" | "posted-immediately";
+  request_id: string;
+  kind: PermissionRequestKind;
+  tool_name: string;
+  permission_mode: unknown;
+  deferred_ms: number;
+}): void {
+  try {
+    process.stderr.write(`${JSON.stringify({ event: "permission-check", ...entry })}\n`);
+  } catch {
+    // Local audit logging must not interfere with the permission path.
+  }
 }
 
 interface JsonResult {
