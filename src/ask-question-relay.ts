@@ -272,6 +272,44 @@ export async function postPendingQuestion(
   }
 }
 
+/** Answer payload accepted by `POST /v1/sessions/:id/answer-question`. */
+export type AnswerQuestionBody =
+  | { question_id: number; answer_index: number }
+  | { question_id: number; answer_indices: number[] }
+  | { question_id: number; other_text: string };
+
+/**
+ * Record a locally-typed answer against a Concordia pending-question, so the
+ * card shows *what* was answered instead of a content-less "resolved" state.
+ *
+ * Returns false when Concordia refused (including 409 already-answered, which
+ * is the normal race with a button press) or was unreachable — the caller then
+ * falls back to a plain resolve so stale buttons still expire. Best-effort:
+ * a Concordia outage must never slow down the wrapped CLI.
+ */
+export async function postAnswerQuestion(
+  baseUrl: string,
+  sessionId: string,
+  body: AnswerQuestionBody,
+): Promise<boolean> {
+  const url = `${baseUrl}/v1/sessions/${encodeURIComponent(sessionId)}/answer-question`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), POST_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    return res.ok;
+  } catch {
+    return false; // best-effort
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Notify Concordia that an AskUserQuestion picker resolved locally (answered at
  * the keyboard, no remote answer), so its pending-question is marked answered

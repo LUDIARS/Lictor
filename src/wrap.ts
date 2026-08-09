@@ -51,9 +51,10 @@ import {
   resolveActiveReposDir,
 } from "./active-repos.js";
 import { createSubmitWatchdog } from "./submit-watchdog.js";
-import { writeAskMarkerPrompt } from "./ask-marker.js";
+import { writeAskMarkerPrompt, type AskMarker } from "./ask-marker.js";
 import { planAskMarkerActivation } from "./ask-marker-activation.js";
-import { postResolveQuestion } from "./ask-question-relay.js";
+import { postAnswerQuestion, postResolveQuestion } from "./ask-question-relay.js";
+import { buildTextAnswerBody } from "./answer-code.js";
 import {
   closeCodexAppServerSession,
   runCodexDelegationTurn,
@@ -276,9 +277,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // テキスト出力なので、回答は「キー注入」ではなく「テキスト注入」で返す
   // (単一/複数/自由文を全部テキスト返信に一本化)。
   const markerQuestionIds = new Set<number>();
-  // まだローカル/リモートで解決していない marker 質問。ユーザが端末で返信したら
-  // (transcript に user メッセージが出たら) resolve 通知して Discord ボタンを失効させる。
-  const openMarkerQids = new Set<number>();
+  // まだローカル/リモートで回答されていない marker 質問 (qid → 選択肢を持つ marker)。
+  // ユーザがテキストで返信したら、その本文を**回答として** Concordia に記録する。
+  // 以前は本文を捨てて resolve 通知だけしていたため、カードは「回答済み」なのに中身が
+  // 空で、後から WebUI / ボタンで答えても already_answered で弾かれていた。
+  const openMarkerQuestions = new Map<number, AskMarker>();
   // 組み込み AskUserQuestion picker が Concordia に登録された question_id。
   // transcript-tail が AskUserQuestion tool_use を検出し Concordia に POST した後に
   // 登録される。onAnswerQuestion で markerQuestionIds にも無い id が来たとき、
@@ -359,7 +362,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           //    answer_text は単一=ラベル / 複数=カンマ結合ラベル / Other=自由文。
           if (markerQuestionIds.has(questionId)) {
             markerQuestionIds.delete(questionId);
-            openMarkerQids.delete(questionId);
+            openMarkerQuestions.delete(questionId);
             const safe = sanitizeKeySeq(text);
             if (!safe) return;
             provider.submitInject(ctx.ptyWriter, safe);
@@ -738,17 +741,29 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         // onAnswerQuestion の三分岐判定で「picker キーストローク経路」として識別するために控える。
         pickerQuestionIds.add(qid);
       },
-      onAskMarkerPosted: (qid) => {
+      onAskMarkerPosted: (qid, marker) => {
         // この id の回答は picker キー注入ではなくテキスト注入で返す。
         markerQuestionIds.add(qid);
-        openMarkerQids.add(qid);
+        openMarkerQuestions.set(qid, marker);
       },
-      onUserReply: () => {
-        // 端末でローカル返信された → 開いている marker 質問を解決し Discord ボタンを失効。
-        for (const qid of openMarkerQids) {
-          void postResolveQuestion(concordiaBaseUrl, concordia.id, qid);
-        }
-        openMarkerQids.clear();
+      onUserReply: (text) => {
+        // テキストで返信された → その本文を回答として記録する。 `[A]` のような
+        // 選択肢コードがあれば該当選択肢の回答、 無ければ自由文の回答として残す
+        // (選択肢の外を答えることもあるので、 書式は強制しない)。
+        // A reply has no question identifier. Attribute it only to the latest
+        // outstanding card, rather than silently answering every open card
+        // with the same text. Keep older cards available for their own reply.
+        const entry = Array.from(openMarkerQuestions.entries()).at(-1);
+        if (!entry || !text.trim()) return;
+        const [qid, marker] = entry;
+        openMarkerQuestions.delete(qid);
+        const body = buildTextAnswerBody(qid, text, marker);
+        if (!body) return;
+        // 記録できなければ (Concordia 不通 / ボタン回答と競合して 409) 従来どおり
+        // resolve だけ通知し、 古いボタンは失効させる。
+        void postAnswerQuestion(concordiaBaseUrl, concordia.id, body).then((ok) => {
+          if (!ok) void postResolveQuestion(concordiaBaseUrl, concordia.id, qid);
+        });
       },
       // transcript は claude が初回ターンを受けてから書く。 無操作のアイドルセッションを
       // 「中継不能」 と誤検知しないよう、 実際にターンが始まった (submit/inject があった)

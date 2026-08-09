@@ -45,7 +45,7 @@ import {
   postResolveQuestion,
   providerSupportsAskUserQuestion,
 } from "./ask-question-relay.js";
-import { parseAskMarkerText, renderAskMarkerFallback } from "./ask-marker.js";
+import { parseAskMarkerText, renderAskMarkerFallback, type AskMarker } from "./ask-marker.js";
 import { stripAskBlock } from "./ask-json.js";
 import type { TranscriptFrameSink } from "./transcript-sink.js";
 
@@ -270,8 +270,9 @@ export interface TranscriptTailOptions {
   /**
    * ask マーカー由来の pending-question が Concordia に登録され question_id が
    * 返ったとき呼ぶ。wrap.ts はこの id を「テキスト回答で返す」集合に記録する。
+   * marker は選択肢コード ([A] 等) を解決するために渡す。
    */
-  onAskMarkerPosted?: (questionId: number) => void;
+  onAskMarkerPosted?: (questionId: number, marker: AskMarker) => void;
   /**
    * AskUserQuestion (組み込み picker) が Concordia に pending-question として登録され
    * question_id が返ったとき呼ぶ。wrap.ts はこの id を「picker キーストローク回答」集合に
@@ -279,11 +280,12 @@ export interface TranscriptTailOptions {
    */
   onPickerQuestionRegistered?: (questionId: number) => void;
   /**
-   * transcript に user メッセージ (端末でのローカル返信) が現れたとき呼ぶ。
-   * 開いている ask マーカー質問をローカル解決扱いにして Discord ボタンを失効させる。
+   * transcript に user メッセージ (ローカル返信、 または Discord/WebUI から注入されて
+   * submit された返信) が現れたとき、 その本文つきで呼ぶ。 wrap.ts は開いている ask
+   * マーカー質問の**回答本文**としてこれを Concordia に記録する。
    * askMarkerEnabled のときのみ発火する (ask マーカー専用)。
    */
-  onUserReply?: () => void;
+  onUserReply?: (text: string) => void;
   /**
    * transcript に user ロールのメッセージフレームが現れるたびに呼ぶ汎用シグナル
    * (askMarkerEnabled に依らず常時発火)。 submit-watchdog が「注入テキストが実際に
@@ -863,7 +865,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
                 multiSelect: marker.multiSelect,
               });
               if (qid != null) {
-                opts.onAskMarkerPosted?.(qid);
+                opts.onAskMarkerPosted?.(qid, marker);
               } else {
                 await sendFrame("text", {
                   ...(frame.payload as object),
@@ -873,7 +875,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
               continue;
             }
           } else if (p.role === "user" && typeof p.text === "string") {
-            opts.onUserReply?.();
+            opts.onUserReply?.(p.text);
           }
         }
         // A single JSONL record can now yield several frames. Await each one so
