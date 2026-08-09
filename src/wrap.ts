@@ -813,6 +813,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       transcriptPath: transcriptTail?.getTranscriptPath() ?? null,
       stateDir: activeReposStateDir,
     }).path,
+    reportSessionEndDone: async () => {
+      if (ctx.concordia && ctx.sessionId) await ctx.concordia.reportSessionEndDone(ctx.sessionId);
+    },
     cleanup: cleanupSessionResources,
     scheduleExit: () => {
       setTimeout(() => process.exit(0), 50);

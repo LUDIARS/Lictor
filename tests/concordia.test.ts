@@ -2,10 +2,35 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildLivenessUrl,
+  ConcordiaClient,
   isTerminalLivenessClose,
   LivenessHandle,
   loadConcordiaConfig,
 } from "../src/concordia.js";
+
+test("session-end completion reports to the encoded session endpoint with a bounded request", {
+  concurrency: false,
+}, async () => {
+  const originalFetch = globalThis.fetch;
+  let request: { url: string; init?: RequestInit } | null = null;
+  try {
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      request = { url: String(url), init };
+      return new Response("");
+    }) as typeof fetch;
+
+    await new ConcordiaClient(loadConcordiaConfig({ CONCORDIA_PORT: "11111" }))
+      .reportSessionEndDone("lictor/session?1");
+
+    assert.ok(request);
+    assert.equal(request.url, "http://127.0.0.1:11111/v1/sessions/lictor%2Fsession%3F1/session-end-done");
+    assert.equal(request.init?.method, "POST");
+    assert.equal(request.init?.body, "{}");
+    assert.ok(request.init?.signal);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("loadConcordiaConfig defaults", () => {
   const cfg = loadConcordiaConfig({});

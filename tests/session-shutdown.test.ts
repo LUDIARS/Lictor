@@ -174,3 +174,59 @@ test("POST /v1/shutdown returns already instead of 500 on a second call", async 
     sidecar.close();
   }
 });
+
+test("session-end completion is reported after archive and before cleanup", async () => {
+  const steps: string[] = [];
+  const shutdown = new SessionShutdown({
+    unregister: async () => {
+      steps.push("unregister");
+    },
+    kill: () => {
+      steps.push("kill");
+    },
+    archive: async () => {
+      steps.push("archive");
+      return "/archive";
+    },
+    reportSessionEndDone: async () => {
+      steps.push("session-end-done");
+    },
+    cleanup: async () => {
+      steps.push("cleanup");
+    },
+    scheduleExit: () => {
+      steps.push("exit");
+    },
+  });
+
+  await shutdown.run();
+
+  // 通知は「PID を止めてよい」の合図なので kill/archive の後、
+  // HTTP listener を閉じる cleanup の前でなければならない。
+  assert.deepEqual(steps, ["unregister", "kill", "archive", "session-end-done", "cleanup", "exit"]);
+});
+
+test("a failed completion report warns but does not abort shutdown", async () => {
+  const steps: string[] = [];
+  const warnings: string[] = [];
+  const shutdown = new SessionShutdown({
+    unregister: async () => {},
+    kill: () => {},
+    archive: async () => null,
+    reportSessionEndDone: async () => {
+      throw new Error("concordia down");
+    },
+    cleanup: async () => {
+      steps.push("cleanup");
+    },
+    scheduleExit: () => {
+      steps.push("exit");
+    },
+    warn: (message) => warnings.push(message),
+  });
+
+  assert.deepEqual(await shutdown.run(), { ok: true, archived: null });
+  assert.deepEqual(steps, ["cleanup", "exit"]);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!, /session-end completion report failed: concordia down/);
+});

@@ -14,6 +14,11 @@ export interface ShutdownDependencies {
   kill: () => Promise<void> | void;
   flush?: () => Promise<void>;
   archive: (reason: string) => Promise<string | null>;
+  /**
+   * Concordia へ session-end 完了を通知する (best-effort)。
+   * cleanup より前・archive の後に呼ぶ。HTTP listener を閉じる前でなければ届かない。
+   */
+  reportSessionEndDone?: () => Promise<void>;
   cleanup?: () => Promise<void>;
   scheduleExit: () => void;
   warn?: (message: string) => void;
@@ -67,6 +72,13 @@ export class SessionShutdown {
       } catch (error) {
         this.warn("session archive", error);
       }
+    }
+
+    // 完了通知は「PID を止めてよい」の合図なので、kill / flush / archive の後に出す。
+    // ここを skill の手順に任せていた間、自動 session-end では一度も送られず
+    // 回収経路が塞がっていた (Concordia 2026-08-08 の残留 21 ツリー)。
+    if (this.deps.reportSessionEndDone) {
+      await this.bestEffort("session-end completion report", this.deps.reportSessionEndDone);
     }
 
     const result: ShutdownResult = { ok: true, archived };

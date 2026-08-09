@@ -13,6 +13,7 @@ import type {
 } from "./concordia-types.js";
 
 const DEFAULT_HOST = "127.0.0.1";
+const SESSION_END_DONE_TIMEOUT_MS = 5_000;
 // Concordia backend の loopback port。 Concordia 本体 (concordia.config.json /
 // shared/config.ts) は 11111 を bind するため既定もそれに揃える。 通常は Concordia が
 // spawn 時に CONCORDIA_HOST/PORT を注入するので、 この既定は env 無し起動時のみ効く。
@@ -68,6 +69,23 @@ export class ConcordiaClient {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * session-end の終局処理が完了したことを Concordia へ通知する。
+   *
+   * Concordia はこの通知を受けて `session_end_pending_at` を解除し、記録済み PID の
+   * 停止を確定させる。通知が来ないと Concordia 側は時間ベースの保険回収 (5分) に
+   * 落ちるだけなので、失敗しても shutdown は継続してよい — ただし握り潰さず
+   * 呼び出し側へ投げ、warning として観測できるようにする。
+   */
+  async reportSessionEndDone(id: string): Promise<void> {
+    await this.fetchJson(
+      "POST",
+      `/v1/sessions/${encodeURIComponent(id)}/session-end-done`,
+      {},
+      AbortSignal.timeout(SESSION_END_DONE_TIMEOUT_MS),
+    );
   }
 
   async patchSession(id: string, patch: SessionPatch): Promise<void> {
@@ -221,12 +239,18 @@ export class ConcordiaClient {
     return new LivenessHandle(this.cfg, id, enrollment, onMessage);
   }
 
-  private async fetchJson<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async fetchJson<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> {
     const url = `${this.cfg.baseUrl}${path}`;
     const init: RequestInit = {
       method,
       headers: body !== undefined ? { "content-type": "application/json" } : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal,
     };
     const res = await fetch(url, init);
     const text = await res.text();
