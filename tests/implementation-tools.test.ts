@@ -77,7 +77,7 @@ test("implementation and direct PR tools validate input and forward the authorit
   await withSidecar({ concordia, sessionId: "session-123" }, async (port) => {
     const invalidBind = await fetch(`http://127.0.0.1:${port}/v1/implementation-tools/bind`, {
       method: "POST",
-      body: JSON.stringify({ cwd: "", task: "   " }),
+      body: JSON.stringify({ cwd: "   ", task: "   " }),
     });
     assert.equal(invalidBind.status, 400);
 

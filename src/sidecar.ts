@@ -506,7 +506,7 @@ async function handle(
     const payload = body.value as { cwd?: unknown; task?: unknown };
     if (
       typeof payload.cwd !== "string" ||
-      payload.cwd.length === 0 ||
+      payload.cwd.trim().length === 0 ||
       typeof payload.task !== "string" ||
       payload.task.trim().length === 0
     ) {
