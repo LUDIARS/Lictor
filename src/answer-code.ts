@@ -24,12 +24,6 @@ const MAX_FREE_TEXT = 2000;
 /** Letters used for option codes. 26 options is far beyond any real card. */
 const CODE_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-/** `0 → "A"`, `25 → "Z"`. Indices past Z get a 1-based number instead. */
-export function formatOptionCode(index: number): string {
-  if (!Number.isInteger(index) || index < 0) return "?";
-  return index < CODE_LETTERS.length ? CODE_LETTERS[index]! : String(index + 1);
-}
-
 /**
  * Collect the option indices a reply names, in first-appearance order.
  *

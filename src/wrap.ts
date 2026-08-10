@@ -30,6 +30,7 @@ import {
 import { type ProviderConfig, PROVIDERS, resolveBinary } from "./provider.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
 import { scheduleGracefulExit, type GracefulExitHandle } from "./graceful-exit.js";
+import { exitAfterCleanup } from "./exit-deadline.js";
 import { archiveSessionLog } from "./session-archive.js";
 import { SessionShutdown } from "./session-shutdown.js";
 import { terminateProcessTree } from "./process-tree.js";
@@ -936,13 +937,19 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     // /v1/shutdown が所有する unregister → kill → flush → archive → exit の途中。
     // 通常 onExit cleanup を競合させると archive 前に process.exit し得るため任せる。
     if (shutdownRequested) return;
-    void cleanup().finally(() => {
-      if (signal && process.platform !== "win32") {
-        // POSIX: re-raise so wait status mirrors the child's.
-        process.kill(process.pid, signalNumberToName(signal));
-        return;
-      }
-      process.exit(exitCode ?? 0);
+    // cleanup が (Concordia 詰まり等で) 解決しなくても必ず終了する。 待ち切れない
+    // ときにラッパが残ると、子が死んだ後も node プロセスが OS に居座る。
+    exitAfterCleanup({
+      cleanup,
+      warn: (message) => process.stderr.write(`lictor: ${message}\n`),
+      exit: () => {
+        if (signal && process.platform !== "win32") {
+          // POSIX: re-raise so wait status mirrors the child's.
+          process.kill(process.pid, signalNumberToName(signal));
+          return;
+        }
+        process.exit(exitCode ?? 0);
+      },
     });
   });
 

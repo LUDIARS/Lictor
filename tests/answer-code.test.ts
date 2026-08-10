@@ -1,18 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildTextAnswerBody, formatOptionCode, parseOptionCodes } from "../src/answer-code.js";
+import { buildTextAnswerBody, parseOptionCodes } from "../src/answer-code.js";
 
 // @implements SPEC-ASK-MARKER-TEXT-ANSWER
 const marker = (multiSelect: boolean) => ({
   question: "which?",
   multiSelect,
   options: [{ label: "first" }, { label: "second" }, { label: "third" }],
-});
-
-test("formatOptionCode: index maps to a letter, then to a 1-based number", () => {
-  assert.equal(formatOptionCode(0), "A");
-  assert.equal(formatOptionCode(2), "C");
-  assert.equal(formatOptionCode(26), "27");
 });
 
 test("parseOptionCodes: bracketed codes are collected, prose letters are not", () => {

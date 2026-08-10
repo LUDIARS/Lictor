@@ -32,6 +32,47 @@ test("session-end completion reports to the encoded session endpoint with a boun
   }
 });
 
+test("unregister sends a bounded request so a stalled Concordia cannot pin the wrapper", {
+  concurrency: false,
+}, async () => {
+  const originalFetch = globalThis.fetch;
+  let request: { url: string; init?: RequestInit } | null = null;
+  try {
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      request = { url: String(url), init };
+      return new Response("");
+    }) as typeof fetch;
+
+    await new ConcordiaClient(loadConcordiaConfig({ CONCORDIA_PORT: "11111" }))
+      .unregister("lictor/session?1");
+
+    assert.ok(request);
+    assert.equal(request.url, "http://127.0.0.1:11111/v1/sessions/lictor%2Fsession%3F1");
+    assert.equal(request.init?.method, "DELETE");
+    assert.ok(request.init?.signal);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("unregister degrades to null when the request aborts", {
+  concurrency: false,
+}, async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    }) as typeof fetch;
+
+    const reply = await new ConcordiaClient(loadConcordiaConfig({ CONCORDIA_PORT: "11111" }))
+      .unregister("lictor-abc");
+
+    assert.equal(reply, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("loadConcordiaConfig defaults", () => {
   const cfg = loadConcordiaConfig({});
   assert.equal(cfg.host, "127.0.0.1");

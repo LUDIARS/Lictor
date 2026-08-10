@@ -14,6 +14,10 @@ import type {
 
 const DEFAULT_HOST = "127.0.0.1";
 const SESSION_END_DONE_TIMEOUT_MS = 5_000;
+// unregister は wrapper の終了経路 (wrap.ts の cleanup) から呼ばれる。 Concordia が
+// 詰まっているとき無期限に待つと cleanup が解決せず process.exit へ到達できないため、
+// wrapper が OS プロセスとして永久に残る。 上限を切って best-effort に倒す。
+const UNREGISTER_TIMEOUT_MS = 5_000;
 // Concordia backend の loopback port。 Concordia 本体 (concordia.config.json /
 // shared/config.ts) は 11111 を bind するため既定もそれに揃える。 通常は Concordia が
 // spawn 時に CONCORDIA_HOST/PORT を注入するので、 この既定は env 無し起動時のみ効く。
@@ -65,6 +69,8 @@ export class ConcordiaClient {
       return await this.fetchJson<DeleteSessionResponse>(
         "DELETE",
         `/v1/sessions/${encodeURIComponent(id)}`,
+        undefined,
+        AbortSignal.timeout(UNREGISTER_TIMEOUT_MS),
       );
     } catch {
       return null;
