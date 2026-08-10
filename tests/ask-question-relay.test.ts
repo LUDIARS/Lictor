@@ -5,9 +5,38 @@ import {
   detectAskUserQuestion,
   detectExitPlanMode,
   extractPendingQuestions,
+  postAnswerQuestion,
   providerSupportsAskUserQuestion,
 } from "../src/ask-question-relay.js";
 import { PROVIDERS } from "../src/provider.js";
+
+test("postAnswerQuestion: posts the encoded session path and returns the HTTP result", {
+  concurrency: false,
+}, async () => {
+  const originalFetch = globalThis.fetch;
+  let request: { url: string; init?: RequestInit } | null = null;
+  try {
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      request = { url: String(url), init };
+      return new Response("", { status: 200 });
+    }) as typeof fetch;
+
+    assert.equal(
+      await postAnswerQuestion("http://127.0.0.1:11111", "lictor/session?1", {
+        question_id: 7,
+        answer_index: 1,
+      }),
+      true,
+    );
+    assert.ok(request);
+    assert.equal(request.url, "http://127.0.0.1:11111/v1/sessions/lictor%2Fsession%3F1/answer-question");
+    assert.equal(request.init?.method, "POST");
+    assert.equal(request.init?.body, JSON.stringify({ question_id: 7, answer_index: 1 }));
+    assert.ok(request.init?.signal);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("extractPendingQuestions: PreToolUse の tool_input.questions[] を変換 (早期投稿用)", () => {
   const questions = [

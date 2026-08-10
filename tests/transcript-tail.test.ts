@@ -1125,6 +1125,71 @@ test("startTranscriptTail: AskUserQuestion 検出後に onPickerQuestionRegister
   }
 });
 
+test("startTranscriptTail: ask-marker の登録結果と後続 user 本文をコールバックへ渡す", async () => {
+  const server = createServer((req, res) => {
+    if (req.method === "POST" && req.url?.includes("pending-question")) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ question_id: 99 }));
+      return;
+    }
+    res.writeHead(204);
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  const dir = mkdtempSync(join(tmpdir(), "lictor-ask-text-answer-"));
+  const posted: Array<{ questionId: number; marker: unknown }> = [];
+  const replies: string[] = [];
+  try {
+    const pinnedPath = join(dir, "dededede-dede-4ded-8ded-dededededede.jsonl");
+    const provider = { ...PROVIDERS.claude, transcriptDir: () => dir };
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-ask-text-answer-session",
+      concordiaBaseUrl: `http://127.0.0.1:${port}`,
+      provider,
+      pinnedTranscriptPath: pinnedPath,
+      askMarkerEnabled: true,
+      onAskMarkerPosted: (questionId, marker) => posted.push({ questionId, marker }),
+      onUserReply: (text) => replies.push(text),
+    });
+    try {
+      writeFileSync(pinnedPath, [
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [{
+              type: "text",
+              text: '```ask\n{"question":"進めますか?","options":[{"label":"はい"},{"label":"いいえ"}]}\n```',
+            }],
+          },
+        }),
+        JSON.stringify({
+          type: "user",
+          message: { content: [{ type: "text", text: "[B] でお願いします" }] },
+        }),
+        "",
+      ].join("\n"), "utf8");
+
+      await sleep(1200);
+      assert.deepEqual(posted, [{
+        questionId: 99,
+        marker: {
+          question: "進めますか?",
+          multiSelect: false,
+          options: [{ label: "はい" }, { label: "いいえ" }],
+        },
+      }]);
+      assert.deepEqual(replies, ["[B] でお願いします"]);
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("startTranscriptTail: ask登録失敗時は質問をraw markerとして中継する", async () => {
   const server = createServer((req, res) => {
     if (req.method === "POST" && req.url?.includes("pending-question")) {

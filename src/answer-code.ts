@@ -21,7 +21,7 @@ import type { AnswerQuestionBody } from "./ask-question-relay.js";
 /** Concordia caps free-text answers at 2000 chars (`other_text` schema). */
 const MAX_FREE_TEXT = 2000;
 
-/** Letters used for option codes. 26 options is far beyond any real card. */
+/** Letters accepted in bracketed option references. */
 const CODE_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 /**
