@@ -118,6 +118,18 @@ test("implementation and direct PR tools validate input and forward the authorit
     });
     assert.equal(invalidDirectPr.status, 400);
 
+    const invalidDirectPrBranch = await fetch(`http://127.0.0.1:${port}/v1/pr/submit`, {
+      method: "POST",
+      body: JSON.stringify({ repo_path: "C:\\work\\Lictor", branch: "   " }),
+    });
+    assert.equal(invalidDirectPrBranch.status, 400);
+
+    const invalidDirectPrBranchType = await fetch(`http://127.0.0.1:${port}/v1/pr/submit`, {
+      method: "POST",
+      body: JSON.stringify({ repo_path: "C:\\work\\Lictor", branch: null }),
+    });
+    assert.equal(invalidDirectPrBranchType.status, 400);
+
     const directPr = await fetch(`http://127.0.0.1:${port}/v1/pr/submit`, {
       method: "POST",
       body: JSON.stringify({ repo_path: " C:\\work\\Lictor ", branch: " feature/direct-pr " }),

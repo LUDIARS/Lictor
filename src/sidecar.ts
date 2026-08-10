@@ -563,9 +563,13 @@ async function handle(
     const payload = body.value as { repo_path?: unknown; branch?: unknown } | null;
     const repoPath = typeof payload?.repo_path === "string" ? payload.repo_path.trim() : "";
     if (!repoPath) return writeJson(res, 400, { error: "repo_path (string) required" });
+    if (payload?.branch !== undefined &&
+        (typeof payload.branch !== "string" || payload.branch.trim().length === 0)) {
+      return writeJson(res, 400, { error: "branch must be a non-empty string when provided" });
+    }
     writeJson(res, 200, await ctx.concordia.submitDirectLocalPr(ctx.sessionId, {
       repo_path: repoPath,
-      ...(typeof payload?.branch === "string" && payload.branch.trim() ? { branch: payload.branch.trim() } : {}),
+      ...(typeof payload?.branch === "string" ? { branch: payload.branch.trim() } : {}),
     }));
     return;
   }

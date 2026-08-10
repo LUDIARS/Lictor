@@ -59,6 +59,9 @@ Usage:
                                        Run Excubitor control with Cc testing
                                        claim/release in one tool request.
   lictor cli implement review          Submit or retry the Revisor local PR.
+  lictor cli pr submit [--repo <path>] [--branch <name>]
+                                       Submit a local PR without requiring an
+                                       implementation-session repository binding.
   lictor cli state                     Print live notify/conflict/task state.
 
   lictor cli slash <cmd> [args...]     Inject \`/<cmd> <args>CR\` into the wrapped
