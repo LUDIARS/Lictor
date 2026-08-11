@@ -53,6 +53,27 @@ picker が**開く前**に発火する Claude Code の PreToolUse hook（matcher
 4. **force-clear** — wrapper 終了 / transcript-tail stop 時は保留を flush せず破棄
    （死にゆく pty / 追跡不能な picker への誤注入を避ける）。
 
+## hold policy — picker は全保留 / ask マーカーは自動 inject だけ (2026-08-11)
+
+gate は質問ごとに「どの inject を止めるか」を持つ。
+
+| 質問の種類 | policy | 保留するもの | 閉じる契機 |
+| --- | --- | --- | --- |
+| 組み込み picker (`AskUserQuestion` / `ExitPlanMode`) | `"all"` | 人間・自動を問わず全部 | `tool_result` 観測 |
+| ask マーカー | `"automatic"` | 自動 inject のみ | 明示回答 (`question.answered`) / 文頭コード付きテキスト返信 |
+
+- picker は**どんな入力でも**候補を誤確定させるので従来どおり全保留。
+- ask マーカーはテキスト出力なので誤確定の危険は無い。止めたいのは「人が居ないまま進めと言う」
+  自動 inject (`auto:goal-and-go` / `auto:inquiry` / `taskflow:*` / `revisor` / `delegation:*`) だけ。
+  これを通すとモデルが自分の質問に自分で答えて先へ進む。
+- 出どころの判定は inject の `source` で行う ([`../../src/inject-origin.ts`](../../src/inject-origin.ts))。
+  `discord:<uid>` / `slack:<uid>` は human、`auto:session-end` は lifecycle (人が
+  `/end-session` を叩いた終了指示なので保留すると `/session-end` が走らないまま死ぬ)、
+  それ以外は automatic。**判定不能は automatic 扱い** (安全側)。
+- marker 質問の gate id は `marker:<question_id>` (picker の `tool_use` id と名前空間を分ける)。
+- **未回答のまま放置すると自走は進まない** — これは仕様。回答するまで止まるのが blocker の意図で、
+  Concordia 側も未回答質問があるセッションへ自動 inject を出さない。
+
 `ExitPlanMode` も `detectExitPlanMode` で `PendingQuestion` に変換し、transcript-tail の
 同じ後続処理（pending-question 投稿、`tool_use id → question_id` 記録、picker 回答キー注入）に
 流す。ローカル picker の選択肢順と Concordia 側の選択肢 index が一致する前提で、wrap.ts の

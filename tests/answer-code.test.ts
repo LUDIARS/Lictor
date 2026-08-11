@@ -19,6 +19,14 @@ test("parseOptionCodes: bracketed codes are collected, prose letters are not", (
   assert.deepEqual(parseOptionCodes("[D]", 3), []);
 });
 
+test("parseOptionCodes: only codes at the very start count", () => {
+  // 文頭 (前置きの空白は許容) だけを見る。
+  assert.deepEqual(parseOptionCodes("  [B] で", 3), [1]);
+  assert.deepEqual(parseOptionCodes("[A] のあと [C] も検討", 3), [0]);
+  // 本文の途中に現れたコード (ログ・引用の貼り付け) は回答ではない。
+  assert.deepEqual(parseOptionCodes("ログに [B] と出ていた", 3), []);
+});
+
 test("buildTextAnswerBody: codes select options, multi only when the card allows it", () => {
   assert.deepEqual(buildTextAnswerBody(7, "[B]", marker(false)), { question_id: 7, answer_index: 1 });
   assert.deepEqual(buildTextAnswerBody(7, "[A][C]", marker(true)), {
@@ -29,14 +37,18 @@ test("buildTextAnswerBody: codes select options, multi only when the card allows
   assert.deepEqual(buildTextAnswerBody(7, "[A][C]", marker(false)), { question_id: 7, answer_index: 0 });
 });
 
-test("buildTextAnswerBody: an answer outside the options is kept as free text", () => {
-  assert.deepEqual(buildTextAnswerBody(7, "どれでもなく先に調査して", marker(false)), {
-    question_id: 7,
-    other_text: "どれでもなく先に調査して",
-  });
+test("buildTextAnswerBody: a reply without a leading code is not an answer", () => {
+  // 無関係な発言 1 通でカードを閉じない — 質問は blocker として残す。
+  assert.equal(buildTextAnswerBody(7, "どれでもなく先に調査して", marker(false)), null);
   assert.equal(buildTextAnswerBody(7, "", marker(false)), null);
-  assert.deepEqual(buildTextAnswerBody(7, "  free text  ", marker(false)), {
+  assert.equal(buildTextAnswerBody(7, "ログに [B] と出ていた", marker(false)), null);
+  // 範囲外のコードだけの返信も回答ではない。
+  assert.equal(buildTextAnswerBody(7, "[D]", marker(false)), null);
+});
+
+test("buildTextAnswerBody: a leading code answers even when prose follows", () => {
+  assert.deepEqual(buildTextAnswerBody(7, "[B] これでお願いします", marker(false)), {
     question_id: 7,
-    other_text: "  free text  ",
+    answer_index: 1,
   });
 });

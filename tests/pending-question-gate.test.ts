@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PendingQuestionGate } from "../src/pending-question-gate.js";
+import { PendingQuestionGate, markerGateId } from "../src/pending-question-gate.js";
 
 test("gate: closed by default — injects pass through (shouldDefer=false)", () => {
   const flushed: string[] = [];
@@ -68,6 +68,46 @@ test("gate: empty id is ignored (no open, no resolve)", () => {
   gate.openQuestion("");
   assert.equal(gate.isOpen(), false);
   assert.equal(gate.shouldDefer("passes"), false);
+});
+
+test("gate: an ask-marker question holds automatic injects but lets humans through", () => {
+  const flushed: string[] = [];
+  const gate = new PendingQuestionGate((t) => flushed.push(t));
+  gate.openQuestion(markerGateId(42), "automatic");
+  // goal-and-go / お伺い / taskflow — 人が居ないまま「進め」と言う inject は保留。
+  assert.equal(gate.shouldDefer("goal-and-go", { bypassesMarkerHold: false }), true);
+  // Discord チャットの発言は会話を止めないため通す (回答は question.answered 経由)。
+  assert.equal(gate.shouldDefer("ちょっと待って", { bypassesMarkerHold: true }), false);
+  assert.equal(gate.deferredCount, 1);
+
+  gate.resolveQuestion(markerGateId(42));
+  assert.equal(gate.isOpen(), false);
+  assert.deepEqual(flushed, ["goal-and-go"]);
+});
+
+test("gate: a picker question holds human injects too", () => {
+  const gate = new PendingQuestionGate(() => {});
+  gate.openQuestion("toolu_1"); // default policy = "all"
+  assert.equal(gate.shouldDefer("typed text", { bypassesMarkerHold: true }), true);
+});
+
+test("gate: a picker open alongside a marker still holds everything", () => {
+  const gate = new PendingQuestionGate(() => {});
+  gate.openQuestion(markerGateId(1), "automatic");
+  gate.openQuestion("toolu_1", "all");
+  assert.equal(gate.shouldDefer("typed text", { bypassesMarkerHold: true }), true);
+  gate.resolveQuestion("toolu_1");
+  // marker だけが残れば人間の発言は通る。
+  assert.equal(gate.shouldDefer("typed again", { bypassesMarkerHold: true }), false);
+});
+
+test("gate: marker ids do not collide with picker tool_use ids", () => {
+  const gate = new PendingQuestionGate(() => {});
+  gate.openQuestion(markerGateId(7), "automatic");
+  gate.resolveQuestion("7"); // 生の question_id では閉じない
+  assert.equal(gate.isOpen(), true);
+  gate.resolveQuestion(markerGateId(7));
+  assert.equal(gate.isOpen(), false);
 });
 
 test("gate: forceClear drops open questions AND held injects (no flush)", () => {
