@@ -14,6 +14,11 @@
  * If LICTOR_PORT isn't set, or the sidecar is unreachable, we fall through
  * to claude's normal permission flow (no JSON on stdout) so the user
  * doesn't get stuck.
+ *
+ * The sidecar may also answer `{"deferred": true}`, which means "I have no
+ * opinion, decide it yourself". That happens for self-processable requests:
+ * this hook blocks the tool call while it runs, so the sidecar releases it
+ * with zero added latency and observes the outcome asynchronously instead.
  */
 
 import { request } from "node:http";
@@ -27,6 +32,19 @@ interface HookInput {
   hook_event_name?: string;
 }
 
+/** Raw sidecar reply for `/v1/internal/permission-check`. */
+interface SidecarReply {
+  decision?: "allow" | "deny" | "ask";
+  /**
+   * The sidecar classified this request as self-processable and released the
+   * hook without an opinion. We must emit nothing so claude's own permission
+   * engine handles it — the sidecar watches the outcome asynchronously.
+   */
+  deferred?: boolean;
+  reason?: string;
+}
+
+/** A reply we actually forward to claude. */
 interface DecisionReply {
   decision: "allow" | "deny" | "ask";
   reason?: string;
@@ -72,9 +90,12 @@ async function askSidecar(port: number, input: HookInput): Promise<DecisionReply
         res.on("end", () => {
           if (res.statusCode !== 200) return resolve(null);
           try {
-            const j = JSON.parse(Buffer.concat(chunks).toString("utf8")) as DecisionReply;
-            if (j && (j.decision === "allow" || j.decision === "deny" || j.decision === "ask")) {
-              resolve(j);
+            const j = JSON.parse(Buffer.concat(chunks).toString("utf8")) as SidecarReply;
+            if (j && j.deferred === true) {
+              // Deferred: no decision on purpose, fall through to claude.
+              resolve(null);
+            } else if (j && (j.decision === "allow" || j.decision === "deny" || j.decision === "ask")) {
+              resolve({ decision: j.decision, reason: j.reason });
             } else {
               resolve(null);
             }

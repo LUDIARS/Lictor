@@ -14,10 +14,17 @@ import type { TranscriptReadResult } from "./transcript-tail.js";
 import { extractPendingQuestions, postPendingQuestion } from "./ask-question-relay.js";
 import { parseShutdownRequest, type SessionShutdown } from "./session-shutdown.js";
 import { applyRuntimeModelEffort } from "./runtime-model-effort.js";
+import { classifyPermissionRequest } from "./permission-classify.js";
 import {
-  classifyPermissionRequest,
-  type PermissionRequestKind,
-} from "./permission-classify.js";
+  PermissionDeferObserver,
+  createRealScheduler,
+  type DeferredPermissionRequest,
+  type PermissionTiming,
+  type TranscriptProgressSnapshot,
+} from "./permission-defer.js";
+import { writePermissionLog } from "./permission-log.js";
+
+export type { PermissionTiming } from "./permission-defer.js";
 
 export const PERMISSION_DEFER_MS = readPermissionDeferMs(process.env);
 const USER_CONFIRMATION_TIMEOUT_MS = 600_000;
@@ -34,11 +41,6 @@ export interface TitleState {
 export interface PermissionDecision {
   decision: "allow" | "deny" | "ask";
   reason?: string;
-}
-
-export interface PermissionTiming {
-  deferMs: number;
-  sleep: (ms: number) => Promise<void>;
 }
 
 export interface SidecarContext {
@@ -68,10 +70,13 @@ export interface SidecarContext {
    * a Web UI / Concordia response. Key is request_id (uuid). The promise
    * resolver lets `/v1/internal/permission-check` block until either a
    * matching `/v1/internal/permission-response` arrives or the timeout
-   * fires (default-allow).
+   * fires (fall back to Claude's own `ask` decision).
    */
   pendingPermissions: Map<string, (decision: PermissionDecision) => void>;
-  /** Injectable timing seam for deterministic permission-defer tests. */
+  /**
+   * Injectable defer window + timer seam for the self-processable permission
+   * path. Tests supply a manual scheduler so no wall-clock time is spent.
+   */
   permissionTiming?: PermissionTiming;
   /**
    * v0.8 active-repo relay — ホスト PostToolUse hook が `<state-dir>/active-
@@ -122,6 +127,7 @@ export interface Sidecar {
 }
 
 export async function startSidecar(ctx: SidecarContext): Promise<Sidecar> {
+  const permissionDefer = createPermissionDeferObserver(ctx);
   const server = http.createServer((req, res) => {
     const remote = req.socket.remoteAddress ?? "";
     if (remote !== "127.0.0.1" && remote !== "::1" && remote !== "::ffff:127.0.0.1") {
@@ -130,7 +136,7 @@ export async function startSidecar(ctx: SidecarContext): Promise<Sidecar> {
       return;
     }
 
-    void handle(req, res, ctx).catch((err) => {
+    void handle(req, res, ctx, permissionDefer).catch((err) => {
       writeJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
     });
   });
@@ -146,6 +152,9 @@ export async function startSidecar(ctx: SidecarContext): Promise<Sidecar> {
       resolve({
         port: addr.port,
         close: () => {
+          // Drop armed defer observations first so a closing sidecar can
+          // never post a permission notice after shutdown.
+          permissionDefer.dispose();
           try {
             server.close();
           } catch {
@@ -161,6 +170,7 @@ async function handle(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   ctx: SidecarContext,
+  permissionDefer: PermissionDeferObserver,
 ): Promise<void> {
   const url = req.url ?? "";
   const method = req.method ?? "GET";
@@ -669,33 +679,35 @@ async function handle(
       tool_input?: unknown;
       permission_mode?: unknown;
       guard_result?: unknown;
-      timeout_ms?: unknown;
     };
     if (typeof payload.tool_name !== "string") {
       return writeJson(res, 400, { error: "tool_name (string) required" });
     }
     const requestId = randomUuid();
     const kind = classifyPermissionRequest(payload);
-    const timing = ctx.permissionTiming ?? defaultPermissionTiming();
 
     if (kind === "self-processable") {
-      const before = readTranscriptProgress(ctx);
-      await timing.sleep(timing.deferMs);
-      const after = readTranscriptProgress(ctx);
-      if (transcriptProgressed(before, after)) {
-        writePermissionLog({
-          action: "suppressed-progressed",
-          request_id: requestId,
-          kind,
-          tool_name: payload.tool_name,
-          permission_mode: payload.permission_mode,
-          deferred_ms: timing.deferMs,
-        });
-        return writeJson(res, 200, {
-          decision: "allow",
-          reason: "session progressed during deferred permission check",
-        });
-      }
+      // The hook is holding the tool call open, so nothing can progress while
+      // we think. Release it immediately WITHOUT a decision — claude's own
+      // permission engine (legacy auto-like mode) decides — and only then watch whether
+      // the session actually moved. Adding latency here would tax every
+      // auto-approved tool call.
+      permissionDefer.observe({
+        requestId,
+        toolName: payload.tool_name,
+        toolInput: payload.tool_input,
+      });
+      writePermissionLog({
+        action: "deferred",
+        request_id: requestId,
+        kind,
+        tool_name: payload.tool_name,
+        deferred_ms: permissionDefer.deferMs,
+      });
+      return writeJson(res, 200, {
+        deferred: true,
+        reason: "self-processable — delegated to claude's own permission engine",
+      });
     }
 
     // Post the request to Concordia so the Web UI modal can show up.
@@ -705,31 +717,36 @@ async function handle(
         tool_name: payload.tool_name,
         tool_input: payload.tool_input,
       });
-    } catch (err) {
+    } catch {
+      writePermissionLog({
+        action: "post-failed",
+        request_id: requestId,
+        kind,
+        tool_name: payload.tool_name,
+        deferred_ms: 0,
+        // Transport errors can include private endpoint details. The caller
+        // only needs to know that the coordinator was unavailable.
+        error: "permission notification failed",
+      });
       return writeJson(res, 200, {
         decision: "allow",
-        reason: `concordia unreachable (${(err as Error).message})`,
+        reason: "concordia unreachable",
       });
     }
 
     writePermissionLog({
-      action: kind === "self-processable" ? "posted-after-defer" : "posted-immediately",
+      action: "posted-immediately",
       request_id: requestId,
       kind,
       tool_name: payload.tool_name,
-      permission_mode: payload.permission_mode,
-      deferred_ms: kind === "self-processable" ? timing.deferMs : 0,
+      deferred_ms: 0,
     });
-    const waitOptions = kind === "user-confirmation"
-      ? {
-          timeoutMs: USER_CONFIRMATION_TIMEOUT_MS,
-          onTimeout: { decision: "ask" as const, reason: "human confirmation timed out" },
-        }
-      : {
-          timeoutMs: resolveSelfProcessableTimeout(payload.timeout_ms),
-          onTimeout: { decision: "allow" as const, reason: "timeout (default-allow)" },
-        };
-    const decision = await waitForPermissionDecision(ctx, requestId, waitOptions);
+    // ここへ来るのは human confirmation だけ。 self-processable は decision を返さずに
+    // 上で hook を解放しているので、 待ち時間の分岐は要らない。
+    const decision = await waitForPermissionDecision(ctx, requestId, {
+      timeoutMs: USER_CONFIRMATION_TIMEOUT_MS,
+      onTimeout: { decision: "ask", reason: "human confirmation timed out" },
+    });
     writeJson(res, 200, decision);
     return;
   }
@@ -947,20 +964,81 @@ function writeJson(res: http.ServerResponse, status: number, body: unknown): voi
   res.end(JSON.stringify(body));
 }
 
-interface TranscriptProgress {
-  path: string | null;
-  totalLines: number;
-  available: boolean;
-}
-
 function defaultPermissionTiming(): PermissionTiming {
   return {
     deferMs: PERMISSION_DEFER_MS,
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    scheduler: createRealScheduler(),
   };
 }
 
-function readTranscriptProgress(ctx: SidecarContext): TranscriptProgress | null {
+/**
+ * Builds the observer that watches deferred self-processable requests. The
+ * Concordia handles are read lazily inside the callbacks because `sessionId`
+ * is assigned after the sidecar starts listening.
+ */
+function createPermissionDeferObserver(ctx: SidecarContext): PermissionDeferObserver {
+  const timing = ctx.permissionTiming ?? defaultPermissionTiming();
+  return new PermissionDeferObserver({
+    deferMs: timing.deferMs,
+    scheduler: timing.scheduler,
+    readProgress: () => readTranscriptProgress(ctx),
+    onProgressed: (request) => {
+      writePermissionLog({
+        action: "suppressed-progressed",
+        request_id: request.requestId,
+        kind: "self-processable",
+        tool_name: request.toolName,
+        deferred_ms: timing.deferMs,
+      });
+    },
+    onStalled: (request) => {
+      void postDeferredPermissionNotice(ctx, request, timing.deferMs);
+    },
+  });
+}
+
+/**
+ * The defer window elapsed without the session moving, which means claude is
+ * asking a human in the TUI. Surface it through Concordia so someone watching
+ * Discord / the Web UI can notice and attend to the local prompt. Best-effort
+ * by contract.
+ */
+async function postDeferredPermissionNotice(
+  ctx: SidecarContext,
+  request: DeferredPermissionRequest,
+  deferMs: number,
+): Promise<void> {
+  const concordia = ctx.concordia;
+  const sessionId = ctx.sessionId;
+  if (!concordia || !sessionId) return;
+  try {
+    await concordia.permissionRequest(sessionId, {
+      request_id: request.requestId,
+      tool_name: request.toolName,
+      tool_input: request.toolInput,
+    });
+    writePermissionLog({
+      action: "posted-after-defer",
+      request_id: request.requestId,
+      kind: "self-processable",
+      tool_name: request.toolName,
+      deferred_ms: deferMs,
+    });
+  } catch {
+    writePermissionLog({
+      action: "post-failed",
+      request_id: request.requestId,
+      kind: "self-processable",
+      tool_name: request.toolName,
+      deferred_ms: deferMs,
+      // Transport errors can include private endpoint details. The audit
+      // record only needs to distinguish a failed post from a successful one.
+      error: "permission notification failed",
+    });
+  }
+}
+
+function readTranscriptProgress(ctx: SidecarContext): TranscriptProgressSnapshot | null {
   if (!ctx.getTranscript) return null;
   const transcript = ctx.getTranscript(1, true);
   return {
@@ -968,17 +1046,6 @@ function readTranscriptProgress(ctx: SidecarContext): TranscriptProgress | null 
     totalLines: transcript.total_lines,
     available: transcript.available,
   };
-}
-
-/** A changed transcript path or additional JSONL line is observed session progress. */
-function transcriptProgressed(before: TranscriptProgress | null, after: TranscriptProgress | null): boolean {
-  if (!before || !after || !before.available || !after.available) return false;
-  return before.path !== after.path || after.totalLines > before.totalLines;
-}
-
-function resolveSelfProcessableTimeout(requested: unknown): number {
-  if (typeof requested !== "number" || !Number.isFinite(requested) || requested <= 0) return 60_000;
-  return Math.min(requested, USER_CONFIRMATION_TIMEOUT_MS);
 }
 
 async function waitForPermissionDecision(
@@ -997,21 +1064,6 @@ async function waitForPermissionDecision(
       resolve(decision);
     });
   });
-}
-
-function writePermissionLog(entry: {
-  action: "suppressed-progressed" | "posted-after-defer" | "posted-immediately";
-  request_id: string;
-  kind: PermissionRequestKind;
-  tool_name: string;
-  permission_mode: unknown;
-  deferred_ms: number;
-}): void {
-  try {
-    process.stderr.write(`${JSON.stringify({ event: "permission-check", ...entry })}\n`);
-  } catch {
-    // Local audit logging must not interfere with the permission path.
-  }
 }
 
 interface JsonResult {

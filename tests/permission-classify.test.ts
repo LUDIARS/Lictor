@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classifyPermissionRequest } from "../src/permission-classify.js";
 
-test("classifyPermissionRequest: auto mode and harmless tool are self-processable", () => {
+test("classifyPermissionRequest: legacy auto-like mode and harmless tool are self-processable", () => {
   assert.equal(
     classifyPermissionRequest({ permission_mode: "acceptEdits", tool_name: "Read" }),
     "self-processable",
