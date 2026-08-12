@@ -754,6 +754,15 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       // 排除して別セッション混入 (crosstalk) を構造的に防ぐ。state dir は wrapper が
       // 一度だけ解決し、生成した hook command にも明示して同じ正本を使わせる。
       lictorTranscriptStatePath,
+      // 権威 transcript_path を Concordia の session 行へ届ける (best-effort)。
+      // Concordia のコンテキスト推定が時刻マッチ推測ではなく実パスを読めるようになる。
+      onAuthoritativeTranscriptPath: (path) => {
+        void concordia.client
+          .patchSession(concordia.id, { transcript_path: path })
+          .catch(() => {
+            /* best-effort — Concordia 不通で tail を止めない */
+          });
+      },
       onUserMessage: () => submitWatchdog.noteUserMessage(),
       onPickerQuestionRegistered: (qid) => {
         // 組み込み AskUserQuestion picker が Concordia に登録された。

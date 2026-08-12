@@ -27,6 +27,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   readSync,
   statSync,
   unlinkSync,
@@ -34,7 +35,7 @@ import {
   writeSync,
   type Stats,
 } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import type { ProviderConfig } from "./provider.js";
 import { readClaudeTranscriptPath } from "./active-repos.js";
 import {
@@ -305,6 +306,14 @@ export interface TranscriptTailOptions {
    */
   lictorTranscriptStatePath?: string | null;
   /**
+   * SessionStart hook が報告した権威 transcript_path を観測するたび (初回確定 /
+   * `/clear` ローテート) に 1 パスにつき 1 度だけ呼ぶ。 wrap.ts はこれを Concordia の
+   * `PATCH /v1/sessions/:id { transcript_path }` へ best-effort 転送し、 Concordia 側の
+   * コンテキスト推定 (cost/context-estimate.ts) が時刻マッチ推測ではなく実パスを
+   * 読めるようにする (起動直後に他セッションの transcript を拾う誤計算の根治)。
+   */
+  onAuthoritativeTranscriptPath?: (path: string) => void;
+  /**
    * spawn 時に `--session-id <uuid>` で固定した transcript JSONL の **計算上の** 絶対パス
    * (`<cwdKey>/<uuid>.jsonl`)。
    *
@@ -358,6 +367,8 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // hook 権威が設定済なのに猶予内に transcript を束縛できなかったとき、 1 度だけ
   // fail-loud 警告を出すためのフラグ (沈黙死禁止)。
   let relayUnresolvedWarned = false;
+  // onAuthoritativeTranscriptPath の重複抑止 (同じ権威パスは 1 度だけ通知する)。
+  let reportedAuthoritativePath: string | null = null;
   const startedAt = Date.now();
   // watchdog: 最後に「束縛できた / 新バイトを読めた」 時刻。 これが STALL_RECOVERY_MS
   // 以上更新されず、 かつ session active なら relay スタールとみなして取り直す。
@@ -583,6 +594,37 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     if (!opts.lictorTranscriptStatePath) return; // hook 由来の権威更新なし (従来動作)
     const want = readClaudeTranscriptPath(opts.lictorTranscriptStatePath);
     if (!want) return; // SessionStart hook 未発火 — 起動直後は computed pin で橋渡し
+    // Concordia がこのパスを後から読み直すため、hook state に混入した任意パスを
+    // 転送しない。実在する JSONL かつこの provider の transcript directory 内だけを
+    // 報告する。realpath により directory 内の symlink を経由した脱出も拒否する。
+    let safeAuthoritativePath: string | null = null;
+    try {
+      const realTranscriptDir = realpathSync(dir);
+      const realTranscriptPath = realpathSync(want);
+      const pathWithinTranscriptDir = relative(realTranscriptDir, realTranscriptPath);
+      if (
+        statSync(realTranscriptPath).isFile()
+        && realTranscriptPath.endsWith(".jsonl")
+        && pathWithinTranscriptDir !== ""
+        && pathWithinTranscriptDir !== ".."
+        && !pathWithinTranscriptDir.startsWith(`..${sep}`)
+        && !isAbsolute(pathWithinTranscriptDir)
+      ) {
+        safeAuthoritativePath = realTranscriptPath;
+      }
+    } catch {
+      // hook が先にパスを報告して JSONL が後から作られる通常ケースもここに入る。
+    }
+    // 権威パスの観測を外へ通知する (パスごとに 1 度)。安全な実 transcript に限り、
+    // 束縛差し替えの成否とは独立に Concordia へ通知する。
+    if (safeAuthoritativePath && safeAuthoritativePath !== reportedAuthoritativePath) {
+      reportedAuthoritativePath = safeAuthoritativePath;
+      try {
+        opts.onAuthoritativeTranscriptPath?.(safeAuthoritativePath);
+      } catch {
+        /* best-effort — 報告失敗で tail を止めない */
+      }
+    }
     if (want === pinnedPath) return; // 変化なし
     // 報告パスがまだ実在しないなら束縛を差し替えない。 旧実装は phantom / 生成前パスへ
     // 無条件に rebind して jsonlPath=null のまま discover が掴めず中継が黙って停止した
@@ -878,13 +920,22 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
             opts.onUserReply?.(p.text);
           }
         }
-        // A single JSONL record can now yield several frames. Await each one so
-        // the legacy HTTP transport cannot reorder their sequence numbers.
-        await sendFrame(frame.kind, frame.payload).catch(() => undefined);
+        // A legacy relay is best-effort: do not let a slow response delay the
+        // remaining frames from this JSONL record. sendFrame assigns its seq
+        // synchronously before starting the request, so these calls retain
+        // their transcript order.
+        if (opts.transcriptSink) {
+          await sendFrame(frame.kind, frame.payload).catch(() => undefined);
+        } else {
+          void sendFrame(frame.kind, frame.payload).catch(() => undefined);
+        }
       }
     }
   };
 
+  // Start promptly so an already-written transcript is relayed without waiting
+  // for the first polling interval; subsequent polls retain the normal cadence.
+  void pollOnce().catch(() => {});
   const timer = setInterval(() => {
     void pollOnce().catch(() => {});
   }, POLL_INTERVAL_MS);

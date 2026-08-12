@@ -107,6 +107,8 @@ export interface SessionPatch {
   branch?: string;
   repo_path?: string;
   repo_origin?: string | null;
+  /** claude が実際に書いている transcript JSONL の絶対パス (SessionStart hook 権威)。 */
+  transcript_path?: string | null;
   active_repos?: string[];
   /**
    * Shallow merge into Concordia's session.metadata. `null` value deletes

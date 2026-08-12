@@ -782,6 +782,7 @@ test("startTranscriptTail: hook の transcript_path 変化で実 JSONL へ束縛
     const pathA = join(dir, `${uuidA}.jsonl`);
     const uuidB = "44444444-4444-4444-8444-444444444444";
     const pathB = join(dir, `${uuidB}.jsonl`);
+    const reportedPaths: string[] = [];
 
     // 起動時の computed pin = A。 hook も実 transcript_path として A を報告。
     writeFileSync(statePath, pathA);
@@ -792,12 +793,14 @@ test("startTranscriptTail: hook の transcript_path 変化で実 JSONL へ束縛
       provider,
       pinnedTranscriptPath: pathA,
       lictorTranscriptStatePath: statePath,
+      onAuthoritativeTranscriptPath: (path) => reportedPaths.push(path),
     });
     try {
       writeFileSync(pathA, '{"type":"assistant","message":{"content":[{"type":"text","text":"A"}]}}\n');
       await sleep(700);
       assert.equal(tail.getTranscriptPath(), pathA, "起動時は A を tail");
       assert.equal(existsSync(`${pathA}.lictor-claim`), true, "A を claim");
+      assert.deepEqual(reportedPaths, [pathA], "初回の権威パスを一度だけ報告する");
 
       // `/clear`: SessionStart hook が新 transcript_path=B を state ファイルへ書き、
       // claude が B.jsonl を作る。
@@ -809,11 +812,40 @@ test("startTranscriptTail: hook の transcript_path 変化で実 JSONL へ束縛
       assert.equal(tail.getSessionUuid(), uuidB, "session uuid も B を返す");
       assert.equal(existsSync(`${pathB}.lictor-claim`), true, "B を claim");
       assert.equal(existsSync(`${pathA}.lictor-claim`), false, "旧 A の claim は解放する");
+      assert.deepEqual(reportedPaths, [pathA, pathB], "ローテート後の権威パスも一度だけ報告する");
     } finally {
       tail.stop();
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("startTranscriptTail: hook state の transcript directory 外パスは Concordia に報告しない", async () => {
+  const root = mkdtempSync(join(tmpdir(), "lictor-authoritative-path-boundary-"));
+  const dir = join(root, "transcripts");
+  const outsidePath = join(root, "outside.jsonl");
+  try {
+    writeFileSync(outsidePath, '{"type":"assistant"}\n');
+    const statePath = claudeTranscriptStatePath(root, "lictor-boundary-session");
+    writeFileSync(statePath, outsidePath);
+    const reportedPaths: string[] = [];
+    const tail = startTranscriptTail({
+      cwd: root,
+      sessionId: "lictor-boundary-session",
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider: { ...PROVIDERS.claude, transcriptDir: () => dir },
+      lictorTranscriptStatePath: statePath,
+      onAuthoritativeTranscriptPath: (path) => reportedPaths.push(path),
+    });
+    try {
+      await sleep(700);
+      assert.deepEqual(reportedPaths, [], "transcript directory 外の任意パスを転送しない");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
