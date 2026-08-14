@@ -25,7 +25,7 @@ export interface HookMatcher {
   hooks: HookCommand[];
 }
 export interface LictorHookSettings {
-  hooks: { PreToolUse: HookMatcher[]; SessionStart: HookMatcher[] };
+  hooks: { PreToolUse: HookMatcher[]; SessionStart: HookMatcher[]; Notification: HookMatcher[] };
 }
 
 const GUARD_REL = join(".claude", "hooks", "harness-guard.mjs");
@@ -92,5 +92,14 @@ export function buildLictorHookSettings(
     },
   ];
 
-  return { hooks: { PreToolUse: preToolUse, SessionStart: sessionStart } };
+  // Notification: Claude が人間の入力待ちで止まったときだけ発火する。 許可カードの
+  // 発火点はここ (PreToolUse だと全コマンドで出るため使えない)。 停止中の通知なので
+  // タイムアウトは短くてよい。
+  const notification: HookMatcher[] = [
+    {
+      hooks: [{ type: "command", command: "lictor cli notification-hook", timeout: 10 }],
+    },
+  ];
+
+  return { hooks: { PreToolUse: preToolUse, SessionStart: sessionStart, Notification: notification } };
 }

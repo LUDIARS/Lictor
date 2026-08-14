@@ -36,9 +36,20 @@
 | POST | `/v1/implementation-tools/review` | — | Revisor local PR を初回提出または再審査 |
 | GET | `/v1/transcript` | `?limit=N&raw=0\|1` | ラップ中 CLI の transcript（Claude/Codex JSONL）。`limit` 1–500（既定 50）。`raw=1` でパース済オブジェクト、既定は slim frame。`{path, available, total_lines, returned, frames\|lines}`。transcript-tail 非活性時 503 |
 
+## `/v1/internal/*`（hook 専用）
+
+| Method | Path | Body | 動作 |
+|---|---|---|---|
+| POST | `/v1/internal/permission-check` | `{tool_name, tool_input?, permission_mode?, guard_result?}` | PreToolUse hook の橋渡し。`auto` mode は `{deferred:true}` を即返し観測のみ記録（decision を出さない）。それ以外は従来どおり分類し、人間確認は最大 10 分待って `{decision}` |
+| POST | `/v1/internal/notification` | `{message, cwd?, claude_session_id?}` | Notification hook の橋渡し。許可待ち message のときだけ直前の観測と突き合わせて Concordia へ許可カードを出す。`{ok, kind, matched, posted, request_id}` |
+| POST | `/v1/internal/ask-question` | `{questions}` | AskUserQuestion の早期投稿 |
+| POST | `/v1/internal/permission-response` | `{request_id, decision, reason?}` | 許可回答。hook を掴んでいる要求は HTTP 応答で解決、Notification 起点の要求は TUI へ打鍵（`{ok:true, via:"keystroke"}`） |
+
 ## セキュリティ不変条件
 - 全エンドポイントは `127.0.0.1` バインド + ハンドラ先頭で loopback 検証。
-- TUI へ書き込む系（rename/slash/runtime model-effort/keys/answer）は注入前に必ずサニタイズ
+- TUI へ書き込む系（rename/slash/runtime model-effort/keys/answer/permission-response）は
+  注入前に必ずサニタイズ。許可回答は外部文字列を pty へ流さず、`permission-answer.ts` の
+  固定シーケンス（Enter / ESC）だけを使う
   （C0/DEL 除去・先頭 `/` 除去で slash チェイン防止・長さ cap）。詳細は
   [`../feature/keystroke-injection.md`](../feature/keystroke-injection.md)。
 - Concordia 依存は best-effort（落ちても 503 で劣化、stack trace を出さない）。

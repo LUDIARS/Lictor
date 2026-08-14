@@ -50,8 +50,15 @@ interface DecisionReply {
   reason?: string;
 }
 
-/** Return whether this hook must ask Lictor's coordinator for a decision. */
-export function shouldProxyPermissionRequest(input: { permission_mode?: unknown }): boolean {
+/**
+ * Return whether a sidecar reply may be turned into a decision for claude.
+ *
+ * Claude's own `auto` mode stays authoritative: we still POST the request so
+ * the sidecar can record what was attempted (that record is what the
+ * `Notification` hook later correlates against, and what the audit trail is
+ * built from), but we never speak on top of auto's verdict.
+ */
+export function mayEmitDecision(input: { permission_mode?: unknown }): boolean {
   return !usesClaudeNativeAutoPermissions(input.permission_mode);
 }
 
@@ -122,16 +129,16 @@ export async function runPermissionHook(): Promise<void> {
     // Malformed stdin — emit no decision (claude falls through).
     process.exit(0);
   }
-  if (!shouldProxyPermissionRequest(input)) {
-    // Claude's auto mode can decide this request itself. Emitting any hook
-    // decision here would replace that path with Lictor's coordinator wait.
-    return;
-  }
   if (!Number.isFinite(port) || port <= 0) {
     // No sidecar — emit no decision (claude falls through to its own perms).
     process.exit(0);
   }
   const reply = await askSidecar(port, input);
+  if (reply && !mayEmitDecision(input)) {
+    // Auto mode: the POST above was for the record. Speaking here would put
+    // Lictor's verdict in front of Claude's own, which auto mode owns.
+    process.exit(0);
+  }
   if (!reply) {
     // Sidecar unreachable / error — emit no decision (claude falls through).
     process.exit(0);

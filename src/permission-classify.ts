@@ -4,7 +4,9 @@
  * path: an incorrect notification is preferable to an unsafe auto decision.
  */
 
-export type PermissionRequestKind = "self-processable" | "user-confirmation";
+import { usesClaudeNativeAutoPermissions } from "./permission-mode.js";
+
+export type PermissionRequestKind ="record-only" | "self-processable" | "user-confirmation";
 
 export interface PermissionClassificationInput {
   permission_mode?: unknown;
@@ -40,6 +42,11 @@ function guardAllows(guardResult: unknown): boolean {
  * always requires immediate human confirmation.
  */
 export function classifyPermissionRequest(input: PermissionClassificationInput): PermissionRequestKind {
+  // Claude's own `auto` mode decides these itself, and it decides dynamically —
+  // its verdict is not derivable from settings.json. Holding the hook here would
+  // put a card in front of every tool call, so we only record the observation and
+  // let the `Notification` hook tell us which calls actually stopped for a human.
+  if (usesClaudeNativeAutoPermissions(input.permission_mode)) return "record-only";
   if (!guardAllows(input.guard_result)) return "user-confirmation";
   if (typeof input.permission_mode !== "string" || typeof input.tool_name !== "string") {
     return "user-confirmation";

@@ -81,6 +81,8 @@ async function withSidecar<T>(
     conflictState: { count: 0, titleMark: null },
     taskState: { branch: null, desc: null, updatedAt: null },
     pendingPermissions: new Map(),
+    // 監査はテストでは書かない (実運用の state dir を汚さない)。
+    permissionAudit: { path: null, write: () => {} },
     ...overrides,
   };
   const sidecar = await startSidecar(ctx);
@@ -434,4 +436,88 @@ test("/v1/internal/permission-response rejects bad decision values", async () =>
     });
     assert.equal(r.status, 400);
   });
+});
+
+test("auto mode: permission-check は decision を返さず、 Notification が来るまでカードも出ない", async () => {
+  const counter = { posts: 0 };
+  await withSidecar(
+    { concordia: countingConcordia(counter), sessionId: "s-auto" },
+    async (_ctx, port) => {
+      const check = await postPermissionCheck(port, {
+        tool_name: "Bash",
+        tool_input: { command: "git status" },
+        permission_mode: "auto",
+      });
+      const body = (await check.json()) as { deferred?: boolean; decision?: string };
+      assert.equal(body.deferred, true);
+      assert.equal(body.decision, undefined);
+      assert.equal(counter.posts, 0, "全コマンドでカードを出してはいけない");
+
+      // 実際に許可待ちで止まったときだけカードが出る。
+      const notified = await fetch(`http://127.0.0.1:${port}/v1/internal/notification`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "Claude needs your permission to use Bash" }),
+      });
+      const notifiedBody = (await notified.json()) as { posted: boolean; matched: boolean };
+      assert.equal(notifiedBody.posted, true);
+      assert.equal(notifiedBody.matched, true);
+      assert.equal(counter.posts, 1);
+    },
+  );
+});
+
+test("/v1/internal/notification: 待機催促ではカードを出さない", async () => {
+  const counter = { posts: 0 };
+  await withSidecar(
+    { concordia: countingConcordia(counter), sessionId: "s-idle" },
+    async (_ctx, port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/internal/notification`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "Claude is waiting for your input" }),
+      });
+      const body = (await res.json()) as { kind: string; posted: boolean };
+      assert.equal(body.kind, "idle");
+      assert.equal(body.posted, false);
+      assert.equal(counter.posts, 0);
+    },
+  );
+});
+
+test("permission-response: Notification 起点の要求は打鍵で回答する", async () => {
+  const counter = { posts: 0 };
+  const keys: string[] = [];
+  await withSidecar(
+    {
+      concordia: countingConcordia(counter),
+      sessionId: "s-answer",
+      ptyWriter: (data: string) => keys.push(data),
+    },
+    async (_ctx, port) => {
+      const notified = await fetch(`http://127.0.0.1:${port}/v1/internal/notification`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "Claude needs your permission to use Bash" }),
+      });
+      const { request_id: requestId } = (await notified.json()) as { request_id: string };
+
+      const answered = await fetch(`http://127.0.0.1:${port}/v1/internal/permission-response`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ request_id: requestId, decision: "allow" }),
+      });
+      assert.equal(answered.status, 200);
+      assert.deepEqual((await answered.json()) as { via: string }, { ok: true, via: "keystroke" });
+      assert.deepEqual(keys, ["\r"]);
+
+      // 未知の request_id は従来どおり 404。
+      const unknown = await fetch(`http://127.0.0.1:${port}/v1/internal/permission-response`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ request_id: "nope", decision: "allow" }),
+      });
+      assert.equal(unknown.status, 404);
+    },
+  );
 });

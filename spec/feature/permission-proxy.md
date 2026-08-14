@@ -1,53 +1,91 @@
-# 許可プロキシ（PreToolUse）
+# 許可プロキシ（PreToolUse + Notification）
 
 > Spec ID: `SPEC-PERMISSION-PROXY`
 
 ## 目的
-Claude Code の **PreToolUse 許可判断** を Concordia / Web UI 側へ橋渡しし、
-セッション横断での許可制御（auto-mode の許可範囲抑制等）を可能にする。
+Claude Code が **実際に人間の許可を待って停止したとき** だけ、 Concordia / Discord /
+Web UI に許可 UI を出し、 リモートから回答できるようにする。 併せて、 人間に聞かれずに
+通ったコマンドを監査ログに残し、 `settings.json` の漏れを可視化する。
 
-## 振る舞い（[`../../src/permission-hook.ts`](../../src/permission-hook.ts)）
-- PreToolUse hook のブリッジとして動作し、session-scoped な settings 注入で
-  許可/保留を返す。
-- Concordia Web UI 側で「保留 → 後から判断」する deferred decision に対応。
-- Legacy auto-like modes are classified only for deferring notifications about
-  harmless tools; dangerous tools stay on the human-confirmation path.
-- Claude Code の現在の `permission_mode: "auto"` は Claude 自身の許可ポリシーを
-  優先する。Lictor はこの値（前後空白・大文字小文字を無視）では**決定 JSON を出力せず**、
-  sidecar / Concordia への問い合わせもしない。他の mode は従来どおり coordinator
-  backed の許可フローに渡す。
+## なぜ発火点を変えたか
 
-## 遅延通知（self-processable）
+PreToolUse hook は **ツールを呼ぶたび** に発火する。 Claude が「これは許可が要るか」 を
+判定する前なので、 ここでカードを出すと全コマンドで出る。 実際そのため
+`conn_permission_requests_enabled` は false で封じられていた。 一方 auto mode の許可判断は
+Claude 自身が動的に行うもので、 `settings.json` の規則から静的には予測できない。
 
-**PreToolUse hook はツール実行をブロックしている**。 hook が sidecar の応答を
-待っている間、 セッションは 1 行も進めない。 したがって sidecar 側で待ってから
-判断する設計は成立しない (transcript は原理的に伸びず、 全リクエストに待ち時間が
-乗るだけ)。 実際の順序は逆にする:
+Notification hook は **Claude が人間の入力待ちで止まったとき** にしか発火しない。
+これが「設定・モードに関わらず、 本当に許可が要るもの」 の唯一の確かな合図になる。
 
-1. [`../../src/permission-classify.ts`](../../src/permission-classify.ts) が
-   legacy auto-like mode（`acceptEdits` / `bypassPermissions` / `dontAsk`）かつ
-   無害ツールを `self-processable` と分類する。現在の `auto` は hook 自体を bypass する。
-2. sidecar は **即座に** `{"deferred": true}` を返す (decision を出さない)。
-   hook は stdout に何も書かず、 Claude 自身の permission エンジンが処理する。
-   追加レイテンシはゼロ。
-3. 応答後、 [`../../src/permission-defer.ts`](../../src/permission-defer.ts) の
-   `PermissionDeferObserver` が `PERMISSION_DEFER_MS` (既定 5000ms) 後に
-   transcript を再観測する。
-   - 進んだ → legacy auto-like mode が処理した。 Concordia へは投稿しない。
-   - 進んでいない → TUI で人間に聞いていてセッションが止まっている。
-     Concordia へ投稿し、 Discord / Web UI から気づけるようにする。
-4. 観測タイマーは sidecar `close()` で全て cancel される
-   (停止後に投稿しない / タイマーを leak させない)。
-5. 投稿しなかった場合も
-   [`../../src/permission-log.ts`](../../src/permission-log.ts) が
-   stderr へ構造化ログ (`event: "permission-check"`) を残す。
+## 経路
 
-`user-confirmation` に分類された要求は従来どおり即時投稿し、
-`/v1/internal/permission-response` の応答を最大 10 分待つ (期限切れは `ask`)。
+1. **PreToolUse** — [`../../src/permission-hook.ts`](../../src/permission-hook.ts) が
+   全ツール呼び出しを sidecar へ渡す。
+   [`../../src/permission-classify.ts`](../../src/permission-classify.ts) が `auto` mode を
+   `record-only` と分類し、 sidecar は `{"deferred": true}` を即返す。
+   hook は stdout に何も書かないので Claude 自身の許可エンジンがそのまま決める
+   (追加レイテンシは loopback 往復のみ)。 観測は
+   [`../../src/permission-pending.ts`](../../src/permission-pending.ts) のリングバッファへ。
+   auto 以外の mode は従来どおり `self-processable` / `user-confirmation` に分かれる
+   (`self-processable` は [`../../src/permission-defer.ts`](../../src/permission-defer.ts) の
+   transcript 観測で「進んでいなければ通知」 を継続する)。
+2. **Notification** — [`../../src/notification-hook.ts`](../../src/notification-hook.ts) が
+   message を sidecar へ渡す。
+   [`../../src/permission-notify.ts`](../../src/permission-notify.ts) が許可待ちかどうかを
+   判定し、 許可待ちのときだけ直前の観測と突き合わせて Concordia へ投稿する。
+   - `waiting for your input` 系 (60s 無操作の催促) では投稿しない。
+   - 突き合わせに失敗しても投稿する。 コマンド名より「止まっている」 事実が重要。
+   - どのパターンにも当たらない message は監査ログに `notification-unknown` で残す
+     (文言変更を沈黙で握りつぶさない)。
+3. **回答** — Discord / Web UI の回答は
+   `/v1/internal/permission-response` に返る。 Notification 起点の要求は hook を掴んで
+   いないので、 [`../../src/permission-answer.ts`](../../src/permission-answer.ts) の
+   固定シーケンスを TUI へ打鍵する。
+   - `allow` → Enter (既定選択のまま。 選択肢構成が変わっても誤爆しない)
+   - `deny` → ESC
+   - `ask` → 打鍵しない (人間が TUI で決める)
+   - Notification 起点の回答受付はカード投稿から 10 分で失効する。既にローカルで
+     処理されたダイアログや通常の TUI へ、遅延した回答を注入しないためである。
+   - auto 以外の mode で hook を掴んでいる要求は、 従来どおり HTTP 応答で解決する。
+4. sidecar `close()` で待ち行列を捨てる (停止後に pty へ打鍵しない)。
+
+実体は [`../../src/permission-runtime.ts`](../../src/permission-runtime.ts) に集約し、
+`sidecar.ts` は HTTP の入口だけを持つ。
+
+## 監査ログ
+
+[`../../src/permission-audit.ts`](../../src/permission-audit.ts) が 1 リクエスト 1 行の
+JSONL を `<state-dir>/permission-audit-<YYYY-MM-DD>.jsonl` へ追記する
+(セッション横断・日付ごと・best-effort)。
+
+| 項目 | 内容 |
+|---|---|
+| `outcome` | `auto-allowed` / `prompted` / `answered-remote` / `notification-unmatched` / `notification-unknown` / `hook-gated` / `post-failed` |
+| `rule` | 当たった settings 規則 `{effect, rule, source}`。 `null` = **どの規則にも載っていない** |
+| `evasion` | prefix 規則を素通りしうる形の印 (`shell-wrapper` / `chained` / `substitution` / `eval` / `env-prefix` / `path-qualified`) |
+
+`rule` の判定 ([`../../src/permission-rules.ts`](../../src/permission-rules.ts)) は
+**監査注記のための近似であって許可判断の正本ではない** (正本は Claude Code)。
+判定できなければ `null` に倒す。 `outcome=auto-allowed` かつ `rule=null` の集まりが
+「settings.json に無いのに自動で通っているもの」 = 設定漏れ候補。
+
+集計は `lictor cli permission-audit [--date YYYY-MM-DD] [--file <path>]`
+([`../../src/permission-audit-report.ts`](../../src/permission-audit-report.ts))。
+
+## 運用
+
+- `Concordia` 側の `conn_permission_requests_enabled` は kill switch として残す。
+  カードが出るのは実際に停止した要求だけなので、 既定で有効にしてよい。
+- Notification hook は
+  [`../../src/harness-hook.ts`](../../src/harness-hook.ts) が per-session settings に
+  matcher 無しで登録する。
 
 ## テスト
-- `tests/permission-proxy.test.ts` — PreToolUse 許可中継の HTTP 経路。
-  注入したスケジューラと論理時計で「応答が defer window より先に返る」順序を検証。
-- `tests/permission-defer.test.ts` — 観測器の進捗判定・dispose・late callback。
-- `tests/permission-classify.test.ts` — 分類ルール。
-- `tests/permission-mode.test.ts` — Claude native `auto` の proxy 回避。
+- `tests/permission-runtime.test.ts` — 記録 → Notification → 投稿 → 打鍵回答の全経路、
+  待機催促の除外、 二重回答防止、 回答期限切れ・dispose 後の無効化、 Concordia 不達時の劣化。
+- `tests/permission-proxy.test.ts` — HTTP 経路 (auto mode で decision を返さないこと、
+  Notification 起点の回答が `via: "keystroke"` になること)。
+- `tests/permission-notification.test.ts` — message 分類・観測バッファ・打鍵列。
+- `tests/permission-rules.test.ts` — 規則マッチ・層の読み込み・迂回検出・監査集計。
+- `tests/permission-defer.test.ts` / `permission-classify.test.ts` / `permission-mode.test.ts` —
+  auto 以外の従来経路。

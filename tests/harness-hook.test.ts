@@ -73,3 +73,12 @@ test("buildLictorHookSettings: guard ありは PreToolUse(Bash) を追加", () =
   assert.ok(pre.some((m) => m.hooks[0].command === "lictor cli permission-hook"));
   assert.ok(pre.some((m) => m.hooks[0].command === "lictor cli ask-question-hook"));
 });
+
+test("buildLictorHookSettings: Notification hook を登録する (許可カードの発火点)", () => {
+  const s = buildLictorHookSettings(null, "E:\Document\Ars\.claude\state");
+  const notification = s.hooks.Notification;
+  assert.equal(notification.length, 1);
+  // 全 message に効かせるため matcher は持たない (許可待ちか否かは中で判定する)。
+  assert.equal(notification[0].matcher, undefined);
+  assert.equal(notification[0].hooks[0].command, "lictor cli notification-hook");
+});

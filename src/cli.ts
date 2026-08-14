@@ -3,6 +3,8 @@ import { runClient } from "./client.js";
 import { getProvider } from "./provider.js";
 import { runPermissionHook } from "./permission-hook.js";
 import { runAskQuestionHook } from "./ask-question-hook.js";
+import { runNotificationHook } from "./notification-hook.js";
+import { reportPermissionAudit } from "./permission-audit-report.js";
 import { runSessionIdHook } from "./session-id-hook.js";
 import { runLocalAgent } from "./local-agent/index.js";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
@@ -80,6 +82,13 @@ Usage:
                                        --escape sends ESC first.
   lictor cli {enter|down|up|esc}       One-key shortcuts (Enter, Down, Up, ESC).
 
+  lictor cli permission-audit [--date YYYY-MM-DD] [--file <path>]
+                                       Summarise the permission audit trail:
+                                       what ran without ever asking a human,
+                                       which of it matched no settings.json
+                                       rule (= allow gaps), and which commands
+                                       can slip past prefix rules.
+
   lictor --help                        Show this help.
   lictor --version | -v                Print lictor version and exit.
 
@@ -139,6 +148,17 @@ async function main() {
     // picker を絶対に止めない (内部で全エラーを飲み込み exit 0)。
     if (rest[0] === "ask-question-hook") {
       await runAskQuestionHook();
+      return;
+    }
+    // notification-hook は Claude が入力待ちで止まったときだけ来る。 出力を持たない
+    // hook なので、 失敗しても何も書かず exit 0 (セッションを更に止めない)。
+    if (rest[0] === "notification-hook") {
+      await runNotificationHook();
+      return;
+    }
+    // 監査 JSONL の集計。 sidecar 不要 (ファイルを読むだけ)。
+    if (rest[0] === "permission-audit") {
+      process.stdout.write(`${reportPermissionAudit(rest.slice(1))}\n`);
       return;
     }
     // session-id-hook も同様に LICTOR_PORT を要求せず、 失敗しても起動を止めない

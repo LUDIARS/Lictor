@@ -14,7 +14,6 @@ import type { TranscriptReadResult } from "./transcript-tail.js";
 import { extractPendingQuestions, postPendingQuestion } from "./ask-question-relay.js";
 import { parseShutdownRequest, type SessionShutdown } from "./session-shutdown.js";
 import { applyRuntimeModelEffort } from "./runtime-model-effort.js";
-import { classifyPermissionRequest } from "./permission-classify.js";
 import {
   PermissionDeferObserver,
   createRealScheduler,
@@ -23,6 +22,9 @@ import {
   type TranscriptProgressSnapshot,
 } from "./permission-defer.js";
 import { writePermissionLog } from "./permission-log.js";
+import type { PermissionPendingBuffer, PermissionObservation } from "./permission-pending.js";
+import type { PermissionAuditWriter } from "./permission-audit.js";
+import { PermissionRuntime } from "./permission-runtime.js";
 
 export type { PermissionTiming } from "./permission-defer.js";
 
@@ -79,6 +81,16 @@ export interface SidecarContext {
    */
   permissionTiming?: PermissionTiming;
   /**
+   * Notification 起点の許可カードで待っている要求。 key は request_id。
+   * `pendingPermissions` と違って hook は掴んでいないので、 回答は HTTP 応答では
+   * なく TUI への打鍵で届ける。
+   */
+  notificationPermissions?: Map<string, PermissionObservation>;
+  /** 直近の PreToolUse 観測 (Notification と突き合わせる材料)。 未指定なら既定を作る。 */
+  permissionPending?: PermissionPendingBuffer;
+  /** 許可監査の書き出し先。 未指定なら state dir 配下へ日付ごとに追記する。 */
+  permissionAudit?: PermissionAuditWriter;
+  /**
    * v0.8 active-repo relay — ホスト PostToolUse hook が `<state-dir>/active-
    * repos-<claude-sid>.txt` に書き込んだ repo root を読み取って Concordia に
    * 反映する. `lastActive` は前回 push 済の repo path、 `lastList` は前回観測
@@ -128,6 +140,7 @@ export interface Sidecar {
 
 export async function startSidecar(ctx: SidecarContext): Promise<Sidecar> {
   const permissionDefer = createPermissionDeferObserver(ctx);
+  const permissions = createPermissionRuntime(ctx);
   const server = http.createServer((req, res) => {
     const remote = req.socket.remoteAddress ?? "";
     if (remote !== "127.0.0.1" && remote !== "::1" && remote !== "::ffff:127.0.0.1") {
@@ -136,7 +149,7 @@ export async function startSidecar(ctx: SidecarContext): Promise<Sidecar> {
       return;
     }
 
-    void handle(req, res, ctx, permissionDefer).catch((err) => {
+    void handle(req, res, ctx, permissionDefer, permissions).catch((err) => {
       writeJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
     });
   });
@@ -155,6 +168,8 @@ export async function startSidecar(ctx: SidecarContext): Promise<Sidecar> {
           // Drop armed defer observations first so a closing sidecar can
           // never post a permission notice after shutdown.
           permissionDefer.dispose();
+          // 停止後に届いた回答で pty へ打鍵しない。
+          permissions.dispose();
           try {
             server.close();
           } catch {
@@ -171,6 +186,7 @@ async function handle(
   res: http.ServerResponse,
   ctx: SidecarContext,
   permissionDefer: PermissionDeferObserver,
+  permissions: PermissionRuntime,
 ): Promise<void> {
   const url = req.url ?? "";
   const method = req.method ?? "GET";
@@ -683,30 +699,23 @@ async function handle(
     if (typeof payload.tool_name !== "string") {
       return writeJson(res, 400, { error: "tool_name (string) required" });
     }
-    const requestId = randomUuid();
-    const kind = classifyPermissionRequest(payload);
+    // 分類・観測・監査は permission-runtime が持つ。 ここは HTTP の入口だけ。
+    const { kind, requestId, deferred } = permissions.observeCheck(
+      { ...payload, tool_name: payload.tool_name },
+      permissionDefer,
+    );
 
-    if (kind === "self-processable") {
+    if (deferred) {
       // The hook is holding the tool call open, so nothing can progress while
       // we think. Release it immediately WITHOUT a decision — claude's own
-      // permission engine (legacy auto-like mode) decides — and only then watch whether
-      // the session actually moved. Adding latency here would tax every
-      // auto-approved tool call.
-      permissionDefer.observe({
-        requestId,
-        toolName: payload.tool_name,
-        toolInput: payload.tool_input,
-      });
-      writePermissionLog({
-        action: "deferred",
-        request_id: requestId,
-        kind,
-        tool_name: payload.tool_name,
-        deferred_ms: permissionDefer.deferMs,
-      });
+      // permission engine decides. auto mode ではここで観測だけ積み、
+      // 実際に人間へ聞かれたかどうかは Notification hook が教えてくれる。
       return writeJson(res, 200, {
         deferred: true,
-        reason: "self-processable — delegated to claude's own permission engine",
+        reason:
+          kind === "record-only"
+            ? "auto mode — recorded; the Notification hook reports if a human is asked"
+            : "self-processable — delegated to claude's own permission engine",
       });
     }
 
@@ -771,6 +780,24 @@ async function handle(
     return writeJson(res, 200, { ok: true, count: pqs.length });
   }
 
+  // Notification hook (`lictor cli notification-hook`) の入口。 Claude が人間の
+  // 入力待ちで止まったときだけ来るので、 「settings に関わらず本当に許可が要るもの」
+  // の唯一の確かな合図になる。 セッションは既に止まっているので、 ここでの往復は
+  // 追加のレイテンシにならない。
+  if (method === "POST" && url === "/v1/internal/notification") {
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const payload = body.value as { message?: unknown };
+    const outcome = await permissions.handleNotification(payload.message);
+    return writeJson(res, 200, {
+      ok: true,
+      kind: outcome.kind,
+      matched: outcome.matched,
+      posted: outcome.posted,
+      request_id: outcome.requestId,
+    });
+  }
+
   if (method === "POST" && url === "/v1/internal/permission-response") {
     const body = await readJson(req);
     if (!body.ok) return writeJson(res, 400, { error: body.error });
@@ -783,6 +810,13 @@ async function handle(
     }
     const resolver = ctx.pendingPermissions.get(payload.request_id);
     if (!resolver) {
+      // Notification 起点の要求は hook を掴んでいない。 開いている TUI ダイアログへ
+      // 打鍵で回答する (第 2 trust boundary — 固定シーケンスのみ)。
+      const answered = permissions.answer(payload.request_id, payload.decision);
+      if (answered.handled) {
+        if (answered.error) return writeJson(res, 503, { error: answered.error });
+        return writeJson(res, 200, { ok: true, via: "keystroke" });
+      }
       return writeJson(res, 404, { error: "no pending request with that id (timed out or unknown)" });
     }
     resolver({
@@ -969,6 +1003,34 @@ function defaultPermissionTiming(): PermissionTiming {
     deferMs: PERMISSION_DEFER_MS,
     scheduler: createRealScheduler(),
   };
+}
+
+/**
+ * 許可経路の実体を組み立てる。 Concordia handle は sidecar 起動後に差さるため、
+ * runtime からは呼び出し時に ctx を読む (defer observer と同じ理由)。
+ */
+function createPermissionRuntime(ctx: SidecarContext): PermissionRuntime {
+  return new PermissionRuntime(
+    {
+      get sessionId() {
+        return ctx.sessionId;
+      },
+      get cwd() {
+        return ctx.meta.cwd;
+      },
+      get concordia() {
+        return ctx.concordia;
+      },
+      get ptyWriter() {
+        return ctx.ptyWriter;
+      },
+    },
+    {
+      pending: ctx.permissionPending,
+      audit: ctx.permissionAudit,
+      notifications: ctx.notificationPermissions,
+    },
+  );
 }
 
 /**
