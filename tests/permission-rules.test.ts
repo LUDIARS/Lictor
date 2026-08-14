@@ -11,7 +11,7 @@ import {
   type PermissionRuleLayer,
 } from "../src/permission-rules.js";
 import { detectEvasion } from "../src/permission-evasion.js";
-import { summarizeAudit, groupKey, parseAuditLines } from "../src/permission-audit-report.js";
+import { summarizeAudit, groupKey, groupLabel, parseAuditLines } from "../src/permission-audit-report.js";
 
 function layer(overrides: Partial<PermissionRuleLayer>): PermissionRuleLayer {
   return { source: "test", allow: [], deny: [], ask: [], ...overrides };
@@ -127,4 +127,10 @@ test("summarizeAudit: 後から prompt された観測を自動許可へ二重�
   assert.equal(summary.autoAllowed, 0);
   assert.equal(summary.prompted, 1);
   assert.deepEqual(summary.unruled, []);
+});
+
+test("groupLabel: Bash 以外はツール名を二重に書かない", () => {
+  // 旧実装は "Read(Read)" と出ていた (2026-08-14 の実出力)。
+  assert.equal(groupLabel({ tool: "Read", key: "Read" }), "Read");
+  assert.equal(groupLabel({ tool: "Bash", key: "git status" }), "Bash(git status)");
 });

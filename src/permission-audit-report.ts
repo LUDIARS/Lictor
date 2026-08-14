@@ -11,6 +11,11 @@ import { readFileSync } from "node:fs";
 import { resolveActiveReposDir } from "./active-repos.js";
 import { auditPath, type PermissionAuditEntry } from "./permission-audit.js";
 
+/** 表示ラベル。 Bash 以外は key がツール名そのものなので二重に書かない。 */
+export function groupLabel(group: Pick<AuditGroup, "tool" | "key">): string {
+  return group.key === group.tool ? group.tool : `${group.tool}(${group.key})`;
+}
+
 export interface AuditGroup {
   tool: string;
   /** コマンドの先頭 2 語 (それ以外のツールは summary の先頭)。 */
@@ -112,13 +117,13 @@ export function formatAuditSummary(summary: AuditSummary): string {
   lines.push("■ 規則に載っていないまま自動で通ったもの (settings.json allow 漏れ候補)");
   if (summary.unruled.length === 0) lines.push("  (なし)");
   for (const group of summary.unruled.slice(0, 20)) {
-    lines.push(`  ${String(group.count).padStart(4)}  ${group.tool}(${group.key})  例: ${group.sample.slice(0, 80)}`);
+    lines.push(`  ${String(group.count).padStart(4)}  ${groupLabel(group)}  例: ${group.sample.slice(0, 80)}`);
   }
   lines.push("");
   lines.push("■ prefix 規則を素通りしうる形");
   if (summary.evasive.length === 0) lines.push("  (なし)");
   for (const group of summary.evasive.slice(0, 20)) {
-    lines.push(`  ${String(group.count).padStart(4)}  ${group.tool}(${group.key})  [${group.evasion.join(",")}]`);
+    lines.push(`  ${String(group.count).padStart(4)}  ${groupLabel(group)}  [${group.evasion.join(",")}]`);
   }
   return lines.join("\n");
 }
