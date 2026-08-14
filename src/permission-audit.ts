@@ -4,7 +4,7 @@
  * 目的は 2 つ:
  *   1. 何が **人間に聞かれずに** 通ったのかを後から数えられるようにする。
  *   2. その中で「settings.json のどの規則にも当たっていないもの」 を抜き出し、
- *      設定の漏れ (= auto mode の動的判断だけで通っているもの) を可視化する。
+ *      設定の漏れ (= Claude 自身の判断だけで通っているもの) を可視化する。
  *
  * 書き込みは best-effort。 監査が失敗しても許可経路は絶対に止めない。
  * ファイルは日付ごとに 1 本で、 セッション横断で追記する (entry に session_id が入る)。
@@ -25,8 +25,6 @@ export type PermissionOutcome =
   | "notification-unmatched"
   /** Notification の文言が既知のどれでもない (文言変更の疑い)。 */
   | "notification-unknown"
-  /** hook を掴んだまま Cc の判断を待った (auto mode 以外)。 */
-  | "hook-gated"
   /** Cc へ出せなかった。 */
   | "post-failed";
 

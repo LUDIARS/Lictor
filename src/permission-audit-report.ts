@@ -84,7 +84,18 @@ function collect(entries: PermissionAuditEntry[]): AuditGroup[] {
 }
 
 export function summarizeAudit(entries: PermissionAuditEntry[]): AuditSummary {
-  const autoAllowed = entries.filter((e) => e.outcome === "auto-allowed");
+  // PreToolUse cannot know whether Claude will prompt, so it first appends an
+  // auto-allowed candidate. A later Notification appends another event with
+  // the same request id. Reconcile those events here so prompted operations
+  // are never reported as having run without human confirmation.
+  const requestsWithLaterOutcome = new Set(
+    entries
+      .filter((entry) => entry.outcome !== "auto-allowed" && typeof entry.request_id === "string")
+      .map((entry) => entry.request_id),
+  );
+  const autoAllowed = entries.filter(
+    (entry) => entry.outcome === "auto-allowed" && !requestsWithLaterOutcome.has(entry.request_id),
+  );
   return {
     total: entries.length,
     autoAllowed: autoAllowed.length,

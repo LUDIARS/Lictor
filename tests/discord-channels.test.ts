@@ -17,7 +17,6 @@ function ctxWithDiscord(discord: SidecarContext["meta"]["discord"]): SidecarCont
     notifyState: { mark: null, expiresAt: null },
     conflictState: { count: 0, titleMark: null },
     taskState: { branch: null, desc: null, updatedAt: null },
-    pendingPermissions: new Map(),
     activeRepoState: { lastActive: null, lastList: [] },
     getClaudeSessionId: null,
   } as unknown as SidecarContext;

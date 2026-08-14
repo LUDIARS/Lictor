@@ -14,35 +14,13 @@ import type { TranscriptReadResult } from "./transcript-tail.js";
 import { extractPendingQuestions, postPendingQuestion } from "./ask-question-relay.js";
 import { parseShutdownRequest, type SessionShutdown } from "./session-shutdown.js";
 import { applyRuntimeModelEffort } from "./runtime-model-effort.js";
-import {
-  PermissionDeferObserver,
-  createRealScheduler,
-  type DeferredPermissionRequest,
-  type PermissionTiming,
-  type TranscriptProgressSnapshot,
-} from "./permission-defer.js";
 import { writePermissionLog } from "./permission-log.js";
 import type { PermissionPendingBuffer, PermissionObservation } from "./permission-pending.js";
 import type { PermissionAuditWriter } from "./permission-audit.js";
 import { PermissionRuntime } from "./permission-runtime.js";
 
-export type { PermissionTiming } from "./permission-defer.js";
-
-export const PERMISSION_DEFER_MS = readPermissionDeferMs(process.env);
-const USER_CONFIRMATION_TIMEOUT_MS = 600_000;
-
-export function readPermissionDeferMs(env: NodeJS.ProcessEnv): number {
-  const configured = Number(env.PERMISSION_DEFER_MS ?? "5000");
-  return Number.isFinite(configured) && configured >= 0 ? configured : 5000;
-}
-
 export interface TitleState {
   manualOverride: string | null;
-}
-
-export interface PermissionDecision {
-  decision: "allow" | "deny" | "ask";
-  reason?: string;
 }
 
 export interface SidecarContext {
@@ -68,22 +46,8 @@ export interface SidecarContext {
   conflictState: ConflictState;
   taskState: TaskState;
   /**
-   * v0.6 permission proxy — map of pending PreToolUse requests waiting for
-   * a Web UI / Concordia response. Key is request_id (uuid). The promise
-   * resolver lets `/v1/internal/permission-check` block until either a
-   * matching `/v1/internal/permission-response` arrives or the timeout
-   * fires (fall back to Claude's own `ask` decision).
-   */
-  pendingPermissions: Map<string, (decision: PermissionDecision) => void>;
-  /**
-   * Injectable defer window + timer seam for the self-processable permission
-   * path. Tests supply a manual scheduler so no wall-clock time is spent.
-   */
-  permissionTiming?: PermissionTiming;
-  /**
    * Notification 起点の許可カードで待っている要求。 key は request_id。
-   * `pendingPermissions` と違って hook は掴んでいないので、 回答は HTTP 応答では
-   * なく TUI への打鍵で届ける。
+   * hook は掴まないので、 回答は HTTP 応答ではなく TUI への打鍵で届ける。
    */
   notificationPermissions?: Map<string, PermissionObservation>;
   /** 直近の PreToolUse 観測 (Notification と突き合わせる材料)。 未指定なら既定を作る。 */
@@ -139,7 +103,6 @@ export interface Sidecar {
 }
 
 export async function startSidecar(ctx: SidecarContext): Promise<Sidecar> {
-  const permissionDefer = createPermissionDeferObserver(ctx);
   const permissions = createPermissionRuntime(ctx);
   const server = http.createServer((req, res) => {
     const remote = req.socket.remoteAddress ?? "";
@@ -149,7 +112,7 @@ export async function startSidecar(ctx: SidecarContext): Promise<Sidecar> {
       return;
     }
 
-    void handle(req, res, ctx, permissionDefer, permissions).catch((err) => {
+    void handle(req, res, ctx, permissions).catch((err) => {
       writeJson(res, 500, { error: err instanceof Error ? err.message : String(err) });
     });
   });
@@ -165,10 +128,7 @@ export async function startSidecar(ctx: SidecarContext): Promise<Sidecar> {
       resolve({
         port: addr.port,
         close: () => {
-          // Drop armed defer observations first so a closing sidecar can
-          // never post a permission notice after shutdown.
-          permissionDefer.dispose();
-          // 停止後に届いた回答で pty へ打鍵しない。
+          // 停止後に届いた回答で pty へ打鍵しない (投稿済みカードも捨てる)。
           permissions.dispose();
           try {
             server.close();
@@ -185,7 +145,6 @@ async function handle(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   ctx: SidecarContext,
-  permissionDefer: PermissionDeferObserver,
   permissions: PermissionRuntime,
 ): Promise<void> {
   const url = req.url ?? "";
@@ -683,11 +642,6 @@ async function handle(
   // hook script) and by Concordia's permission-response proxy. Not for hooks
   // running inside claude (those should use /v1/title, /v1/chat, etc.).
   if (method === "POST" && url === "/v1/internal/permission-check") {
-    if (!ctx.concordia || !ctx.sessionId) {
-      // No Concordia means nobody to ask. Fall through to allow so the
-      // wrapped session keeps moving — Lictor never silently denies.
-      return writeJson(res, 200, { decision: "allow", reason: "no concordia" });
-    }
     const body = await readJson(req);
     if (!body.ok) return writeJson(res, 400, { error: body.error });
     const payload = body.value as {
@@ -699,65 +653,17 @@ async function handle(
     if (typeof payload.tool_name !== "string") {
       return writeJson(res, 400, { error: "tool_name (string) required" });
     }
-    // 分類・観測・監査は permission-runtime が持つ。 ここは HTTP の入口だけ。
-    const { kind, requestId, deferred } = permissions.observeCheck(
-      { ...payload, tool_name: payload.tool_name },
-      permissionDefer,
-    );
-
-    if (deferred) {
-      // The hook is holding the tool call open, so nothing can progress while
-      // we think. Release it immediately WITHOUT a decision — claude's own
-      // permission engine decides. auto mode ではここで観測だけ積み、
-      // 実際に人間へ聞かれたかどうかは Notification hook が教えてくれる。
-      return writeJson(res, 200, {
-        deferred: true,
-        reason:
-          kind === "record-only"
-            ? "auto mode — recorded; the Notification hook reports if a human is asked"
-            : "self-processable — delegated to claude's own permission engine",
-      });
-    }
-
-    // Post the request to Concordia so the Web UI modal can show up.
-    try {
-      await ctx.concordia.permissionRequest(ctx.sessionId, {
-        request_id: requestId,
-        tool_name: payload.tool_name,
-        tool_input: payload.tool_input,
-      });
-    } catch {
-      writePermissionLog({
-        action: "post-failed",
-        request_id: requestId,
-        kind,
-        tool_name: payload.tool_name,
-        deferred_ms: 0,
-        // Transport errors can include private endpoint details. The caller
-        // only needs to know that the coordinator was unavailable.
-        error: "permission notification failed",
-      });
-      return writeJson(res, 200, {
-        decision: "allow",
-        reason: "concordia unreachable",
-      });
-    }
-
-    writePermissionLog({
-      action: "posted-immediately",
-      request_id: requestId,
-      kind,
-      tool_name: payload.tool_name,
-      deferred_ms: 0,
+    // 観測・監査は permission-runtime が持つ。 ここは HTTP の入口だけ。
+    //
+    // hook は **絶対に掴まない**。 PreToolUse は Claude が許可判定を行う前に走るので、
+    // ここで待つと settings.json で自動許可されるはずのものまでカードになる
+    // (2026-08-14 に非 auto セッションで実害)。 実際に人間へ聞かれたかどうかは
+    // Notification hook だけが知っている。
+    permissions.observeCheck({ ...payload, tool_name: payload.tool_name });
+    return writeJson(res, 200, {
+      deferred: true,
+      reason: "recorded; the Notification hook reports if a human is actually asked",
     });
-    // ここへ来るのは human confirmation だけ。 self-processable は decision を返さずに
-    // 上で hook を解放しているので、 待ち時間の分岐は要らない。
-    const decision = await waitForPermissionDecision(ctx, requestId, {
-      timeoutMs: USER_CONFIRMATION_TIMEOUT_MS,
-      onTimeout: { decision: "ask", reason: "human confirmation timed out" },
-    });
-    writeJson(res, 200, decision);
-    return;
   }
 
   // PreToolUse(AskUserQuestion) hook (`lictor cli ask-question-hook`) が picker-open
@@ -808,23 +714,14 @@ async function handle(
     if (payload.decision !== "allow" && payload.decision !== "deny" && payload.decision !== "ask") {
       return writeJson(res, 400, { error: "decision must be 'allow', 'deny', or 'ask'" });
     }
-    const resolver = ctx.pendingPermissions.get(payload.request_id);
-    if (!resolver) {
-      // Notification 起点の要求は hook を掴んでいない。 開いている TUI ダイアログへ
-      // 打鍵で回答する (第 2 trust boundary — 固定シーケンスのみ)。
-      const answered = permissions.answer(payload.request_id, payload.decision);
-      if (answered.handled) {
-        if (answered.error) return writeJson(res, 503, { error: answered.error });
-        return writeJson(res, 200, { ok: true, via: "keystroke" });
-      }
+    // 許可カードは常に Notification 起点で、 hook は掴んでいない。 開いている TUI
+    // ダイアログへ打鍵で回答する (第 2 trust boundary — 固定シーケンスのみ)。
+    const answered = permissions.answer(payload.request_id, payload.decision);
+    if (!answered.handled) {
       return writeJson(res, 404, { error: "no pending request with that id (timed out or unknown)" });
     }
-    resolver({
-      decision: payload.decision,
-      reason: typeof payload.reason === "string" ? payload.reason : undefined,
-    });
-    writeJson(res, 200, { ok: true });
-    return;
+    if (answered.error) return writeJson(res, 503, { error: answered.error });
+    return writeJson(res, 200, { ok: true, via: "keystroke" });
   }
 
   // Concordia の session DELETE 後に呼ばれ、ラップ中の AI プロセスを終了させる。
@@ -998,13 +895,6 @@ function writeJson(res: http.ServerResponse, status: number, body: unknown): voi
   res.end(JSON.stringify(body));
 }
 
-function defaultPermissionTiming(): PermissionTiming {
-  return {
-    deferMs: PERMISSION_DEFER_MS,
-    scheduler: createRealScheduler(),
-  };
-}
-
 /**
  * 許可経路の実体を組み立てる。 Concordia handle は sidecar 起動後に差さるため、
  * runtime からは呼び出し時に ctx を読む (defer observer と同じ理由)。
@@ -1031,101 +921,6 @@ function createPermissionRuntime(ctx: SidecarContext): PermissionRuntime {
       notifications: ctx.notificationPermissions,
     },
   );
-}
-
-/**
- * Builds the observer that watches deferred self-processable requests. The
- * Concordia handles are read lazily inside the callbacks because `sessionId`
- * is assigned after the sidecar starts listening.
- */
-function createPermissionDeferObserver(ctx: SidecarContext): PermissionDeferObserver {
-  const timing = ctx.permissionTiming ?? defaultPermissionTiming();
-  return new PermissionDeferObserver({
-    deferMs: timing.deferMs,
-    scheduler: timing.scheduler,
-    readProgress: () => readTranscriptProgress(ctx),
-    onProgressed: (request) => {
-      writePermissionLog({
-        action: "suppressed-progressed",
-        request_id: request.requestId,
-        kind: "self-processable",
-        tool_name: request.toolName,
-        deferred_ms: timing.deferMs,
-      });
-    },
-    onStalled: (request) => {
-      void postDeferredPermissionNotice(ctx, request, timing.deferMs);
-    },
-  });
-}
-
-/**
- * The defer window elapsed without the session moving, which means claude is
- * asking a human in the TUI. Surface it through Concordia so someone watching
- * Discord / the Web UI can notice and attend to the local prompt. Best-effort
- * by contract.
- */
-async function postDeferredPermissionNotice(
-  ctx: SidecarContext,
-  request: DeferredPermissionRequest,
-  deferMs: number,
-): Promise<void> {
-  const concordia = ctx.concordia;
-  const sessionId = ctx.sessionId;
-  if (!concordia || !sessionId) return;
-  try {
-    await concordia.permissionRequest(sessionId, {
-      request_id: request.requestId,
-      tool_name: request.toolName,
-      tool_input: request.toolInput,
-    });
-    writePermissionLog({
-      action: "posted-after-defer",
-      request_id: request.requestId,
-      kind: "self-processable",
-      tool_name: request.toolName,
-      deferred_ms: deferMs,
-    });
-  } catch {
-    writePermissionLog({
-      action: "post-failed",
-      request_id: request.requestId,
-      kind: "self-processable",
-      tool_name: request.toolName,
-      deferred_ms: deferMs,
-      // Transport errors can include private endpoint details. The audit
-      // record only needs to distinguish a failed post from a successful one.
-      error: "permission notification failed",
-    });
-  }
-}
-
-function readTranscriptProgress(ctx: SidecarContext): TranscriptProgressSnapshot | null {
-  if (!ctx.getTranscript) return null;
-  const transcript = ctx.getTranscript(1, true);
-  return {
-    path: transcript.path,
-    totalLines: transcript.total_lines,
-    available: transcript.available,
-  };
-}
-
-async function waitForPermissionDecision(
-  ctx: SidecarContext,
-  requestId: string,
-  opts: { timeoutMs: number; onTimeout: PermissionDecision },
-): Promise<PermissionDecision> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      ctx.pendingPermissions.delete(requestId);
-      resolve(opts.onTimeout);
-    }, opts.timeoutMs);
-    ctx.pendingPermissions.set(requestId, (decision) => {
-      clearTimeout(timer);
-      ctx.pendingPermissions.delete(requestId);
-      resolve(decision);
-    });
-  });
 }
 
 interface JsonResult {

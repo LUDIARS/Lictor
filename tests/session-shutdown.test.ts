@@ -160,7 +160,6 @@ test("POST /v1/shutdown returns already instead of 500 on a second call", async 
     notifyState: { mark: null, expiresAt: null },
     conflictState: { count: 0, titleMark: null },
     taskState: { branch: null, desc: null, updatedAt: null },
-    pendingPermissions: new Map(),
     shutdown,
   } as unknown as SidecarContext;
   const sidecar = await startSidecar(ctx);

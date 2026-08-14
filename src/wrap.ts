@@ -204,7 +204,6 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     notifyState: newNotifyState(),
     conflictState: { count: 0, titleMark: null },
     taskState: newTaskState(),
-    pendingPermissions: new Map(),
     activeRepoState: { lastActive: null, lastList: [] },
     getClaudeSessionId: null,
     getTranscript: null,

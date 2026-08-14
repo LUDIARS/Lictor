@@ -29,16 +29,21 @@ specified by `SETUP-ROOT-BUILD-FRESHNESS`.
 
 ## permission-governance
 
-Claude Code's PreToolUse permission routing. This domain owns the boundary between
-Claude-native automatic permission decisions and the coordinator-backed permission
-proxy.
+Claude Code's permission routing. This domain owns the boundary between
+Claude-native permission decisions and the coordinator-backed confirmation UI.
 
-- **claude-native-auto-boundary**: normalize and recognize Claude's current
-  `permission_mode: "auto"`, then emit no hook decision so Claude Code applies its
-  own permission policy (`src/permission-hook.ts`, `src/permission-mode.ts`).
-- The coordinator-backed proxy remains responsible for every other permission mode
-  (`src/permission-hook.ts`, `src/permission-classify.ts`); it is deliberately not
-  allowed to reinterpret Claude-native `auto` as a human-confirmation request.
+- **claude-native-decision-boundary**: PreToolUse emits no hook decision in any
+  permission mode, so Claude Code always applies its own policy
+  (`src/permission-hook.ts`). The hook only records the attempted call
+  (`src/permission-pending.ts`).
+- **stopped-for-a-human trigger**: the coordinator-backed card is raised from the
+  `Notification` hook, the one signal that Claude actually stopped for a human
+  (`src/notification-hook.ts`, `src/permission-notify.ts`,
+  `src/permission-runtime.ts`). Deciding at PreToolUse instead put a card in front
+  of calls settings.json already allowed.
+- **audit trail**: every recorded call is written with the settings rule it matched
+  and any prefix-rule evasion markers (`src/permission-audit.ts`,
+  `src/permission-rules.ts`, `src/permission-evasion.ts`).
 
 The behavioral contract is [`permission-proxy.md`](./permission-proxy.md)
 (`SPEC-PERMISSION-PROXY`).

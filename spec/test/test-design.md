@@ -22,10 +22,13 @@ CI（`.github/workflows/ci.yml`）で build / typecheck / unit / smoke-sidecar �
 - **Concordia 連携**: `concordia.test.ts`（登録）、`event-reactor.test.ts`、
   `task-relay.test.ts`、`discord-channels.test.ts`、`ask-question-relay.test.ts`、
   `permission-proxy.test.ts`、`delegation-inject.test.ts`、`transcript-tail.test.ts`。
-- **許可遅延判定**: `permission-classify.test.ts`（分類ルール）、
-  `permission-defer.test.ts`（transcript 進捗判定・dispose・late callback 抑止）。
-  時間依存は実時間を待たず、スケジューラと論理時計を注入して順序を検証する
-  （hook がツールをブロックしている以上、sidecar 側で待つ設計は成立しない）。
+- **許可カードの発火点**: `permission-runtime.test.ts`（記録 → Notification → 投稿 →
+  打鍵回答の全経路・待機催促の除外・二重回答防止・回答期限）、
+  `permission-hook.test.ts`（観測専用 hook の stdout/exit 契約）、
+  `permission-notification.test.ts`（message 分類・観測バッファ・打鍵列）、
+  `permission-rules.test.ts`（監査注記の規則マッチ・迂回検出・集計）。
+  時間依存は実時間を待たず論理時計を注入する。 hook がツールをブロックしている以上、
+  sidecar 側で待って判断する設計は成立しない（記録だけして Notification を待つ）。
 - **vendored ビルド**: `build-vendored-deps.test.ts`（`dist` vs `src` の鮮度判定・
   import 時に副作用が無いこと）。実際の `npm install` / `npm run build` の起動は
   対象外なので、`npm run setup` と `bin/lictor.mjs` の自己修復経路自体は

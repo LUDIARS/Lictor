@@ -85,16 +85,17 @@ test("detectEvasion: prefix 規則を素通りしうる形に印を付ける", (
 
 test("summarizeAudit: 規則に当たらないまま自動で通ったものを数える", () => {
   const raw = [
-    { tool: "Bash", summary: "curl example.com", outcome: "auto-allowed", rule: null, evasion: [] },
-    { tool: "Bash", summary: "curl other.com", outcome: "auto-allowed", rule: null, evasion: [] },
+    { request_id: "curl-1", tool: "Bash", summary: "curl example.com", outcome: "auto-allowed", rule: null, evasion: [] },
+    { request_id: "curl-2", tool: "Bash", summary: "curl other.com", outcome: "auto-allowed", rule: null, evasion: [] },
     {
+      request_id: "git-1",
       tool: "Bash",
       summary: "git status",
       outcome: "auto-allowed",
       rule: { effect: "allow", rule: "Bash(git:*)", source: "s" },
       evasion: [],
     },
-    { tool: "Bash", summary: "bash -c x", outcome: "prompted", rule: null, evasion: ["shell-wrapper"] },
+    { request_id: "bash-1", tool: "Bash", summary: "bash -c x", outcome: "prompted", rule: null, evasion: ["shell-wrapper"] },
   ]
     .map((e) => JSON.stringify(e))
     .join("\n");
@@ -110,4 +111,20 @@ test("summarizeAudit: 規則に当たらないまま自動で通ったものを�
   assert.equal(groupKey({ tool: "Bash", summary: "git status" } as never), "git status");
   assert.equal(summary.evasive.length, 1);
   assert.equal(groupKey({ tool: "Write", summary: "src/a.ts" } as never), "Write");
+});
+
+test("summarizeAudit: 後から prompt された観測を自動許可へ二重計上しない", () => {
+  const entries = parseAuditLines(
+    [
+      { request_id: "req-1", tool: "Bash", summary: "npm test", outcome: "auto-allowed", rule: null, evasion: [] },
+      { request_id: "req-1", tool: "Bash", summary: "npm test", outcome: "prompted", rule: null, evasion: [] },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n"),
+  );
+
+  const summary = summarizeAudit(entries);
+  assert.equal(summary.autoAllowed, 0);
+  assert.equal(summary.prompted, 1);
+  assert.deepEqual(summary.unruled, []);
 });

@@ -24,7 +24,6 @@ async function withSidecar<T>(
     notifyState: { mark: null, expiresAt: null },
     conflictState: { count: 0, titleMark: null },
     taskState: { branch: null, desc: null, updatedAt: null },
-    pendingPermissions: new Map(),
     ...overrides,
   };
   const sidecar = await startSidecar(ctx);

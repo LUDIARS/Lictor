@@ -11,8 +11,11 @@ Web UI に許可 UI を出し、 リモートから回答できるようにす�
 
 PreToolUse hook は **ツールを呼ぶたび** に発火する。 Claude が「これは許可が要るか」 を
 判定する前なので、 ここでカードを出すと全コマンドで出る。 実際そのため
-`conn_permission_requests_enabled` は false で封じられていた。 一方 auto mode の許可判断は
-Claude 自身が動的に行うもので、 `settings.json` の規則から静的には予測できない。
+`conn_permission_requests_enabled` は false で封じられていた。 auto mode の許可判断は
+Claude 自身が動的に行うもので `settings.json` の規則から静的には予測できず、
+非 auto mode でも「規則で自動許可されるか」 は hook の時点では判らない
+(mode で分岐して非 auto だけ掴む折衷案も 2026-08-14 に破れた)。 だから
+**PreToolUse では mode を問わず一切判断しない**。
 
 Notification hook は **Claude が人間の入力待ちで止まったとき** にしか発火しない。
 これが「設定・モードに関わらず、 本当に許可が要るもの」 の唯一の確かな合図になる。
@@ -20,15 +23,15 @@ Notification hook は **Claude が人間の入力待ちで止まったとき** �
 ## 経路
 
 1. **PreToolUse** — [`../../src/permission-hook.ts`](../../src/permission-hook.ts) が
-   全ツール呼び出しを sidecar へ渡す。
-   [`../../src/permission-classify.ts`](../../src/permission-classify.ts) が `auto` mode を
-   `record-only` と分類し、 sidecar は `{"deferred": true}` を即返す。
-   hook は stdout に何も書かないので Claude 自身の許可エンジンがそのまま決める
-   (追加レイテンシは loopback 往復のみ)。 観測は
-   [`../../src/permission-pending.ts`](../../src/permission-pending.ts) のリングバッファへ。
-   auto 以外の mode は従来どおり `self-processable` / `user-confirmation` に分かれる
-   (`self-processable` は [`../../src/permission-defer.ts`](../../src/permission-defer.ts) の
-   transcript 観測で「進んでいなければ通知」 を継続する)。
+   全ツール呼び出しを sidecar へ渡す。 **mode を問わず decision は返さない**ので
+   Claude 自身の許可エンジンがそのまま決める (追加レイテンシは loopback 往復のみ)。
+   観測は [`../../src/permission-pending.ts`](../../src/permission-pending.ts) の
+   リングバッファへ積むだけ。
+
+   > mode で分岐して hook を掴んでいた頃は、 非 auto セッション (default /
+   > acceptEdits) で `settings.json` が自動許可するはずのコマンドにもカードが出た
+   > (2026-08-14 に実害)。 PreToolUse は Claude の許可判定より前に走るので、
+   > 「聞かれるかどうか」 はここでは原理的に判らない。
 2. **Notification** — [`../../src/notification-hook.ts`](../../src/notification-hook.ts) が
    message を sidecar へ渡す。
    [`../../src/permission-notify.ts`](../../src/permission-notify.ts) が許可待ちかどうかを
@@ -46,7 +49,6 @@ Notification hook は **Claude が人間の入力待ちで止まったとき** �
    - `ask` → 打鍵しない (人間が TUI で決める)
    - Notification 起点の回答受付はカード投稿から 10 分で失効する。既にローカルで
      処理されたダイアログや通常の TUI へ、遅延した回答を注入しないためである。
-   - auto 以外の mode で hook を掴んでいる要求は、 従来どおり HTTP 応答で解決する。
 4. sidecar `close()` で待ち行列を捨てる (停止後に pty へ打鍵しない)。
 
 実体は [`../../src/permission-runtime.ts`](../../src/permission-runtime.ts) に集約し、
@@ -54,13 +56,14 @@ Notification hook は **Claude が人間の入力待ちで止まったとき** �
 
 ## 監査ログ
 
-[`../../src/permission-audit.ts`](../../src/permission-audit.ts) が 1 リクエスト 1 行の
+[`../../src/permission-audit.ts`](../../src/permission-audit.ts) がイベントごとの
 JSONL を `<state-dir>/permission-audit-<YYYY-MM-DD>.jsonl` へ追記する
-(セッション横断・日付ごと・best-effort)。
+(セッション横断・日付ごと・best-effort)。PreToolUse 時点の `auto-allowed` は候補であり、
+同じ `request_id` に後続の Notification イベントがあれば、集計時に自動許可から除外する。
 
 | 項目 | 内容 |
 |---|---|
-| `outcome` | `auto-allowed` / `prompted` / `answered-remote` / `notification-unmatched` / `notification-unknown` / `hook-gated` / `post-failed` |
+| `outcome` | `auto-allowed` / `prompted` / `answered-remote` / `notification-unmatched` / `notification-unknown` / `post-failed` |
 | `rule` | 当たった settings 規則 `{effect, rule, source}`。 `null` = **どの規則にも載っていない** |
 | `evasion` | prefix 規則を素通りしうる形の印 (`shell-wrapper` / `chained` / `substitution` / `eval` / `env-prefix` / `path-qualified`) |
 
@@ -81,11 +84,11 @@ JSONL を `<state-dir>/permission-audit-<YYYY-MM-DD>.jsonl` へ追記する
   matcher 無しで登録する。
 
 ## テスト
+- `tests/permission-hook.test.ts` — hook プロセスが観測を送信しても stdout に decision を
+  書かないこと、不正な sidecar port でも exit 0 になること。
 - `tests/permission-runtime.test.ts` — 記録 → Notification → 投稿 → 打鍵回答の全経路、
   待機催促の除外、 二重回答防止、 回答期限切れ・dispose 後の無効化、 Concordia 不達時の劣化。
-- `tests/permission-proxy.test.ts` — HTTP 経路 (auto mode で decision を返さないこと、
-  Notification 起点の回答が `via: "keystroke"` になること)。
+- `tests/permission-proxy.test.ts` — HTTP 経路 (どの mode でも decision を返さず
+  カードも出さないこと、 Notification 起点の回答が `via: "keystroke"` になること)。
 - `tests/permission-notification.test.ts` — message 分類・観測バッファ・打鍵列。
 - `tests/permission-rules.test.ts` — 規則マッチ・層の読み込み・迂回検出・監査集計。
-- `tests/permission-defer.test.ts` / `permission-classify.test.ts` / `permission-mode.test.ts` —
-  auto 以外の従来経路。

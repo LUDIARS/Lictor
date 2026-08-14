@@ -3,26 +3,26 @@
  *
  * Spawned by claude per tool invocation when the per-session settings.json
  * (written at wrap startup) maps PreToolUse to this command. Reads the
- * standard hook input JSON on stdin, asks the local Lictor sidecar to
- * negotiate with Concordia's Web UI, then prints the claude-shaped
- * decision JSON on stdout.
+ * standard hook input JSON on stdin, hands it to the local Lictor sidecar as
+ * an *observation*, and prints nothing.
  *
- * Exit codes follow Claude's contract:
- *   0  — success, parse stdout for `hookSpecificOutput.permissionDecision`
- *   2  — blocking error (we never emit this; deny goes via decision=deny)
+ * It deliberately never emits a permission decision. PreToolUse runs BEFORE
+ * claude evaluates its own permission rules, so nothing here can tell whether
+ * the call would have been auto-approved; deciding at this point put a
+ * confirmation card in front of tool calls that settings.json already allowed
+ * (observed on a non-auto session, 2026-08-14). The `Notification` hook is the
+ * one signal that claude actually stopped for a human, so that is where cards
+ * come from — see spec/feature/permission-proxy.md.
  *
- * If LICTOR_PORT isn't set, or the sidecar is unreachable, we fall through
- * to claude's normal permission flow (no JSON on stdout) so the user
- * doesn't get stuck.
+ * The recorded observation is what the Notification hook later correlates
+ * against (to name the command on the card) and what the audit trail is built
+ * from.
  *
- * The sidecar may also answer `{"deferred": true}`, which means "I have no
- * opinion, decide it yourself". That happens for self-processable requests:
- * this hook blocks the tool call while it runs, so the sidecar releases it
- * with zero added latency and observes the outcome asynchronously instead.
+ * Exit code is always 0 and stdout is always empty: claude's own permission
+ * engine stays authoritative, and a hook failure must never block a tool call.
  */
 
 import { request } from "node:http";
-import { usesClaudeNativeAutoPermissions } from "./permission-mode.js";
 
 interface HookInput {
   tool_name?: string;
@@ -32,35 +32,8 @@ interface HookInput {
   hook_event_name?: string;
 }
 
-/** Raw sidecar reply for `/v1/internal/permission-check`. */
-interface SidecarReply {
-  decision?: "allow" | "deny" | "ask";
-  /**
-   * The sidecar classified this request as self-processable and released the
-   * hook without an opinion. We must emit nothing so claude's own permission
-   * engine handles it — the sidecar watches the outcome asynchronously.
-   */
-  deferred?: boolean;
-  reason?: string;
-}
-
-/** A reply we actually forward to claude. */
-interface DecisionReply {
-  decision: "allow" | "deny" | "ask";
-  reason?: string;
-}
-
-/**
- * Return whether a sidecar reply may be turned into a decision for claude.
- *
- * Claude's own `auto` mode stays authoritative: we still POST the request so
- * the sidecar can record what was attempted (that record is what the
- * `Notification` hook later correlates against, and what the audit trail is
- * built from), but we never speak on top of auto's verdict.
- */
-export function mayEmitDecision(input: { permission_mode?: unknown }): boolean {
-  return !usesClaudeNativeAutoPermissions(input.permission_mode);
-}
+/** Sidecar round-trip is loopback-only; cap it so a wedged sidecar can't stall the tool. */
+const POST_TIMEOUT_MS = 3000;
 
 function isHookInput(value: unknown): value is HookInput {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -75,7 +48,8 @@ async function readStdin(): Promise<string> {
   });
 }
 
-async function askSidecar(port: number, input: HookInput): Promise<DecisionReply | null> {
+/** Record the attempted tool call with the sidecar. Best-effort by contract. */
+async function recordWithSidecar(port: number, input: HookInput): Promise<void> {
   const body = JSON.stringify({
     tool_name: input.tool_name,
     tool_input: input.tool_input,
@@ -92,64 +66,42 @@ async function askSidecar(port: number, input: HookInput): Promise<DecisionReply
         headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
       },
       (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => {
-          if (res.statusCode !== 200) return resolve(null);
-          try {
-            const j = JSON.parse(Buffer.concat(chunks).toString("utf8")) as SidecarReply;
-            if (j && j.deferred === true) {
-              // Deferred: no decision on purpose, fall through to claude.
-              resolve(null);
-            } else if (j && (j.decision === "allow" || j.decision === "deny" || j.decision === "ask")) {
-              resolve({ decision: j.decision, reason: j.reason });
-            } else {
-              resolve(null);
-            }
-          } catch {
-            resolve(null);
-          }
-        });
+        res.on("data", () => {});
+        res.on("end", () => resolve());
       },
     );
-    req.on("error", () => resolve(null));
+    req.on("error", () => resolve());
+    req.setTimeout(POST_TIMEOUT_MS, () => {
+      req.destroy();
+      resolve();
+    });
     req.end(body);
   });
 }
 
 export async function runPermissionHook(): Promise<void> {
-  const port = process.env.LICTOR_PORT ? Number(process.env.LICTOR_PORT) : NaN;
-  const stdinRaw = await readStdin();
-  let input: HookInput;
   try {
-    const parsed: unknown = JSON.parse(stdinRaw);
-    if (!isHookInput(parsed)) return;
-    input = parsed;
+    const port = process.env.LICTOR_PORT ? Number(process.env.LICTOR_PORT) : NaN;
+    const stdinRaw = await readStdin();
+    let input: HookInput | null = null;
+    try {
+      const parsed: unknown = JSON.parse(stdinRaw);
+      if (isHookInput(parsed)) input = parsed;
+    } catch {
+      // Malformed stdin — nothing to record.
+    }
+    if (
+      input &&
+      typeof input.tool_name === "string" &&
+      Number.isInteger(port) &&
+      port > 0 &&
+      port <= 65_535
+    ) {
+      await recordWithSidecar(port, input);
+    }
   } catch {
-    // Malformed stdin — emit no decision (claude falls through).
-    process.exit(0);
+    // This hook is observation-only. Recording failures must not block the tool.
   }
-  if (!Number.isFinite(port) || port <= 0) {
-    // No sidecar — emit no decision (claude falls through to its own perms).
-    process.exit(0);
-  }
-  const reply = await askSidecar(port, input);
-  if (reply && !mayEmitDecision(input)) {
-    // Auto mode: the POST above was for the record. Speaking here would put
-    // Lictor's verdict in front of Claude's own, which auto mode owns.
-    process.exit(0);
-  }
-  if (!reply) {
-    // Sidecar unreachable / error — emit no decision (claude falls through).
-    process.exit(0);
-  }
-  // Emit the claude-shaped JSON on stdout.
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: reply.decision,
-      permissionDecisionReason: reply.reason ?? "",
-    },
-  }) + "\n");
+  // No stdout: claude decides. No non-zero exit: a hook error must not block.
   process.exit(0);
 }

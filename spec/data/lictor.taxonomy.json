@@ -28,14 +28,30 @@
     },
     {
       "name": "permission-governance",
-      "description": "Claude PreToolUse permission routing, with Claude-native automatic decisions kept outside Lictor's coordinator-backed proxy.",
+      "description": "Claude permission routing in which PreToolUse only records observations, Notification proves a human prompt, and fixed keystrokes relay remote answers.",
       "modules": [
         {
-          "name": "claude-native-auto-boundary",
-          "description": "Classify Claude's current auto mode and emit no proxy decision, preserving Claude Code's native permission policy.",
+          "name": "claude-native-decision-boundary",
+          "description": "Record every PreToolUse call without emitting a proxy decision in any permission mode, preserving Claude Code's native permission policy.",
           "paths": [
-            "(^|/)src/permission-(hook|classify|mode)\\.ts$",
-            "(^|/)tests/permission-(proxy|classify|mode)\\.test\\.ts$"
+            "(^|/)src/permission-(hook|pending)\\.ts$",
+            "(^|/)tests/permission-hook\\.test\\.ts$"
+          ]
+        },
+        {
+          "name": "stopped-for-a-human-trigger",
+          "description": "Raise coordinator cards only from permission-waiting Notifications and answer them through fixed, bounded-lifetime TUI keystrokes.",
+          "paths": [
+            "(^|/)src/(notification-hook|permission-(notify|runtime|answer))\\.ts$",
+            "(^|/)tests/permission-(runtime|notification|proxy)\\.test\\.ts$"
+          ]
+        },
+        {
+          "name": "permission-audit-trail",
+          "description": "Record and reconcile permission events with matched settings rules and prefix-evasion markers.",
+          "paths": [
+            "(^|/)src/permission-(audit|audit-report|rules|evasion|log)\\.ts$",
+            "(^|/)tests/permission-rules\\.test\\.ts$"
           ]
         }
       ]

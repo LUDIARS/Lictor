@@ -2,7 +2,7 @@
  * 許可ダイアログへのリモート回答 (キーストローク注入)。
  *
  * Notification 起点の許可要求では PreToolUse hook を掴んでいない
- * (auto mode では decision を返さず素通ししている)。 つまり HTTP 応答で
+ * (全 permission mode で decision を返さず素通ししている)。 つまり HTTP 応答で
  * 許可を返す経路が無く、 Discord / Web UI の回答は **開いている TUI ダイアログ**
  * へ打鍵で届けるしかない。 これは `ask-question-relay` と同じ第 2 trust boundary
  * なので、 生の外部入力を pty へ流さず、 ここで生成した固定シーケンスだけを使う。

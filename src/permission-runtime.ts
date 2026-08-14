@@ -4,8 +4,9 @@
  * sidecar.ts は HTTP の入口だけを持ち、 判断と状態はここに閉じる。
  *
  * 経路の全体像:
- *   1. PreToolUse hook が全ツール呼び出しを投げてくる。 auto mode では decision を
+ *   1. PreToolUse hook が全ツール呼び出しを投げてくる。 mode を問わず decision は
  *      返さず、 観測をリングバッファに積んで即座に解放する (レイテンシ 0)。
+ *      hook は Claude の許可判定より前に走るので、 ここでは「聞かれるか」 が判らない。
  *   2. Claude が許可待ちで止まると Notification hook が来る。 そこで初めて
  *      直前の観測と突き合わせ、 Concordia へ許可カードを出す。
  *   3. Discord / Web UI の回答は `/v1/internal/permission-response` に返る。
@@ -16,8 +17,6 @@
 
 import { randomUUID } from "node:crypto";
 import { resolveActiveReposDir } from "./active-repos.js";
-import { classifyPermissionRequest, type PermissionRequestKind } from "./permission-classify.js";
-import type { PermissionDeferObserver } from "./permission-defer.js";
 import { writePermissionLog } from "./permission-log.js";
 import { PermissionPendingBuffer, type PermissionObservation } from "./permission-pending.js";
 import { classifyNotification } from "./permission-notify.js";
@@ -50,7 +49,7 @@ export interface PermissionRuntimeOptions {
   notifications?: Map<string, PermissionObservation>;
   /** settings 層のローダ。 テストは固定値を差す。 */
   loadLayers?: (cwd: string) => PermissionRuleLayer[];
-  /** 現在時刻。通知カードの回答期限をテスト可能にする。 */
+  /** 現在時刻。観測 TTL・監査時刻・通知カードの回答期限をテスト可能にする。 */
   now?: () => number;
 }
 
@@ -62,7 +61,6 @@ export interface CheckPayload {
 }
 
 export interface CheckOutcome {
-  kind: PermissionRequestKind;
   requestId: string;
   /** true = decision を返さず hook を解放した。 */
   deferred: boolean;
@@ -75,6 +73,8 @@ export interface NotificationOutcome {
   posted: boolean;
 }
 
+const NOTIFICATION_RESPONSE_TTL_MS = 600_000;
+
 export class PermissionRuntime {
   readonly pending: PermissionPendingBuffer;
   readonly notifications: Map<string, PermissionObservation>;
@@ -84,11 +84,11 @@ export class PermissionRuntime {
   private layers: PermissionRuleLayer[] | null = null;
 
   constructor(private readonly host: PermissionHost, options: PermissionRuntimeOptions = {}) {
-    this.pending = options.pending ?? new PermissionPendingBuffer();
+    this.now = options.now ?? (() => Date.now());
+    this.pending = options.pending ?? new PermissionPendingBuffer({ now: this.now });
     this.notifications = options.notifications ?? new Map();
     this.audit = options.audit ?? createPermissionAuditWriter(resolveActiveReposDir());
     this.loadLayers = options.loadLayers ?? ((cwd) => loadPermissionLayers(cwd));
-    this.now = options.now ?? (() => Date.now());
   }
 
   /** settings 層は 1 セッション中は変わらない前提で 1 度だけ読む。 */
@@ -112,7 +112,7 @@ export class PermissionRuntime {
       ? observation.toolInput
       : {}) as Record<string, unknown>;
     this.audit.write({
-      ts: new Date().toISOString(),
+      ts: new Date(this.now()).toISOString(),
       session_id: this.host.sessionId,
       cwd: this.host.cwd,
       tool: observation.toolName,
@@ -127,49 +127,34 @@ export class PermissionRuntime {
   }
 
   /**
-   * PreToolUse の入口。 auto mode (`record-only`) では観測を積むだけで解放する。
-   * それ以外は従来どおり defer / 人間確認へ振り分ける。
+   * PreToolUse の入口。 **どの permission mode でも** 観測を積むだけで解放する。
+   *
+   * mode で分岐して hook を掴んでいた頃は、 Claude が settings.json で自動許可する
+   * はずのものにもカードが出た (2026-08-14 に非 auto セッションで実害)。 hook は
+   * Claude が許可を判定する前に走るので、 ここでは「聞かれるかどうか」 が原理的に
+   * 判らない。 判るのは Notification が来たときだけ。
    */
-  observeCheck(payload: CheckPayload, defer: PermissionDeferObserver): CheckOutcome {
+  observeCheck(payload: CheckPayload): CheckOutcome {
     const requestId = randomUUID();
-    const kind = classifyPermissionRequest(payload);
     const observation: PermissionObservation = {
       requestId,
       toolName: payload.tool_name,
       toolInput: payload.tool_input,
       permissionMode: typeof payload.permission_mode === "string" ? payload.permission_mode : null,
-      at: Date.now(),
+      at: this.now(),
     };
 
-    if (kind === "record-only") {
-      this.pending.record(observation);
-      // ここではまだ結末が判らない。 人間に聞かれたなら Notification が来て
-      // `prompted` で上書き記録される。 来なければこの行が結末になる。
-      this.record(observation, "auto-allowed");
-      writePermissionLog({
-        action: "deferred",
-        request_id: requestId,
-        kind,
-        tool_name: payload.tool_name,
-        deferred_ms: 0,
-      });
-      return { kind, requestId, deferred: true };
-    }
-
-    if (kind === "self-processable") {
-      defer.observe({ requestId, toolName: payload.tool_name, toolInput: payload.tool_input });
-      writePermissionLog({
-        action: "deferred",
-        request_id: requestId,
-        kind,
-        tool_name: payload.tool_name,
-        deferred_ms: defer.deferMs,
-      });
-      return { kind, requestId, deferred: true };
-    }
-
-    this.record(observation, "hook-gated");
-    return { kind, requestId, deferred: false };
+    this.pending.record(observation);
+    // ここではまだ結末が判らない。人間に聞かれたなら同じ request_id で
+    // `prompted` が追記され、監査レポートがこの候補を自動許可の集計から除外する。
+    this.record(observation, "auto-allowed");
+    writePermissionLog({
+      action: "deferred",
+      request_id: requestId,
+      tool_name: payload.tool_name,
+      deferred_ms: 0,
+    });
+    return { requestId, deferred: true };
   }
 
   /**
@@ -190,7 +175,7 @@ export class PermissionRuntime {
             toolName: classified.toolName ?? "unknown",
             toolInput: null,
             permissionMode: null,
-            at: Date.now(),
+            at: this.now(),
           },
           "notification-unknown",
           { message: text },
@@ -205,7 +190,7 @@ export class PermissionRuntime {
       toolName: classified.toolName ?? "unknown",
       toolInput: null,
       permissionMode: null,
-      at: Date.now(),
+      at: this.now(),
     };
 
     if (!this.host.concordia || !this.host.sessionId) {
@@ -230,7 +215,6 @@ export class PermissionRuntime {
       writePermissionLog({
         action: "post-failed",
         request_id: observation.requestId,
-        kind: "user-confirmation",
         tool_name: observation.toolName,
         deferred_ms: 0,
         error: "permission notification failed",
@@ -242,7 +226,6 @@ export class PermissionRuntime {
     writePermissionLog({
       action: "posted-immediately",
       request_id: observation.requestId,
-      kind: "user-confirmation",
       tool_name: observation.toolName,
       deferred_ms: 0,
     });
@@ -251,12 +234,12 @@ export class PermissionRuntime {
 
   /**
    * Notification 起点の要求への回答を TUI へ届ける。
-   * 対象が無ければ false (呼び出し側が hook 待ちの経路へ回す)。
+   * 対象が無ければ false (期限切れ・処理済み・未知の request id)。
    */
   answer(requestId: string, decision: unknown): { handled: boolean; error?: string } {
     const observation = this.notifications.get(requestId);
     if (!observation) return { handled: false };
-    if (this.now() - observation.at >= 600_000) {
+    if (this.now() - observation.at >= NOTIFICATION_RESPONSE_TTL_MS) {
       this.notifications.delete(requestId);
       return { handled: false };
     }
@@ -274,9 +257,8 @@ export class PermissionRuntime {
     this.host.ptyWriter(buildPermissionAnswerSequence(answer));
     this.record(observation, "answered-remote", { decision: answer });
     writePermissionLog({
-      action: "posted-after-defer",
+      action: "answered",
       request_id: requestId,
-      kind: "user-confirmation",
       tool_name: observation.toolName,
       deferred_ms: 0,
     });

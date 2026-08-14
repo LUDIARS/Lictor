@@ -1,24 +1,24 @@
 /**
- * Structured local audit trail for the PreToolUse permission proxy.
+ * 許可経路の stderr 側ログ (wrapper 自身の診断用)。
  *
- * Every permission request is recorded here, including the ones that are
- * never posted to Concordia, so the suppression behaviour stays diagnosable
- * from the wrapper's own stderr.
+ * 正本の監査証跡は `permission-audit.ts` の JSONL。 こちらは Concordia も
+ * ファイルも介さずに wrapper のログへ出るので、 「カードが出た / 出なかった」 の
+ * 挙動をその場で追える。
  */
 
-import type { PermissionRequestKind } from "./permission-classify.js";
-
 export type PermissionLogAction =
+  /** PreToolUse を記録して hook を解放した。 */
   | "deferred"
-  | "suppressed-progressed"
-  | "posted-after-defer"
+  /** 許可待ちを検知して Concordia へ投稿した。 */
   | "posted-immediately"
+  /** カードの回答を TUI へ注入した。 */
+  | "answered"
+  /** Concordia へ投稿できなかった。 */
   | "post-failed";
 
 export interface PermissionLogEntry {
   action: PermissionLogAction;
   request_id: string;
-  kind: PermissionRequestKind;
   tool_name: string;
   deferred_ms: number;
   error?: string;
