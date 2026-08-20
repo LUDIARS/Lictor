@@ -1,0 +1,14 @@
+{
+  "name": "local-agent",
+  "description": "ローカル LLM で動く軽量エージェント。 REPL、 圧縮 (compaction)、 Ollama 呼び出し、 hook 連携。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/local-agent/[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)tests/local-(?:agent-)?[a-z0-9-]+\\.test\\.ts$"
+    }
+  ]
+}

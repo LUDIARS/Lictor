@@ -1,0 +1,14 @@
+{
+  "name": "context-injection",
+  "description": "セッションへ文脈を差し込む経路。 memory / skill / delegation の注入、 注入元の判定、 保留タスクの提示、 hook からの差し込み。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/(?:memory-loader|skill-injector|delegation-inject|inject-origin|pending-tasks|harness-hook|event-reactor|conflict-watcher|fs-rpc)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)tests/(?:conflict-watcher|delegation-inject|event-reactor|fs-rpc|harness-hook|inject-origin|memory-loader|pending-tasks|skill-injector)\\.test\\.ts$"
+    }
+  ]
+}

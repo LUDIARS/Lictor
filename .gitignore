@@ -11,3 +11,6 @@ review/
 
 # ローカル依存ライブラリ (git submodule update --init でセットアップ)
 /lib/
+
+# Anatomia のローカル状態 (ドメイン定義の正本は spec/domains/)
+.anatomia/

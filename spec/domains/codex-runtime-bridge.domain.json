@@ -1,0 +1,17 @@
+{
+  "name": "codex-runtime-bridge",
+  "description": "Codex app-server との橋渡し。 セッション起動、 イベントフレームの読み取り、 provider ごとの実行時メタデータ (model / effort) の解決。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/(?:codex-app-server-client|codex-app-server-session|codex-event-frames|codex-session-bootstrap|provider)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)tests/codex-[a-z0-9-]+\\.test\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)tests/provider\\.test\\.ts$"
+    }
+  ]
+}

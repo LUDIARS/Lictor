@@ -1,7 +1,7 @@
 {
   "name": "transition-guard-example",
-  "role": "policy",
   "description": "Disabled built-in example policy. Lictor does not declare its *State helpers to be a transition-guard state machine.",
+  "role": "policy",
   "presetRules": [],
   "templateRules": []
 }

@@ -1,0 +1,14 @@
+{
+  "name": "test-support",
+  "description": "自動テストと共有テスト土台。 各ドメインの振る舞いを検証する置き場で、 プロダクト責務そのものは持たない。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)tests/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)scripts/[^/]+$"
+    }
+  ]
+}

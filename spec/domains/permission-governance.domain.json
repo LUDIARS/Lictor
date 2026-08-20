@@ -8,11 +8,14 @@
       "pathPattern": "(^|/)src/(notification-hook|permission-(hook|pending|notify|runtime|answer|audit|audit-report|rules|evasion|log))\\.ts$"
     },
     {
-      "pathPattern": "(^|/)tests/permission-(proxy|runtime|notification|rules|hook)\\.test\\.ts$"
+      "pathPattern": "(^|/)tests/permission-[a-z0-9-]+\\.test\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)src/permission-[a-z-]+\\.ts$"
     }
   ],
+  "cardTemplate": "Summarise the permission-governance domain: PreToolUse never decides (Claude Code stays authoritative in every permission mode), coordinator cards are raised only from permission-waiting Notifications and answered by bounded-lifetime fixed keystrokes, and the audit trail records what ran without a human plus which settings rule allowed it.",
   "specRefs": [
     "SPEC-PERMISSION-PROXY"
-  ],
-  "cardTemplate": "Summarise the permission-governance domain: PreToolUse never decides (Claude Code stays authoritative in every permission mode), coordinator cards are raised only from permission-waiting Notifications and answered by bounded-lifetime fixed keystrokes, and the audit trail records what ran without a human plus which settings rule allowed it."
+  ]
 }

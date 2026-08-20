@@ -1,0 +1,14 @@
+{
+  "name": "transcript-observation",
+  "description": "セッションの記録と観測。 transcript の追尾と保存、 稼働状況/コストの集計、 プロセスツリーと利用者の活動検知。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/(?:transcript-sink|transcript-tail|user-activity|process-tree|stat|cost-one-shot|osc|auto-title)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)tests/(?:transcript|stat|cost|auto-title|user-activity|process-tree)[a-z0-9-]*\\.test\\.ts$"
+    }
+  ]
+}
