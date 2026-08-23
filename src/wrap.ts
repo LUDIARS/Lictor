@@ -111,6 +111,46 @@ export function codexOriginatorMarker(sessionId: string | null): string {
   return sessionId ? `lictor:${sessionId}` : "lictor";
 }
 
+/** Headless supervisors often export TERM=dumb even though Lictor owns a PTY. */
+export function normalizePtyTerm(raw: string | undefined): string {
+  const value = raw?.trim();
+  if (!value || value.toLowerCase() === "dumb" || value.toLowerCase() === "unknown") {
+    return "xterm-256color";
+  }
+  return value;
+}
+
+/**
+ * Cc が project cwd を明示して起動した detached session だけ、provider の初回
+ * workspace trust picker を承認する。通常の端末起動では人間の確認を残す。
+ */
+export function detachedWorkspaceTrustPrompt(
+  providerName: string,
+  output: string,
+): boolean {
+  // CSI/OSC 等の描画命令を除いてから、provider 固有の十分に限定した文言を照合する。
+  // eslint-disable-next-line no-control-regex -- terminal escape sequence を意図的に対象にする
+  const plain = output
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/gu, "")
+    // cursor positioning is also the only separator between many TUI words.
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, " ")
+    // eslint-disable-next-line no-control-regex -- 残った C0 制御文字を空白へ畳む
+    .replace(/[\x00-\x1f\x7f]+/gu, " ")
+    .replace(/\s+/gu, " ");
+
+  if (providerName === "codex") {
+    return plain.includes("Do you trust the contents of this directory?")
+      && plain.includes("Yes, continue")
+      && plain.includes("No, quit");
+  }
+  if (providerName === "claude") {
+    return plain.includes("Quick safety check:")
+      && plain.includes("Yes, I trust this folder")
+      && plain.includes("No, exit");
+  }
+  return false;
+}
+
 /** Parse a positive-int env var, falling back to `fallback` when unset/invalid. */
 function envInt(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === "") return fallback;
@@ -649,6 +689,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   const isWindows = process.platform === "win32";
   const ptyFile = isWindows ? process.env.ComSpec ?? "cmd.exe" : effectiveBinary;
   const ptyArgs = isWindows ? ["/d", "/s", "/c", effectiveBinary, ...providerArgs] : providerArgs;
+  const ptyTerm = normalizePtyTerm(env.TERM);
+  const ptyEnv = { ...env, TERM: ptyTerm } as { [key: string]: string };
 
   const { cols, rows } = currentSize();
   let childExited = false;
@@ -656,11 +698,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   let child: pty.IPty;
   try {
     child = pty.spawn(ptyFile, ptyArgs, {
-      name: process.env.TERM ?? "xterm-256color",
+      name: ptyTerm,
       cols,
       rows,
       cwd: process.cwd(),
-      env: env as { [key: string]: string },
+      env: ptyEnv,
       // useConpty is on by default on Windows 10 1809+; node-pty falls back to
       // winpty otherwise. We do not override.
     });
@@ -862,6 +904,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   });
 
   // pty → real terminal stdout.
+  const autoConfirmWorkspaceTrust = Boolean(env.CONCORDIA_SPAWN_ID) && !process.stdin.isTTY;
+  let workspaceTrustPending = autoConfirmWorkspaceTrust;
+  let workspaceTrustOutput = "";
   const onData = (data: string) => {
     // First output from the wrapped CLI means its TUI is alive; arm the
     // one-shot delegation inject (fires after delayMs). Harmless when null.
@@ -870,6 +915,25 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       process.stdout.write(data);
     } catch {
       // stdout may be torn down during shutdown; ignore.
+    }
+    if (workspaceTrustPending) {
+      workspaceTrustOutput = (workspaceTrustOutput + data).slice(-32_768);
+      if (detachedWorkspaceTrustPrompt(provider.name, workspaceTrustOutput)) {
+        workspaceTrustPending = false;
+        workspaceTrustOutput = "";
+        process.stderr.write(
+          `lictor: auto-confirming ${provider.name} workspace trust for detached Concordia spawn\n`,
+        );
+        // Picker の最終描画と入力ハンドラ有効化が同じ output tick に重なるため、
+        // 即時 write は Codex/Claude の双方で Enter を取りこぼしうる。
+        setTimeout(() => {
+          try {
+            child.write("\r");
+          } catch {
+            // provider が先に終了した場合は何もしない。
+          }
+        }, 250);
+      }
     }
   };
   child.onData(onData);

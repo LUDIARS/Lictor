@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { CHILD_SESSION_ENV_KEYS, stripChildSessionEnv } from "../src/wrap.js";
+import {
+  CHILD_SESSION_ENV_KEYS,
+  detachedWorkspaceTrustPrompt,
+  normalizePtyTerm,
+  stripChildSessionEnv,
+} from "../src/wrap.js";
 import { PROVIDERS } from "../src/provider.js";
 
 // claude-desktop 由来の子セッションマーカーが wrapped claude へ再混入しないことを
@@ -14,6 +19,32 @@ const CHILD_ENV: NodeJS.ProcessEnv = {
   PATH: "/usr/bin",
   CLAUDE_CODE_OAUTH_TOKEN: "keep-me",
 };
+
+test("normalizePtyTerm: detached supervisor の dumb/空 TERM を PTY 向けに正規化", () => {
+  assert.equal(normalizePtyTerm(undefined), "xterm-256color");
+  assert.equal(normalizePtyTerm("dumb"), "xterm-256color");
+  assert.equal(normalizePtyTerm(" unknown "), "xterm-256color");
+  assert.equal(normalizePtyTerm("screen-256color"), "screen-256color");
+});
+
+test("detachedWorkspaceTrustPrompt: Codex/Claude の限定した trust picker だけを検出", () => {
+  assert.equal(
+    detachedWorkspaceTrustPrompt(
+      "codex",
+      "\u001b[3;3HDo\u001b[3;6Hyou\u001b[3;10Htrust\u001b[3;16Hthe\u001b[3;20Hcontents\u001b[3;29Hof\u001b[3;32Hthis\u001b[3;37Hdirectory? \u001b[7;1H1. Yes, continue \u001b[8;3H2. No, quit",
+    ),
+    true,
+  );
+  assert.equal(
+    detachedWorkspaceTrustPrompt(
+      "claude",
+      "Quick safety check: Is this a project? 1. Yes, I trust this folder 2. No, exit",
+    ),
+    true,
+  );
+  assert.equal(detachedWorkspaceTrustPrompt("codex", "Ask Codex to do anything"), false);
+  assert.equal(detachedWorkspaceTrustPrompt("gemini", "Yes, continue No, quit"), false);
+});
 
 test("stripChildSessionEnv(claude): 子セッションマーカーを全て除去する", () => {
   const out = stripChildSessionEnv({ ...CHILD_ENV }, PROVIDERS.claude);

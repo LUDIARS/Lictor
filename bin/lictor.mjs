@@ -28,6 +28,15 @@
 
 const CLI = "../dist/cli.js";
 
+// macOS の node-pty は外部 spawn-helper を実行する。npm の script policy で
+// install script が抑止された環境でも `posix_spawnp failed` にしない。
+try {
+  const { ensureNodePtySpawnHelperExecutable } = await import("../scripts/ensure-node-pty-helper.mjs");
+  ensureNodePtySpawnHelperExecutable();
+} catch (error) {
+  fail(error);
+}
+
 // A source checkout can move forward while ignored dist/ remains from an older
 // commit. Importing that stale CLI silently resurrects fixed relay bugs, so make
 // the build artifact current before loading any long-running module.
