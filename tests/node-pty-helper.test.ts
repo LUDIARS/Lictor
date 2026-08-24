@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureNodePtySpawnHelperExecutable } from "../scripts/ensure-node-pty-helper.mjs";
 
-test("macOS node-pty spawn-helper の実行権限を自己修復する", () => {
+test("macOS node-pty spawn-helper の実行権限を自己修復する", {
+  skip: process.platform === "win32" ? "Windows does not expose POSIX executable bits" : false,
+}, () => {
   const root = mkdtempSync(join(tmpdir(), "lictor-node-pty-"));
   try {
     const helperDir = join(root, "node_modules", "node-pty", "prebuilds", "darwin-arm64");

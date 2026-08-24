@@ -74,15 +74,23 @@ export const SESSION_END_SKILL_BODY = `# session-end
 ## 6. Lictor に shutdown を送る (最後・必須)
 
 ここまで終わったら、 Lictor に終了を通告する。 これをやらないと
-セッションプロセスが最大 30 分居座る。
+セッションプロセスが最大 30 分居座る。 通告は Castra の command runner の
+名前つき操作で行う (許可プロンプト / classifier に落とされにくい正規の実行口):
+
+    node E:/Document/Ars/command-runner.mjs lictor:shutdown
+
+ポートは環境変数 \`LICTOR_PORT\` (sidecar が刻印する) をコマンドが自分で読む。
+無い環境では、 sidecar 情報から取得した port を明示する:
+
+    node E:/Document/Ars/command-runner.mjs lictor:shutdown --port <n>
+
+この \`<n>\` は推測やハードコードで決めない。
+command runner が使えない場合のみ、 従来どおり直接 POST する:
 
     POST http://127.0.0.1:<LICTOR_PORT>/v1/shutdown  {"reason":"session-end"}
 
 Lictor が CLI プロセスの停止・ログのアーカイブ・自身の終了までを行う。
 応答が返ったらこのセッションでやることは無い。 追加の作業を始めない。
-
-\`LICTOR_PORT\` は環境変数 / 現在の sidecar 情報から取得し、推測やハードコードを
-しない。
 
 ## やらないこと
 

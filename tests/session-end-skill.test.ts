@@ -30,6 +30,19 @@ test("session-end skill: ログ保存先パスを明示", () => {
   assert.match(SESSION_END_SKILL_BODY, /session-logs\/YYYY-MM-DD\.md/);
 });
 
+test("session-end skill: command runner 経由の shutdown 手順を明示", () => {
+  assert.match(
+    SESSION_END_SKILL_BODY,
+    /^    node E:\/Document\/Ars\/command-runner\.mjs lictor:shutdown$/m,
+  );
+  assert.match(
+    SESSION_END_SKILL_BODY,
+    /^    node E:\/Document\/Ars\/command-runner\.mjs lictor:shutdown --port <n>$/m,
+  );
+  assert.match(SESSION_END_SKILL_BODY, /LICTOR_PORT/);
+  assert.match(SESSION_END_SKILL_BODY, /POST http:\/\/127\.0\.0\.1:<LICTOR_PORT>\/v1\/shutdown/);
+});
+
 test("session-end skill: renderSkillMd と組み合わせると有効な frontmatter md になる", () => {
   const md = renderSkillMd({
     name: SESSION_END_SKILL_NAME,
