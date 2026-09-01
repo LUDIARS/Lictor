@@ -43,6 +43,7 @@
 | POST | `/v1/internal/permission-check` | `{tool_name, tool_input?, permission_mode?, guard_result?}` | PreToolUse hook の橋渡し。**全 mode** で `{deferred:true}` を即返し観測のみ記録する（decision は出さない）。hook は Claude の許可判定より前に走るため、ここで判断すると settings.json が許可するものまでカードになる |
 | POST | `/v1/internal/notification` | `{message, cwd?, claude_session_id?}` | Notification hook の橋渡し。許可待ち message のときだけ直前の観測と突き合わせて Concordia へ許可カードを出す。`{ok, kind, matched, posted, request_id}` |
 | POST | `/v1/internal/ask-question` | `{questions}` | AskUserQuestion の早期投稿 |
+| POST | `/v1/internal/send-file` | `{files, caption?}` | SendUserFile 成功後の Discord 添付中継。失敗時は絶対パスと外部応答を伏せた本文へ fallback |
 | POST | `/v1/internal/permission-response` | `{request_id, decision, reason?}` | 許可回答。TUI の開いているダイアログへ打鍵（`{ok:true, via:"keystroke"}`）。カードは投稿から 10 分で失効し、遅延回答が無関係のダイアログを操作しない |
 
 ## セキュリティ不変条件

@@ -1,0 +1,26 @@
+{
+  "name": "session-artifact-relay",
+  "description": "Relay of session artifacts (files produced for the user) to the Discord session channel: PostToolUse capture of SendUserFile, payload extraction, and attachment egress through Concordia chat with a text fallback when the attachment is refused.",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/send-file-(?:hook|relay)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)tests/send-file-[a-z0-9-]+\\.test\\.ts$"
+    }
+  ],
+  "cardTemplate": "Summarise the session-artifact-relay domain: a file handed to the harness must also reach the remote viewer, or say why it could not.",
+  "mechanics": [
+    "post-tool-capture",
+    "attachment-egress",
+    "refusal-fallback"
+  ],
+  "specRefs": [
+    "SPEC-SENDFILE-RELAY-001",
+    "SPEC-SENDFILE-RELAY-002",
+    "SPEC-SENDFILE-RELAY-003"
+  ],
+  "rationale": "SendUserFile succeeds locally even when the remote viewer receives nothing, so the relay exists to close that silent gap. The relay never decides what is worth sending; it forwards what the tool was given and, when Concordia refuses the attachment, reports the reason instead of dropping it."
+}

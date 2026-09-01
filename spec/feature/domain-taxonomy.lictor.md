@@ -76,3 +76,21 @@ Lictor does not adopt Anatomia's built-in `transition-guard-example` policy. Nam
 `NotifyState` and `TaskState` are ordinary immutable state values; calls that construct them
 from `runWrapped` are not forbidden direct state mutation. The tracked local override keeps
 that example policy rule-free so it cannot block unrelated wrapper changes.
+
+## session-artifact-relay
+
+Relay of session artifacts to the Discord session channel. This domain owns the gap
+between "the harness received the file" and "the remote viewer can see it".
+
+- **post-tool-capture**: `PostToolUse` (matcher `SendUserFile`) forwards only the tool's
+  `files` / `caption` to the sidecar and never decides what is worth sending
+  (`src/send-file-hook.ts`, `src/send-file-relay.ts`).
+- **attachment-egress**: the sidecar posts the paths as Concordia chat `attachment_paths`
+  on channel `system`, stamping `session_id` and the destination channel itself
+  (`src/sidecar.ts`).
+- **refusal-fallback**: when Concordia refuses the attachment (path outside the allowed
+  roots), a public reason and file names are posted as text instead of being dropped;
+  absolute paths and upstream response bodies are not disclosed.
+
+The relay contract is specified in [`send-user-file-relay.md`](./send-user-file-relay.md)
+(`SPEC-SENDFILE-RELAY-001` .. `003`).

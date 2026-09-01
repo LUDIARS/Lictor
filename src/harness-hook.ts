@@ -1,4 +1,4 @@
-// Lictor が spawn する Claude セッションへ渡す PreToolUse hook 設定の組み立て。
+// Lictor が spawn する Claude セッションへ渡す hook 設定の組み立て。
 //
 // 既定の 2 フック (permission-hook / ask-question-hook) に加え、ワークスペース直下の
 // AIFormat harness-guard.mjs を PreToolUse(Bash) として注入する。これにより委託先
@@ -25,7 +25,12 @@ export interface HookMatcher {
   hooks: HookCommand[];
 }
 export interface LictorHookSettings {
-  hooks: { PreToolUse: HookMatcher[]; SessionStart: HookMatcher[]; Notification: HookMatcher[] };
+  hooks: {
+    PreToolUse: HookMatcher[];
+    PostToolUse: HookMatcher[];
+    SessionStart: HookMatcher[];
+    Notification: HookMatcher[];
+  };
 }
 
 const GUARD_REL = join(".claude", "hooks", "harness-guard.mjs");
@@ -78,6 +83,17 @@ export function buildLictorHookSettings(
     });
   }
 
+  // PostToolUse: SendUserFile が成功した後に発火する。 SendUserFile はローカル
+  // harness にファイルを渡すだけで Discord には何も届かないため、 ここで拾って
+  // Concordia chat の添付として中継する (これが無いと 「送ったのに届かない」 が
+  // 無言で起きる)。 ファイル読み込み + webhook 送出があるので余裕を持たせる。
+  const postToolUse: HookMatcher[] = [
+    {
+      matcher: "SendUserFile",
+      hooks: [{ type: "command", command: "lictor cli send-file-hook", timeout: 30 }],
+    },
+  ];
+
   // SessionStart: 起動 / `/clear` / resume / compact のたびに現 claude session_id と
   // 実 transcript_path を state ファイルへ記録する。 transcript-tail はこの transcript_path
   // を権威ソースに tail 対象を束縛し、 `/clear` 後の新 JSONL へも追従する (matcher 無しで
@@ -101,5 +117,12 @@ export function buildLictorHookSettings(
     },
   ];
 
-  return { hooks: { PreToolUse: preToolUse, SessionStart: sessionStart, Notification: notification } };
+  return {
+    hooks: {
+      PreToolUse: preToolUse,
+      PostToolUse: postToolUse,
+      SessionStart: sessionStart,
+      Notification: notification,
+    },
+  };
 }

@@ -82,3 +82,12 @@ test("buildLictorHookSettings: Notification hook を登録する (許可カー�
   assert.equal(notification[0].matcher, undefined);
   assert.equal(notification[0].hooks[0].command, "lictor cli notification-hook");
 });
+
+test("buildLictorHookSettings: PostToolUse に SendUserFile の中継フックを入れる", () => {
+  const s = buildLictorHookSettings(null, "E:\\Document\\Ars\\.claude\\state");
+  const post = s.hooks.PostToolUse;
+  assert.equal(post.length, 1);
+  assert.equal(post[0].matcher, "SendUserFile");
+  assert.equal(post[0].hooks[0].command, "lictor cli send-file-hook");
+  assert.equal(post[0].hooks[0].timeout, 30);
+});

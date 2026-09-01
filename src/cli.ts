@@ -4,6 +4,7 @@ import { getProvider } from "./provider.js";
 import { runPermissionHook } from "./permission-hook.js";
 import { runAskQuestionHook } from "./ask-question-hook.js";
 import { runNotificationHook } from "./notification-hook.js";
+import { runSendFileHook } from "./send-file-hook.js";
 import { reportPermissionAudit } from "./permission-audit-report.js";
 import { runSessionIdHook } from "./session-id-hook.js";
 import { runLocalAgent } from "./local-agent/index.js";
@@ -154,6 +155,12 @@ async function main() {
     // hook なので、 失敗しても何も書かず exit 0 (セッションを更に止めない)。
     if (rest[0] === "notification-hook") {
       await runNotificationHook();
+      return;
+    }
+    // send-file-hook は SendUserFile の PostToolUse。 ファイルは既に harness へ
+    // 渡った後なので、 中継に失敗しても何も書かず exit 0 (セッションを止めない)。
+    if (rest[0] === "send-file-hook") {
+      await runSendFileHook();
       return;
     }
     // 監査 JSONL の集計。 sidecar 不要 (ファイルを読むだけ)。

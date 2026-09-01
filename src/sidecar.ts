@@ -18,6 +18,12 @@ import { writePermissionLog } from "./permission-log.js";
 import type { PermissionPendingBuffer, PermissionObservation } from "./permission-pending.js";
 import type { PermissionAuditWriter } from "./permission-audit.js";
 import { PermissionRuntime } from "./permission-runtime.js";
+import {
+  buildSendFileFallbackText,
+  buildSendFileText,
+  describeSendFileRelayFailure,
+  extractSendFileRelay,
+} from "./send-file-relay.js";
 
 export interface TitleState {
   manualOverride: string | null;
@@ -702,6 +708,46 @@ async function handle(
       posted: outcome.posted,
       request_id: outcome.requestId,
     });
+  }
+
+  // SendUserFile の PostToolUse hook (`lictor cli send-file-hook`) の入口。
+  // SendUserFile 自体はローカル harness にファイルを渡すだけで Discord には
+  // 届かないため、 ここで Concordia chat の添付へ載せ替える。 channel を
+  // "system" にするのは、 egress が chitchat / consultation / 報告 を meta
+  // チャンネルへ強制送出する (forceMeta) のを避け、 セッション自身のチャンネルへ
+  // 出すため。 送信先 channel ID は sidecar が authoritative に刻印する。
+  if (method === "POST" && url === "/v1/internal/send-file") {
+    if (!ctx.concordia || !ctx.sessionId) {
+      return writeJson(res, 200, { ok: true, skipped: "no concordia" });
+    }
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const relay = extractSendFileRelay({ tool_name: "SendUserFile", tool_input: body.value });
+    if (!relay) return writeJson(res, 400, { error: "files (non-empty string[]) required" });
+    const base = {
+      channel: "system",
+      author_label: defaultAuthorLabel(ctx),
+      session_id: ctx.sessionId,
+      discord_channel_id: resolveDiscordChannelId(ctx, "session"),
+    } as const;
+    try {
+      const reply = await ctx.concordia.chat({
+        ...base,
+        text: buildSendFileText(relay),
+        attachment_paths: relay.files,
+      });
+      return writeJson(res, 200, { ok: true, relayed: relay.files.length, message: reply });
+    } catch (error) {
+      // 添付が拒否されても無言で消さず、ローカル構成や外部応答を伏せた理由と
+      // ファイル名だけは Discord に残す。二度目も失敗したら送る手段がない。
+      const reason = describeSendFileRelayFailure(error);
+      try {
+        await ctx.concordia.chat({ ...base, text: buildSendFileFallbackText(relay, reason) });
+      } catch {
+        // fallback も落ちたら送る手段が無い。 呼び出し元 (hook) は exit 0 のままで良い。
+      }
+      return writeJson(res, 502, { ok: false, error: reason });
+    }
   }
 
   if (method === "POST" && url === "/v1/internal/permission-response") {
