@@ -1,17 +1,17 @@
 {
   "name": "session-coordination",
-  "description": "Per-session CLI and sidecar control paths that declare work to Concordia, apply confirmed provider settings, and keep optional observability outside the control dependency chain.",
+  "description": "Per-session CLI and sidecar control paths that declare work to Concordia, apply provider launch settings, seed detached workspace trust only for a registered Concordia enrollment, and keep optional observability outside the control dependency chain.",
   "presetRules": [],
   "templateRules": [],
   "membership": [
     {
-      "pathPattern": "(^|/)src/(?:active-repos|cli|client|concordia|concordia-types|exit-deadline|graceful-exit|meta|provider-runtime-metadata|repo-origin|runtime-model-effort|session-archive|session-end-skill|session-id-hook|session-shutdown|session-state-authority|session-state-skill|sidecar|spawn-context|submit-watchdog|task-relay|version|vestigium|wrap)\\.ts$"
+      "pathPattern": "(^|/)src/(?:active-repos|cli|client|concordia|concordia-types|exit-deadline|graceful-exit|meta|provider-runtime-metadata|repo-origin|runtime-model-effort|session-archive|session-end-skill|session-id-hook|session-shutdown|session-state-authority|session-state-skill|sidecar|spawn-context|submit-watchdog|task-relay|version|vestigium|workspace-trust-seed|wrap)\\.ts$"
     },
     {
       "pathPattern": "(^|/)(bin/lictor|scripts/ensure-root-build)\\.mjs$"
     },
     {
-      "pathPattern": "(^|/)tests/(?:provider-runtime-metadata|root-build-freshness|runtime-model-effort|session-[a-z0-9-]+|task-relay|vestigium-optional)\\.test\\.ts$"
+      "pathPattern": "(^|/)tests/(?:provider-runtime-metadata|root-build-freshness|runtime-model-effort|session-[a-z0-9-]+|task-relay|vestigium-optional|workspace-trust-seed)\\.test\\.ts$"
     }
   ],
   "cardTemplate": "Summarise the session-coordination domain: task declaration remains available independently of optional observability artifacts.",
@@ -20,13 +20,15 @@
     "sidecar-relay",
     "optional-observability",
     "runtime-model-effort-control",
-    "root-build-freshness"
+    "root-build-freshness",
+    "enrolled-detached-workspace-trust"
   ],
   "specRefs": [
     "タスク宣言プロトコル",
     "セットアップ — 観測 (Vestigium) は best-effort",
     "SPEC-RUNTIME-MODEL-EFFORT",
-    "SETUP-ROOT-BUILD-FRESHNESS"
+    "SETUP-ROOT-BUILD-FRESHNESS",
+    "SPEC-WORKSPACE-TRUST-SEED"
   ],
-  "rationale": "Session coordination owns task declaration and application of already-confirmed provider runtime settings. Cc retains Genius judgment and confirmation UI. The executable boundary must refuse stale root build artifacts, while optional observability remains outside the control dependency chain."
+  "rationale": "Session coordination owns task declaration and provider launch settings. Persistent workspace trust is limited to non-interactive sessions with a registered Concordia enrollment; ordinary interactive sessions retain provider confirmation UI. The executable boundary must refuse stale root build artifacts, while optional observability remains outside the control dependency chain."
 }

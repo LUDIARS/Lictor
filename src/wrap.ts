@@ -5,6 +5,7 @@ import { buildAnswerSequence, sanitizeKeySeq, startSidecar, type SidecarContext,
 import { gatherBaseMeta, type Meta } from "./meta.js";
 import { resetTitle } from "./osc.js";
 import { createUserActivitySignal } from "./user-activity.js";
+import { seedWorkspaceTrust, shouldSeedWorkspaceTrust } from "./workspace-trust-seed.js";
 import { concordiaSpawnSessionMetadata } from "./spawn-context.js";
 import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./concordia.js";
 import { gatherRepoStat } from "./stat.js";
@@ -701,6 +702,27 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     );
   }
 
+  // Detached Cc spawn (人間が picker に答えられない) は、claude の初回 picker
+  // (workspace trust / MCP 確認) を起動前に ~/.claude.json へ焼いて出さなくする。
+  // 画面キーの自動承認 (下の onData) は文言変更時のフォールバック。
+  if (shouldSeedWorkspaceTrust({
+    hasRegisteredConcordiaSession: concordia !== null,
+    hasSpawnCredential: Boolean(concordia?.enrollment),
+    isInputTTY: Boolean(process.stdin.isTTY),
+    providerName: provider.name,
+  })) {
+    try {
+      const seeded = seedWorkspaceTrust({ cwd: process.cwd() });
+      if (seeded) {
+        // project path と MCP server 名はローカル構成・個人情報を含み得るためログへ出さない。
+        process.stderr.write("lictor: workspace trust pre-seeded\n");
+      }
+    } catch {
+      // fs error message はホームディレクトリ等を含み得る。詳細を端末ログへ漏らさない。
+      process.stderr.write("lictor: workspace trust pre-seed failed\n");
+    }
+  }
+
   // node-pty on Windows uses CreateProcessW which does not auto-resolve .cmd
   // extensions. CLI bins ship as `<name>.cmd` in npm global bin, so wrap via
   // cmd.exe; on POSIX, spawn the binary directly.
@@ -922,7 +944,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   });
 
   // pty → real terminal stdout.
-  const autoConfirmWorkspaceTrust = Boolean(env.CONCORDIA_SPAWN_ID) && !process.stdin.isTTY;
+  const autoConfirmWorkspaceTrust = Boolean(concordia?.enrollment)
+    && !process.stdin.isTTY;
   let workspaceTrustPending = autoConfirmWorkspaceTrust;
   let workspaceTrustOutput = "";
   const onData = (data: string) => {
