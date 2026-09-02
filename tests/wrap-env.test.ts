@@ -28,22 +28,64 @@ test("normalizePtyTerm: detached supervisor の dumb/空 TERM を PTY 向けに�
 });
 
 test("detachedWorkspaceTrustPrompt: Codex/Claude の限定した trust picker だけを検出", () => {
-  assert.equal(
+  // codex: カーソルが見えない番号選択式 UI → Enter のみ (既定 Yes)。
+  assert.deepEqual(
     detachedWorkspaceTrustPrompt(
       "codex",
       "\u001b[3;3HDo\u001b[3;6Hyou\u001b[3;10Htrust\u001b[3;16Hthe\u001b[3;20Hcontents\u001b[3;29Hof\u001b[3;32Hthis\u001b[3;37Hdirectory? \u001b[7;1H1. Yes, continue \u001b[8;3H2. No, quit",
     ),
-    true,
+    ["\r"],
   );
-  assert.equal(
+  assert.equal(detachedWorkspaceTrustPrompt("codex", "Ask Codex to do anything"), null);
+  assert.equal(detachedWorkspaceTrustPrompt("gemini", "Yes, continue No, quit"), null);
+});
+
+test("detachedWorkspaceTrustPrompt: Claude のカーソル位置と表示順から Yes を選ぶ", () => {
+  // 新しいレイアウトでは「❯ No, exit」が先頭既定。Enter だけでは No を選ぶため、
+  // 下段の Yes へ移動する。
+  assert.deepEqual(
+    detachedWorkspaceTrustPrompt(
+      "claude",
+      "Quick safety check: Is this a project you created or one you trust? "
+      + "\u001b[15;2H❯\u001b[1CNo,\u001b[1Cexit \u001b[16;4HYes,\u001b[1CI\u001b[1Ctrust\u001b[1Cthis\u001b[1Cfolder",
+    ),
+    ["\u001b[B", "\r"],
+  );
+  // カーソルが Yes にあるレイアウトなら Enter だけ。
+  assert.deepEqual(
+    detachedWorkspaceTrustPrompt(
+      "claude",
+      "Quick safety check: ❯ Yes, I trust this folder No, exit",
+    ),
+    ["\r"],
+  );
+  // カーソルがない旧番号 UI は先頭の Yes が既定なので Enter だけ。
+  assert.deepEqual(
     detachedWorkspaceTrustPrompt(
       "claude",
       "Quick safety check: Is this a project? 1. Yes, I trust this folder 2. No, exit",
     ),
-    true,
+    ["\r"],
   );
-  assert.equal(detachedWorkspaceTrustPrompt("codex", "Ask Codex to do anything"), false);
-  assert.equal(detachedWorkspaceTrustPrompt("gemini", "Yes, continue No, quit"), false);
+  // カーソルがなくても No が先頭なら下段の Yes へ移動する。
+  assert.deepEqual(
+    detachedWorkspaceTrustPrompt(
+      "claude",
+      "Quick safety check: 1. No, exit 2. Yes, I trust this folder",
+    ),
+    ["\u001b[B", "\r"],
+  );
+});
+
+test("detachedWorkspaceTrustPrompt: No が Yes より後なら上方向へ移動する", () => {
+  assert.deepEqual(
+    detachedWorkspaceTrustPrompt(
+      "codex",
+      "Do you trust the contents of this directory? "
+      + "Yes, continue ❯ No, quit",
+    ),
+    ["\u001b[A", "\r"],
+  );
 });
 
 test("stripChildSessionEnv(claude): 子セッションマーカーを全て除去する", () => {

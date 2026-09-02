@@ -123,11 +123,16 @@ export function normalizePtyTerm(raw: string | undefined): string {
 /**
  * Cc が project cwd を明示して起動した detached session だけ、provider の初回
  * workspace trust picker を承認する。通常の端末起動では人間の確認を残す。
+ *
+ * boolean でなく「Yes を選ぶために送るキー列」を返す。新しい Claude の picker は
+ * 既定カーソルが「❯ No, exit」に変わっており、 Enter だけ送ると **No を選んで
+ * Claude が即終了**する。カーソル位置 (❯) と選択肢の表示順を読み、必要な方向へ
+ * 移動してから Enter を送る。
  */
 export function detachedWorkspaceTrustPrompt(
   providerName: string,
   output: string,
-): boolean {
+): string[] | null {
   // CSI/OSC 等の描画命令を除いてから、provider 固有の十分に限定した文言を照合する。
   // eslint-disable-next-line no-control-regex -- terminal escape sequence を意図的に対象にする
   const plain = output
@@ -138,17 +143,30 @@ export function detachedWorkspaceTrustPrompt(
     .replace(/[\x00-\x1f\x7f]+/gu, " ")
     .replace(/\s+/gu, " ");
 
+  // カーソルが No 側なら、選択肢の表示順に応じた方向へ移動する。カーソルが
+  // 描画されない旧 UI では先頭選択肢が既定だったため、同じ表示順から判断する。
+  const keysFor = (yesLabel: string, noLabel: string): string[] => {
+    const yesIndex = plain.indexOf(yesLabel);
+    const noIndex = plain.indexOf(noLabel);
+    if (plain.includes(`❯ ${yesLabel}`)) return ["\r"];
+    const noIsSelected = plain.includes(`❯ ${noLabel}`) || noIndex < yesIndex;
+    if (!noIsSelected) return ["\r"];
+    return [noIndex < yesIndex ? "\x1b[B" : "\x1b[A", "\r"];
+  };
+
   if (providerName === "codex") {
-    return plain.includes("Do you trust the contents of this directory?")
+    const matched = plain.includes("Do you trust the contents of this directory?")
       && plain.includes("Yes, continue")
       && plain.includes("No, quit");
+    return matched ? keysFor("Yes, continue", "No, quit") : null;
   }
   if (providerName === "claude") {
-    return plain.includes("Quick safety check:")
+    const matched = plain.includes("Quick safety check:")
       && plain.includes("Yes, I trust this folder")
       && plain.includes("No, exit");
+    return matched ? keysFor("Yes, I trust this folder", "No, exit") : null;
   }
-  return false;
+  return null;
 }
 
 /** Parse a positive-int env var, falling back to `fallback` when unset/invalid. */
@@ -918,21 +936,26 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     }
     if (workspaceTrustPending) {
       workspaceTrustOutput = (workspaceTrustOutput + data).slice(-32_768);
-      if (detachedWorkspaceTrustPrompt(provider.name, workspaceTrustOutput)) {
+      const trustKeys = detachedWorkspaceTrustPrompt(provider.name, workspaceTrustOutput);
+      if (trustKeys) {
         workspaceTrustPending = false;
         workspaceTrustOutput = "";
         process.stderr.write(
-          `lictor: auto-confirming ${provider.name} workspace trust for detached Concordia spawn\n`,
+          `lictor: auto-confirming ${provider.name} workspace trust for detached Concordia spawn `
+          + `(keys=${trustKeys.length})\n`,
         );
         // Picker の最終描画と入力ハンドラ有効化が同じ output tick に重なるため、
-        // 即時 write は Codex/Claude の双方で Enter を取りこぼしうる。
-        setTimeout(() => {
-          try {
-            child.write("\r");
-          } catch {
-            // provider が先に終了した場合は何もしない。
-          }
-        }, 250);
+        // 即時 write は Codex/Claude の双方でキーを取りこぼしうる。 ↓ → Enter の
+        // 複数キーも同 tick に詰めず、 1 打鍵ずつ間隔を空けて送る。
+        trustKeys.forEach((key, index) => {
+          setTimeout(() => {
+            try {
+              child.write(key);
+            } catch {
+              // provider が先に終了した場合は何もしない。
+            }
+          }, 250 + index * 200);
+        });
       }
     }
   };
