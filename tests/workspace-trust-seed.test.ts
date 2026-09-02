@@ -18,17 +18,17 @@ function makeWorkspace(): { root: string; cleanup: () => void } {
   return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
-test("shouldSeedWorkspaceTrust: enrollment 付き detached Claude spawn だけを許可する", () => {
+test("shouldSeedWorkspaceTrust: enrollment 付き Claude spawn だけを許可する (TTY 有無は見ない)", () => {
+  // Cc の spawn は wt タブで stdin が TTY になるが、人間は picker に答えられない。
+  // TTY で弾くと未 trust の cwd で起動タスク注入が「No, exit」を押して即終了する。
   const eligible = {
     hasRegisteredConcordiaSession: true,
     hasSpawnCredential: true,
-    isInputTTY: false,
     providerName: "claude",
   };
   assert.equal(shouldSeedWorkspaceTrust(eligible), true);
   assert.equal(shouldSeedWorkspaceTrust({ ...eligible, hasRegisteredConcordiaSession: false }), false);
   assert.equal(shouldSeedWorkspaceTrust({ ...eligible, hasSpawnCredential: false }), false);
-  assert.equal(shouldSeedWorkspaceTrust({ ...eligible, isInputTTY: true }), false);
   assert.equal(shouldSeedWorkspaceTrust({ ...eligible, providerName: "codex" }), false);
 });
 

@@ -27,7 +27,6 @@ export interface WorkspaceTrustSeedResult {
 export interface WorkspaceTrustSeedEligibility {
   hasRegisteredConcordiaSession: boolean;
   hasSpawnCredential: boolean;
-  isInputTTY: boolean;
   providerName: string;
 }
 
@@ -47,13 +46,18 @@ export function normalizeProjectKey(cwd: string): string {
 }
 
 /**
- * 永続 trust を書けるのは Cc enrollment 付きで登録された detached Claude spawn だけ。
+ * 永続 trust を書けるのは Cc enrollment 付きで登録された Claude spawn だけ。
+ *
+ * 「Cc が起動した無人 session」の判定に stdin の TTY 有無は使わない。Cc の
+ * Windows Terminal tab は stdin が TTY でも picker に応答する人間がいない。TTY 条件で
+ * 弾くと、未 trust の cwd で起動タスクの Enter 注入が既定の「No, exit」を
+ * 選び、claude が終了する。登録済み session と enrollment (concordia_spawn_id) の
+ * 組み合わせを Cc 起動の識別子とする。
  * @implements SPEC-WORKSPACE-TRUST-SEED
  */
 export function shouldSeedWorkspaceTrust(opts: WorkspaceTrustSeedEligibility): boolean {
   return opts.hasRegisteredConcordiaSession
     && opts.hasSpawnCredential
-    && !opts.isInputTTY
     && opts.providerName === "claude";
 }
 

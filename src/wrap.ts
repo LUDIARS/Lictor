@@ -708,7 +708,6 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   if (shouldSeedWorkspaceTrust({
     hasRegisteredConcordiaSession: concordia !== null,
     hasSpawnCredential: Boolean(concordia?.enrollment),
-    isInputTTY: Boolean(process.stdin.isTTY),
     providerName: provider.name,
   })) {
     try {
@@ -944,8 +943,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   });
 
   // pty → real terminal stdout.
-  const autoConfirmWorkspaceTrust = Boolean(concordia?.enrollment)
-    && !process.stdin.isTTY;
+  // Cc spawn (enrollment 付き) は terminal tab で stdin が TTY でも picker に応答する
+  // 人間がいないため、TTY 有無では判定しない (事前焼き込みと同じ基準)。
+  const autoConfirmWorkspaceTrust = Boolean(concordia?.enrollment);
   let workspaceTrustPending = autoConfirmWorkspaceTrust;
   let workspaceTrustOutput = "";
   const onData = (data: string) => {

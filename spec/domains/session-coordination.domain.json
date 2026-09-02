@@ -1,6 +1,6 @@
 {
   "name": "session-coordination",
-  "description": "Per-session CLI and sidecar control paths that declare work to Concordia, apply provider launch settings, seed detached workspace trust only for a registered Concordia enrollment, and keep optional observability outside the control dependency chain.",
+  "description": "Per-session CLI and sidecar control paths that declare work to Concordia, apply provider launch settings, seed unattended workspace trust only for a registered Concordia enrollment, and keep optional observability outside the control dependency chain.",
   "presetRules": [],
   "templateRules": [],
   "membership": [
@@ -30,5 +30,5 @@
     "SETUP-ROOT-BUILD-FRESHNESS",
     "SPEC-WORKSPACE-TRUST-SEED"
   ],
-  "rationale": "Session coordination owns task declaration and provider launch settings. Persistent workspace trust is limited to non-interactive sessions with a registered Concordia enrollment; ordinary interactive sessions retain provider confirmation UI. The executable boundary must refuse stale root build artifacts, while optional observability remains outside the control dependency chain."
+  "rationale": "Session coordination owns task declaration and provider launch settings. Persistent workspace trust is limited to registered Cc-launched sessions with a Concordia enrollment, regardless of whether their unattended terminal reports stdin as a TTY; launches without an enrollment retain provider confirmation UI. The executable boundary must refuse stale root build artifacts, while optional observability remains outside the control dependency chain."
 }

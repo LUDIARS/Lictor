@@ -24,7 +24,7 @@ spec/
 | ドキュメント | 概要 |
 |---|---|
 | [pty-wrapping.md](feature/pty-wrapping.md) | node-pty で CLI を子プロセスとしてラップ・I/O 中継 |
-| [workspace-trust-seed.md](feature/workspace-trust-seed.md) | enrollment 付き detached Claude spawn の初回 trust 設定 |
+| [workspace-trust-seed.md](feature/workspace-trust-seed.md) | enrollment 付き Cc 起動 Claude spawn の初回 trust 設定 |
 | [terminal-title.md](feature/terminal-title.md) | OSC 0 端末タイトル制御 + 自動タイトル |
 | [keystroke-injection.md](feature/keystroke-injection.md) | TUI への slash / keys / rename / answer 注入 |
 | [concordia-integration.md](feature/concordia-integration.md) | セッション登録 / WS 生存 / stat ポーリング / chat・report・event 中継 |
