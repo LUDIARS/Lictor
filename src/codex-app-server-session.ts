@@ -1,12 +1,15 @@
 import { z } from "zod";
 import {
   CodexAppServerClient,
+  type CodexRpcNotification,
   type SpawnCodexAppServerOptions,
 } from "./codex-app-server-client.js";
 import {
   CodexEventFrameMapper,
   notificationThreadId,
   parseTurnCompletion,
+  type CodexMappedFrame,
+  type CodexTurnCompletion,
 } from "./codex-event-frames.js";
 import {
   bootstrapCodexSession,
@@ -71,6 +74,7 @@ export class CodexDelegationError extends Error {
 }
 
 const DEFAULT_TURN_TIMEOUT_MS = 4 * 60 * 60 * 1_000;
+const MAX_DEFERRED_COMPLETIONS = 16;
 
 export async function startCodexAppServerSession(
   options: StartCodexAppServerSessionOptions,
@@ -117,7 +121,17 @@ export async function runCodexDelegationTurn(
   options: RunCodexDelegationOptions,
 ): Promise<void> {
   const mapper = new CodexEventFrameMapper(session.identity.threadId);
+  // turn/start の応答を待つ間に届いた完了通知は、まだ自分のターン id を知らないので
+  // 誰のものか判定できない。 判定できないまま採用すると、 直前のターンが割り込みで
+  // 中断された `turn_aborted` を自分のターンの結果として受け取り、 モデルを呼ぶ前に
+  // 委託が死ぬ (Memoria #1355: 投入 332ms 後に turn_aborted(interrupted))。
+  // id が分かるまで保留し、 分かってから照合する。
   let activeTurnId: string | null = null;
+  const deferredCompletions: Array<{
+    completion: CodexTurnCompletion;
+    frame: CodexMappedFrame | null;
+  }> = [];
+  let deferredCompletionsOverflowed = false;
   let settled = false;
   let resolveCompletion: (() => void) | null = null;
   let rejectCompletion: ((error: Error) => void) | null = null;
@@ -126,39 +140,10 @@ export async function runCodexDelegationTurn(
     rejectCompletion = reject;
   });
 
-  const unsubscribe = session.client.onNotification((notification) => {
-    if (settled) return;
-    const observedThreadId = notificationThreadId(notification);
-    if (observedThreadId && observedThreadId !== session.identity.threadId) {
-      settled = true;
-      rejectCompletion?.(new CodexDelegationError(
-        "codex_thread_mismatch",
-        `received ${notification.method} for an unexpected Codex thread`,
-      ));
-      return;
-    }
-
-    const frame = mapper.map(notification);
-    const framePost = frame
-      ? session.sink.post(frame.kind, frame.payload)
-      : Promise.resolve(null);
-    const completion = parseTurnCompletion(notification, session.identity.threadId);
-    if (!completion) {
-      void framePost.catch((error: unknown) => {
-        if (settled) return;
-        settled = true;
-        rejectCompletion?.(asError(error));
-      });
-      return;
-    }
-    if (activeTurnId && completion.turnId !== activeTurnId) {
-      settled = true;
-      rejectCompletion?.(new CodexDelegationError(
-        "codex_thread_mismatch",
-        "turn/completed did not match the active delegation turn",
-      ));
-      return;
-    }
+  const settleCompletion = (
+    completion: CodexTurnCompletion,
+    framePost: Promise<unknown>,
+  ): void => {
     void framePost
       .then(() => session.sink.flush())
       .then(() => {
@@ -180,7 +165,53 @@ export async function runCodexDelegationTurn(
         settled = true;
         rejectCompletion?.(asError(error));
       });
-  });
+  };
+
+  const handleNotification = (notification: CodexRpcNotification): void => {
+    if (settled) return;
+    const observedThreadId = notificationThreadId(notification);
+    if (observedThreadId && observedThreadId !== session.identity.threadId) {
+      settled = true;
+      rejectCompletion?.(new CodexDelegationError(
+        "codex_thread_mismatch",
+        `received ${notification.method} for an unexpected Codex thread`,
+      ));
+      return;
+    }
+
+    const completion = parseTurnCompletion(notification, session.identity.threadId);
+    // 自分のターン id がまだ分からない = 誰の完了か判定できない。 保留する。
+    if (completion && activeTurnId === null) {
+      if (deferredCompletions.length >= MAX_DEFERRED_COMPLETIONS) {
+        deferredCompletions.length = 0;
+        deferredCompletionsOverflowed = true;
+        return;
+      }
+      if (!deferredCompletionsOverflowed) {
+        deferredCompletions.push({ completion, frame: mapper.map(notification) });
+      }
+      return;
+    }
+    // 別ターンの完了は自分の結果ではない。 割り込まれた前のターンの後始末なので、
+    // 自分のターンの完了を待ち続ける (ここで失敗にすると他人の中断で委託が死ぬ)。
+    if (completion && completion.turnId !== activeTurnId) return;
+
+    const frame = mapper.map(notification);
+    const framePost = frame
+      ? session.sink.post(frame.kind, frame.payload)
+      : Promise.resolve(null);
+    if (completion) {
+      settleCompletion(completion, framePost);
+      return;
+    }
+    void framePost.catch((error: unknown) => {
+      if (settled) return;
+      settled = true;
+      rejectCompletion?.(asError(error));
+    });
+  };
+
+  const unsubscribe = session.client.onNotification(handleNotification);
 
   try {
     let turnRaw: unknown;
@@ -211,6 +242,24 @@ export async function runCodexDelegationTurn(
       );
     }
     activeTurnId = turnResult.data.turn.id;
+    if (deferredCompletionsOverflowed) {
+      throw new CodexDelegationError(
+        "codex_turn_start_failed",
+        "Codex emitted too many turn completions before the turn/start response",
+      );
+    }
+    // id が分かったので保留分を照合する。 自分のターンのものだけ採用し、
+    // 他ターンのものは捨てる。
+    const deferredCompletion = deferredCompletions.find(
+      (deferred) => deferred.completion.turnId === activeTurnId,
+    );
+    deferredCompletions.length = 0;
+    if (deferredCompletion) {
+      const framePost = deferredCompletion.frame
+        ? session.sink.post(deferredCompletion.frame.kind, deferredCompletion.frame.payload)
+        : Promise.resolve(null);
+      settleCompletion(deferredCompletion.completion, framePost);
+    }
 
     await withTimeout(
       completionPromise,

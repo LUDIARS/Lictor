@@ -23,7 +23,13 @@ class RecordingSink implements TranscriptFrameSink {
   async flush(): Promise<void> {}
 }
 
-function createProtocolChild(options: { mismatch?: boolean } = {}): ChildProcessWithoutNullStreams {
+function createProtocolChild(
+  options: {
+    mismatch?: boolean;
+    staleTurn?: boolean;
+    completionBeforeStartResponse?: boolean;
+  } = {},
+): ChildProcessWithoutNullStreams {
   const emitter = new EventEmitter();
   const stdin = new PassThrough();
   const stdout = new PassThrough();
@@ -60,7 +66,21 @@ function createProtocolChild(options: { mismatch?: boolean } = {}): ChildProcess
           });
           break;
         case "turn/start":
+          // 割り込まれた前のターンの後始末が、 turn/start の応答より先に届く状況。
+          if (options.staleTurn) {
+            send({
+              method: "turn/completed",
+              params: { threadId: "thread-a", turn: { id: "turn-stale", status: "aborted" } },
+            });
+          }
+          if (options.completionBeforeStartResponse) {
+            send({
+              method: "turn/completed",
+              params: { threadId: "thread-a", turn: { id: "turn-a", status: "completed" } },
+            });
+          }
           send({ id: request.id, result: { turn: { id: "turn-a", status: "inProgress" } } });
+          if (options.completionBeforeStartResponse) break;
           queueMicrotask(() => {
             const threadId = options.mismatch ? "thread-b" : "thread-a";
             send({
@@ -130,6 +150,48 @@ test("App Server session persists binding before delegation frames", async () =>
   assert.deepEqual(sink.frames.map((frame) => frame.kind), ["raw", "text", "text", "raw"]);
   assert.equal((sink.frames[1].payload as { role: string }).role, "user");
   assert.equal((sink.frames[2].payload as { role: string }).role, "assistant");
+  await closeCodexAppServerSession(session);
+});
+
+test("delegation ignores another turn's abort that arrives before its own turn id", async () => {
+  // turn/start の応答前に届く完了通知は、 まだ自分のターン id を知らないので誰のものか
+  // 判定できない。 判定できないまま採用すると、 直前のターンの turn_aborted(interrupted) を
+  // 自分の結果として受け取り、 モデルを呼ぶ前に委託が死ぬ (Memoria #1355)。
+  const sink = new RecordingSink();
+  const session = await startCodexAppServerSession({
+    binary: "codex",
+    cwd: "C:\\repo",
+    env: {},
+    sink,
+    lictorVersion: "test",
+    spawnProcess: () => createProtocolChild({ staleTurn: true }),
+  });
+
+  // 他ターンの中断では失敗せず、 自分の turn-a の完了で解決する。
+  await runCodexDelegationTurn(session, { prompt: "implement it", cwd: "C:\\repo", turnTimeoutMs: 5_000 });
+  assert.equal(sink.frames.some((frame) => (
+    frame.payload as { turn_id?: string }
+  ).turn_id === "turn-stale"), false);
+
+  await closeCodexAppServerSession(session);
+});
+
+test("delegation accepts its own completion before the turn/start response", async () => {
+  const sink = new RecordingSink();
+  const session = await startCodexAppServerSession({
+    binary: "codex",
+    cwd: "C:\\repo",
+    env: {},
+    sink,
+    lictorVersion: "test",
+    spawnProcess: () => createProtocolChild({ completionBeforeStartResponse: true }),
+  });
+
+  await runCodexDelegationTurn(session, { prompt: "implement it", cwd: "C:\\repo", turnTimeoutMs: 5_000 });
+  assert.equal(sink.frames.some((frame) => (
+    frame.payload as { turn_id?: string }
+  ).turn_id === "turn-a"), true);
+
   await closeCodexAppServerSession(session);
 });
 
