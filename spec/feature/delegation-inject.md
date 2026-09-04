@@ -24,7 +24,21 @@ Codex delegation の target implementation は、App Server の stdio JSON-RPC �
   既定 2500ms の遅延 = TUI 描画待ち）に、prompt を貼付し送信する。
 - この経路は `LICTOR_CODEX_TRANSPORT=legacy` の互換退避用とし、通常経路にはしない。
 
+### SPEC-DELEGATION-LEGACY-RETRY
+
+- 貼付後 45 秒以内に対象 transcript の user フレームを観測できなければ、入力欄を
+  `Ctrl+U` で空にして prompt 全文を再送する。
+- 最大試行回数は初回を含めて 3 回とし、user フレームを観測した時点で再送を止める。
+- 初回貼付より前に観測した user フレームは、prompt 到達の証跡として扱わない。
+- 待ち時間は `LICTOR_DELEGATION_INJECT_VERIFY_MS`（0 で再送無効）、最大試行回数は
+  `LICTOR_DELEGATION_INJECT_MAX_ATTEMPTS`（1〜10）で上書きできる。不正値は既定値へ戻す。
+- Concordia 登録に失敗して transcript observer が無い場合は、到達を判定できないため
+  従来どおり 1 回だけ送信する。
+- 診断ログや PTY 書き込みの失敗は、wrapped CLI を停止させない。
+
 ## テスト
 `tests/delegation-inject.test.ts`。関連: env は [`../setup/setup.md`](../setup/setup.md)。
+実 TUI の入力受付時刻、`Ctrl+U`、transcript user フレームの連携は provider ごとの
+runtime check で確認する。
 
 旧経路の二段書きは安全な所有権束縛を提供しない。新規実装では App Server 経路を使用する。

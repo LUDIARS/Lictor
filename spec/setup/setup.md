@@ -86,6 +86,8 @@ node_modules に symlink を張るだけでビルドしない。submodule を ch
 | `LICTOR_DISABLE_CONCORDIA` | (unset) | `1` で Concordia 連携を完全に skip |
 | `CONCORDIA_DELEGATION_PROMPT_FILE` | (unset) | Concordia `/v1/delegation/invoke` が描画した prompt ファイル。TUI 起動後に貼付+送信 |
 | `LICTOR_DELEGATION_INJECT_DELAY_MS` | `2500` | 初回 pty 出力後、委託 prompt 注入までの遅延（TUI 描画待ち） |
+| `LICTOR_DELEGATION_INJECT_VERIFY_MS` | `45000` | legacy 委託 prompt 送信後の到達確認待ち。`0` で再送無効 |
+| `LICTOR_DELEGATION_INJECT_MAX_ATTEMPTS` | `3` | legacy 委託 prompt の最大送信回数（1〜10） |
 | `CLAUDE_CODE_GIT_BASH_PATH` | — | Windows で Node から claude を spawn する際に必須 |
 | `LICTOR_DEBUG` | (unset) | `1` で縮退理由 (例: Vestigium 読込失敗) を stderr へ出す |
 

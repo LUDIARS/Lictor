@@ -41,6 +41,8 @@ import { bypassesMarkerHold } from "./inject-origin.js";
 import {
   createDelegationInjector,
   delegationInjectDelayMs,
+  delegationInjectMaxAttempts,
+  delegationInjectVerifyMs,
   delegationSessionMetadata,
   loadDelegationPrompt,
   type DelegationInjector,
@@ -792,6 +794,13 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         sawSessionTurn = true;
       },
       delayMs: delegationInjectDelayMs(env),
+      // 到達確認と再送。 submit は「届いたか」 を知らないので、 transcript に user
+      // フレームが出るまでを到達の証跡にする (delegation-inject.ts の説明を参照)。
+      // Concordia 無しでは transcript tail 自体を起動しないため、観測不能な再送は無効化する。
+      verifyMs: concordia ? delegationInjectVerifyMs(env) : 0,
+      maxAttempts: delegationInjectMaxAttempts(env),
+      clearInput: (data) => child.write(data),
+      log: (m) => process.stderr.write(`lictor: ${m}\n`),
     });
   }
 
@@ -843,7 +852,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
             /* best-effort — Concordia 不通で tail を止めない */
           });
       },
-      onUserMessage: () => submitWatchdog.noteUserMessage(),
+      onUserMessage: () => {
+        submitWatchdog.noteUserMessage();
+        // 委託 prompt の到達確認も同じシグナルで行う (再送を止める)。
+        delegationInjector?.noteUserMessage();
+      },
       onPickerQuestionRegistered: (qid) => {
         // 組み込み AskUserQuestion picker が Concordia に登録された。
         // onAnswerQuestion の三分岐判定で「picker キーストローク経路」として識別するために控える。

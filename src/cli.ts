@@ -1,15 +1,4 @@
-import { runWrapped } from "./wrap.js";
-import { runClient } from "./client.js";
-import { getProvider } from "./provider.js";
-import { runPermissionHook } from "./permission-hook.js";
-import { runAskQuestionHook } from "./ask-question-hook.js";
-import { runNotificationHook } from "./notification-hook.js";
-import { runSendFileHook } from "./send-file-hook.js";
-import { reportPermissionAudit } from "./permission-audit-report.js";
-import { runSessionIdHook } from "./session-id-hook.js";
-import { runLocalAgent } from "./local-agent/index.js";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
-import { installVestigiumBestEffort } from "./vestigium.js";
 
 const HELP = `lictor — per-session sidecar for agent TUI CLIs (LUDIARS / Li)
 
@@ -127,14 +116,6 @@ async function main() {
 
   const [cmd, ...rest] = argv;
 
-  // Provider commands: `lictor claude [args]`, `lictor codex [args]`, etc.
-  const provider = getProvider(cmd);
-  if (provider) {
-    await installVestigiumBestEffort();
-    await runWrapped(rest, provider);
-    return;
-  }
-
   if (cmd === "cli") {
     // permission-hook bypasses the LICTOR_PORT requirement check in
     // runClient — it must NEVER error/exit-nonzero (claude would block
@@ -142,46 +123,68 @@ async function main() {
     // emit no JSON on stdout and exit 0 (claude falls through to its
     // built-in permission flow).
     if (rest[0] === "permission-hook") {
+      const { runPermissionHook } = await import("./permission-hook.js");
       await runPermissionHook();
       return;
     }
     // ask-question-hook も同様に LICTOR_PORT チェックを迂回し、 出力 / exit code で
     // picker を絶対に止めない (内部で全エラーを飲み込み exit 0)。
     if (rest[0] === "ask-question-hook") {
+      const { runAskQuestionHook } = await import("./ask-question-hook.js");
       await runAskQuestionHook();
       return;
     }
     // notification-hook は Claude が入力待ちで止まったときだけ来る。 出力を持たない
     // hook なので、 失敗しても何も書かず exit 0 (セッションを更に止めない)。
     if (rest[0] === "notification-hook") {
+      const { runNotificationHook } = await import("./notification-hook.js");
       await runNotificationHook();
       return;
     }
     // send-file-hook は SendUserFile の PostToolUse。 ファイルは既に harness へ
     // 渡った後なので、 中継に失敗しても何も書かず exit 0 (セッションを止めない)。
     if (rest[0] === "send-file-hook") {
+      const { runSendFileHook } = await import("./send-file-hook.js");
       await runSendFileHook();
       return;
     }
     // 監査 JSONL の集計。 sidecar 不要 (ファイルを読むだけ)。
     if (rest[0] === "permission-audit") {
+      const { reportPermissionAudit } = await import("./permission-audit-report.js");
       process.stdout.write(`${reportPermissionAudit(rest.slice(1))}\n`);
       return;
     }
     // session-id-hook も同様に LICTOR_PORT を要求せず、 失敗しても起動を止めない
     // (SessionStart hook)。 現 claude session_id を state ファイルに記録する。
     if (rest[0] === "session-id-hook") {
+      const { runSessionIdHook } = await import("./session-id-hook.js");
       await runSessionIdHook(rest.slice(1));
       return;
     }
     // `lictor local` provider が pty で起動する内部サブコマンド (= ローカル LLM REPL)。
     // 直接ユーザが叩くことも可。LICTOR_PORT 等は wrap が env で渡す。
     if (rest[0] === "local-agent") {
+      const { installVestigiumBestEffort } = await import("./vestigium.js");
+      const { runLocalAgent } = await import("./local-agent/index.js");
       await installVestigiumBestEffort();
       await runLocalAgent();
       return;
     }
+    const { runClient } = await import("./client.js");
     await runClient(rest);
+    return;
+  }
+
+  // Provider commands pull in the PTY, sidecar, transcript, and Concordia stack.
+  // Keep that graph out of short-lived hook processes, where startup is on the
+  // tool-execution critical path.
+  const { getProvider } = await import("./provider.js");
+  const provider = getProvider(cmd);
+  if (provider) {
+    const { installVestigiumBestEffort } = await import("./vestigium.js");
+    const { runWrapped } = await import("./wrap.js");
+    await installVestigiumBestEffort();
+    await runWrapped(rest, provider);
     return;
   }
 
