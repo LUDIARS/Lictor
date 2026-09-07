@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1958,6 +1958,43 @@ test("startTranscriptTail(codex): timestamp が異なる別ターンの同文 as
         (f) => f.kind === "text" && f.payload?.role === "assistant" && f.payload?.text === "了解しました",
       );
       assert.equal(repeats.length, 2, "timestamp が異なる別ターンの同文は誤って重複除去しない");
+    } finally {
+      tail.stop();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Concordia は「セッション ↔ transcript」の対応を独自に推測してはならない
+// (開始時刻の近さで突き合わせると、同一 cwd で秒差起動した 2 セッションが同じ
+// JSONL を掴む)。束縛先を決めているのは Lictor なので、tail しているパスを
+// provider を問わず権威パスとして報告する。Claude は SessionStart hook 経由で
+// 既に報告していたが、Codex には同等の hook が無く何も届いていなかった。
+test("startTranscriptTail(codex): 束縛した rollout を権威パスとして報告する", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lictor-codex-report-bound-"));
+  try {
+    const provider = { ...PROVIDERS.codex, transcriptDir: () => dir };
+    const expected = writeCodexRollout(
+      dir,
+      "rollout-2026-09-07-expected.jsonl",
+      "thread-report",
+      dir,
+    );
+    const reportedPaths: string[] = [];
+    const tail = startTranscriptTail({
+      cwd: dir,
+      sessionId: "lictor-codex-report",
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      provider,
+      expectedCodexThreadId: "thread-report",
+      onAuthoritativeTranscriptPath: (path) => reportedPaths.push(path),
+    });
+    try {
+      await sleep(700);
+      assert.equal(tail.getTranscriptPath(), expected, "expected thread へ束縛する");
+      assert.equal(reportedPaths.length, 1, "束縛したパスを一度だけ報告する");
+      assert.equal(realpathSync(reportedPaths[0]), realpathSync(expected));
     } finally {
       tail.stop();
     }

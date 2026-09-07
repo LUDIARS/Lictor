@@ -339,8 +339,22 @@ hook authority is configured but no transcript binds within
 **fail-loud** diagnostic to stderr *and* a `lictor.transcript.unresolved` Concordia
 event — a stuck relay is never silent. `seq` stays monotonic so Concordia frame
 ordering survives any rebind. Non-pin providers (codex/gemini don't fire claude
-hooks; their `lictorTranscriptStatePath` is unset) fall back to mtime discover as
-before.
+hooks; their `lictorTranscriptStatePath` is unset) bind via `discoverCodex()`,
+which locks onto the `session_meta` `session_id` (or the rollout filename uuid for
+local-LLM providers) and never descends to a different session — mtime only ranks
+candidates that already passed that lock.
+
+**Reporting the bound path back to Concordia.** Whichever authority decided the
+binding, `reportBoundPath()` forwards the path Lictor is *actually* tailing to
+`onAuthoritativeTranscriptPath` → `PATCH /v1/sessions/:id { transcript_path }`,
+once per distinct path. Previously only `maybeRebind()` reported, so codex sessions
+left `transcript_path` null and Concordia had to pair sessions to JSONLs by
+**start-time proximity** — which mis-paired two sessions launched seconds apart in
+the same cwd. Lictor is the only component that knows the binding, so it states it
+and Concordia stops guessing. Every reported path goes through
+`safeTranscriptPath()`: realpath'd, `.jsonl`, and inside the provider's transcript
+directory, so a hook-supplied (register-API-originated) path can't widen
+Concordia's reads beyond the provider tree.
 
 ### Submit watchdog (forced Enter)
 

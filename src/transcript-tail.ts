@@ -319,11 +319,19 @@ export interface TranscriptTailOptions {
    */
   lictorTranscriptStatePath?: string | null;
   /**
-   * SessionStart hook が報告した権威 transcript_path を観測するたび (初回確定 /
-   * `/clear` ローテート) に 1 パスにつき 1 度だけ呼ぶ。 wrap.ts はこれを Concordia の
+   * 「いま実際に tail している JSONL」 を束縛するたび (初回確定 / `/clear` ローテート /
+   * stall 復帰) に 1 パスにつき 1 度だけ呼ぶ。 wrap.ts はこれを Concordia の
    * `PATCH /v1/sessions/:id { transcript_path }` へ best-effort 転送し、 Concordia 側の
    * コンテキスト推定 (cost/context-estimate.ts) が時刻マッチ推測ではなく実パスを
    * 読めるようにする (起動直後に他セッションの transcript を拾う誤計算の根治)。
+   *
+   * 束縛先の決め方は provider ごとに違う (claude=SessionStart hook の権威 transcript_path /
+   * codex=session_meta の session_id 施錠 / ローカル LLM=filename 施錠) が、 報告経路は
+   * どれも共通でここを通る。 hook を持たない provider (codex) でも報告が届くのが要点で、
+   * これにより Concordia は「セッション ↔ transcript」 を自前で推測しなくてよくなる。
+   *
+   * 渡すパスは必ず provider の transcript directory 配下に実在する `.jsonl` の実体パス
+   * (realpath 済) — 呼び出し側で検証済みなので、 受け手は追加検証なしに読んでよい。
    */
   onAuthoritativeTranscriptPath?: (path: string) => void;
   /**
@@ -475,8 +483,57 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     } catch { /* best-effort */ }
   };
 
+  /**
+   * transcript ディレクトリ配下に実在する `.jsonl` であることを確認して実体パスを返す。
+   * 外へ報告するパスは必ずここを通す — hook (= register API 由来) が任意パスを
+   * 報告してきても、 Concordia の読み取りを provider 正本ツリーの外へ広げない。
+   * realpath により directory 内の symlink を経由した脱出も拒否する。
+   */
+  const safeTranscriptPath = (path: string): string | null => {
+    if (!dir) return null;
+    try {
+      const realDir = realpathSync(dir);
+      const realPath = realpathSync(path);
+      const rel = relative(realDir, realPath);
+      if (!statSync(realPath).isFile()) return null;
+      if (!realPath.endsWith(".jsonl")) return null;
+      if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+      return realPath;
+    } catch {
+      // hook が先にパスを報告して JSONL が後から作られる通常ケースもここに入る。
+      return null;
+    }
+  };
+
+  /**
+   * 「いま実際に tail している JSONL」 を権威パスとして外へ通知する (パスごとに 1 度)。
+   *
+   * Claude は SessionStart hook が実 transcript_path を報告するので maybeRebind から
+   * 通知できるが、 Codex には同等の hook が無く、 これまで Concordia へは何も届いて
+   * いなかった (実測: codex-cli セッション 285 本すべて transcript_path が null)。
+   * その結果 Concordia 側はセッションと JSONL を **開始時刻の近さ** で突き合わせる
+   * 独自ロジックを持たざるを得ず、 同一 cwd で同時に起動した 2 セッションが同じ
+   * transcript を掴む取り違えが起きていた (直近 5 日の claude セッション 148 本中 18 本、
+   * うち 2 組は秒差起動で同一ファイルを共有)。
+   *
+   * 束縛先は provider ごとの権威 (Claude=hook / Codex=App Server thread / ローカル LLM=
+   * filename 施錠) で既に決まっている。 その結果を素直に報告すれば、 Concordia は推測を
+   * 一切持たずに済む。
+   */
+  const reportBoundPath = (path: string): void => {
+    const safe = safeTranscriptPath(path);
+    if (!safe || safe === reportedAuthoritativePath) return;
+    reportedAuthoritativePath = safe;
+    try {
+      opts.onAuthoritativeTranscriptPath?.(safe);
+    } catch {
+      /* best-effort — 報告失敗で tail を止めない */
+    }
+  };
+
   // 束縛先パスを差し替える共通処理 (offset/pending を初期化し watchdog grace をリセット)。
   const bindPath = (path: string): void => {
+    reportBoundPath(path);
     jsonlPath = path;
     offset = 0;
     fileIdentity = null;
@@ -607,37 +664,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     if (!opts.lictorTranscriptStatePath) return; // hook 由来の権威更新なし (従来動作)
     const want = readClaudeTranscriptPath(opts.lictorTranscriptStatePath);
     if (!want) return; // SessionStart hook 未発火 — 起動直後は computed pin で橋渡し
-    // Concordia がこのパスを後から読み直すため、hook state に混入した任意パスを
-    // 転送しない。実在する JSONL かつこの provider の transcript directory 内だけを
-    // 報告する。realpath により directory 内の symlink を経由した脱出も拒否する。
-    let safeAuthoritativePath: string | null = null;
-    try {
-      const realTranscriptDir = realpathSync(dir);
-      const realTranscriptPath = realpathSync(want);
-      const pathWithinTranscriptDir = relative(realTranscriptDir, realTranscriptPath);
-      if (
-        statSync(realTranscriptPath).isFile()
-        && realTranscriptPath.endsWith(".jsonl")
-        && pathWithinTranscriptDir !== ""
-        && pathWithinTranscriptDir !== ".."
-        && !pathWithinTranscriptDir.startsWith(`..${sep}`)
-        && !isAbsolute(pathWithinTranscriptDir)
-      ) {
-        safeAuthoritativePath = realTranscriptPath;
-      }
-    } catch {
-      // hook が先にパスを報告して JSONL が後から作られる通常ケースもここに入る。
-    }
-    // 権威パスの観測を外へ通知する (パスごとに 1 度)。安全な実 transcript に限り、
-    // 束縛差し替えの成否とは独立に Concordia へ通知する。
-    if (safeAuthoritativePath && safeAuthoritativePath !== reportedAuthoritativePath) {
-      reportedAuthoritativePath = safeAuthoritativePath;
-      try {
-        opts.onAuthoritativeTranscriptPath?.(safeAuthoritativePath);
-      } catch {
-        /* best-effort — 報告失敗で tail を止めない */
-      }
-    }
+    // 権威パスの観測を外へ通知する (パスごとに 1 度)。 束縛差し替えの成否とは独立に
+    // 通知する — hook が報告した実パスは、 まだ claim を取れていなくても Concordia が
+    // 読むべき正本だから。 hook state に混入した任意パスの転送は reportBoundPath 内の
+    // safeTranscriptPath が弾く。
+    reportBoundPath(want);
     if (want === pinnedPath) return; // 変化なし
     // 報告パスがまだ実在しないなら束縛を差し替えない。 旧実装は phantom / 生成前パスへ
     // 無条件に rebind して jsonlPath=null のまま discover が掴めず中継が黙って停止した
@@ -801,6 +832,8 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
         maybeRecover(); // active なら取り直す (claude=権威パス / codex=同一 session_id のみ)。
         return;
       }
+      // bindPath を通らない束縛経路。 ここでも「tail しているパス」を報告する。
+      reportBoundPath(jsonlPath);
       offset = 0;
       lastProgressAt = Date.now();
     }
