@@ -122,3 +122,58 @@ test("gate: forceClear drops open questions AND held injects (no flush)", () => 
   // after clear, behaves like a fresh gate
   assert.equal(gate.shouldDefer("now-passes"), false);
 });
+
+// --- 素の Enter (制御信号) は marker 保留を通す ---------------------------
+// 2026-09-07: 🙄 force-enter / Discord /enter / codex の enter-fallback は
+// いずれも source が platform:uid 形式でないため automatic と分類され、
+// ask マーカー質問が開いている間 (= 人が「送信されていない」と気付いて救済しに
+// 来る、まさにその状況) に握り潰されていた。
+
+test("gate: bare Enter passes a marker question while body text is still held", () => {
+  const gate = new PendingQuestionGate(() => {});
+  gate.openQuestion(markerGateId(1), "automatic");
+  // 本文を持つ automatic inject は従来どおり保留される…
+  assert.equal(gate.shouldDefer("goal-and-go", { bypassesMarkerHold: false }), true);
+  // …が、それを resolve したあとの素の Enter (救済操作) は通る。
+  gate.resolveQuestion(markerGateId(1));
+  gate.openQuestion(markerGateId(2), "automatic");
+  assert.equal(gate.shouldDefer("\r", { bypassesMarkerHold: false }), false);
+});
+
+test("gate: bare CR is not held by a marker question", () => {
+  const gate = new PendingQuestionGate(() => {});
+  gate.openQuestion(markerGateId(1), "automatic");
+  assert.equal(gate.shouldDefer("\r", { bypassesMarkerHold: false }), false);
+  assert.equal(gate.deferredCount, 0);
+});
+
+test("gate: bare LF and CRLF are treated as Enter too", () => {
+  const gate = new PendingQuestionGate(() => {});
+  gate.openQuestion(markerGateId(1), "automatic");
+  assert.equal(gate.shouldDefer("\n", { bypassesMarkerHold: false }), false);
+  assert.equal(gate.shouldDefer("\r\n", { bypassesMarkerHold: false }), false);
+  assert.equal(gate.deferredCount, 0);
+});
+
+test("gate: bare CR is still held by a picker question", () => {
+  const gate = new PendingQuestionGate(() => {});
+  gate.openQuestion("toolu_1", "all");
+  assert.equal(gate.shouldDefer("\r", { bypassesMarkerHold: false }), true);
+});
+
+test("gate: bare CR queues behind already-held body text (FIFO order kept)", () => {
+  const flushed: string[] = [];
+  const gate = new PendingQuestionGate((t) => flushed.push(t));
+  gate.openQuestion(markerGateId(1), "automatic");
+  assert.equal(gate.shouldDefer("body", { bypassesMarkerHold: false }), true);
+  // 本文が待っている間に Enter だけ先に通すと、flush で順番が壊れる。
+  assert.equal(gate.shouldDefer("\r", { bypassesMarkerHold: false }), true);
+  gate.resolveQuestion(markerGateId(1));
+  assert.deepEqual(flushed, ["body", "\r"]);
+});
+
+test("gate: text that merely ends with CR is not treated as a bare Enter", () => {
+  const gate = new PendingQuestionGate(() => {});
+  gate.openQuestion(markerGateId(1), "automatic");
+  assert.equal(gate.shouldDefer("進めてください\r", { bypassesMarkerHold: false }), true);
+});

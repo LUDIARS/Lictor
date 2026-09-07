@@ -140,7 +140,21 @@ export class PendingQuestionGate {
    * 誤確定するため。
    */
   shouldDefer(text: string, origin: InjectOrigin = { bypassesMarkerHold: false }): boolean {
-    if (!this.holdsInject(origin)) return false;
+    // 本文が CR/LF だけの inject = 「Enter キーを押す」 という制御信号 (Cc の
+    // /enter・🙄 force-enter・codex の enter-fallback)。 これは人が「送信が
+    // 取りこぼされた」ときに叩く救済操作であり、 本文を持たないのでモデルが
+    // 自分の ask マーカー質問に自分で答える経路にはならない。 出どころ文字列は
+    // どれも `discord-enter` / `reaction-workflow` のように platform:uid 形式では
+    // ないため classifyInject が automatic と判定してしまい、 marker 質問が
+    // 開いている間 —— まさに人が救済したい状況 —— で握り潰されていた。
+    // picker 質問 ("all") では従来どおり保留する (Enter は既定候補を確定させる)。
+    const isBareEnter = /^[\r\n]+$/.test(text);
+    // 先に保留した本文が残っているときは Enter も並ばせる。 先に Enter だけ
+    // 通すと、 flush 時に 「Enter → 本文」 の順になって本文が確定しない。
+    const enterBypasses = isBareEnter && this.queue.length === 0;
+    if (!this.holdsInject({ bypassesMarkerHold: origin.bypassesMarkerHold || enterBypasses })) {
+      return false;
+    }
     this.queue.push({ text });
     this.log(
       `pending-question-gate: deferred inject (bypass=${origin.bypassesMarkerHold}, queued=${this.queue.length})`,

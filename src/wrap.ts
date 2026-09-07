@@ -221,6 +221,20 @@ export function stripChildSessionEnv(
   return out;
 }
 
+/**
+ * Concordia 由来の `source` を stderr 診断行に埋めるための整形。
+ *
+ * stderr は wrapper の実端末に直結しているため、 生の source をそのまま流すと
+ * リモートイベントが ESC/CSI を送り込んで端末を操作できてしまう (osc.ts の
+ * `sanitizeTitle` と同じ信頼境界)。 C0/DEL を落とし、 診断目的に十分な長さで cap する。
+ */
+function logSafeSource(source: string | null | undefined): string {
+  if (typeof source !== "string" || source.length === 0) return "?";
+  // eslint-disable-next-line no-control-regex -- C0/DEL を意図的に対象にしている
+  const stripped = source.replace(/[\x00-\x1f\x7f]/g, "");
+  return stripped.length === 0 ? "?" : stripped.slice(0, 120);
+}
+
 export async function runWrapped(args: string[], provider: ProviderConfig = PROVIDERS.claude): Promise<void> {
   const meta = gatherBaseMeta();
   meta.provider = provider.name;
@@ -388,7 +402,15 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           });
         },
         onInject: (text, source) => {
-          if (!ctx.ptyWriter) return;
+          // 以下の 3 つの return はいずれも 「Cc は届けたのにセッションには
+          // 何も起きない」 状態を作る。 無言で捨てると 「🙄 を押しても動かない」 の
+          // 切り分けが transcript にも log にも残らないので、 必ず理由を残す。
+          if (!ctx.ptyWriter) {
+            process.stderr.write(
+              `lictor: dropped inject — pty not attached (source=${logSafeSource(source)}, bytes=${text.length})\n`,
+            );
+            return;
+          }
           // Reuse the same sanitizer as /v1/keys — TUI-safe controls only.
           // 「テキスト本文 + submit キー」 の組み立て方は provider に委譲する.
           //   claude / gemini : text + \r を 1 chunk write (現行動作)
@@ -396,7 +418,12 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           //                     event loop が 「入力」 と 「Enter キーイベント」
           //                     を別個と認識するよう間を空ける.
           const safe = sanitizeKeySeq(text);
-          if (!safe) return;
+          if (!safe) {
+            process.stderr.write(
+              `lictor: dropped inject — empty after sanitization (source=${logSafeSource(source)}, bytes=${text.length})\n`,
+            );
+            return;
+          }
           // While an AskUserQuestion picker is open, hold this inject instead
           // of letting "text + Enter" commit the picker's default option. It is
           // flushed once the picker resolves (transcript-tail observes the
@@ -410,7 +437,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           // (回答自体は onAnswerQuestion 経由)。
           if (pendingQuestionGate.shouldDefer(safe, { bypassesMarkerHold: bypassesMarkerHold(source) })) {
             process.stderr.write(
-              `lictor: held inject from Concordia while question pending (source=${source ?? "?"})\n`,
+              `lictor: held inject from Concordia while question pending (source=${logSafeSource(source)})\n`,
             );
             return;
           }
@@ -421,11 +448,16 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           // Telemetry breadcrumb — surface that the inject landed so the
           // user can see who pushed what without trawling Concordia logs.
           process.stderr.write(
-            `lictor: injected ${safe.length} bytes from Concordia (source=${source ?? "?"}, provider=${provider.name})\n`,
+            `lictor: injected ${safe.length} bytes from Concordia (source=${logSafeSource(source)}, provider=${provider.name})\n`,
           );
         },
         onAnswerQuestion: ({ questionId, index, text }) => {
-          if (!ctx.ptyWriter) return;
+          if (!ctx.ptyWriter) {
+            process.stderr.write(
+              `lictor: dropped answer — pty not attached (qid=${questionId})\n`,
+            );
+            return;
+          }
           sawSessionTurn = true;
           // `postAnswerQuestion` によるこのセッション自身の回答エコー。テキストは
           // すでに session.inject で届いているので、二重に送らない。

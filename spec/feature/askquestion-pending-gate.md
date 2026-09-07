@@ -60,7 +60,7 @@ gate は質問ごとに「どの inject を止めるか」を持つ。
 | 質問の種類 | policy | 保留するもの | 閉じる契機 |
 | --- | --- | --- | --- |
 | 組み込み picker (`AskUserQuestion` / `ExitPlanMode`) | `"all"` | 人間・自動を問わず全部 | `tool_result` 観測 |
-| ask マーカー | `"automatic"` | 自動 inject のみ | 明示回答 (`question.answered`) / 文頭コード付きテキスト返信 |
+| ask マーカー | `"automatic"` | 自動 inject のみ (本文を持つもの) | 明示回答 (`question.answered`) / 文頭コード付きテキスト返信 |
 
 - picker は**どんな入力でも**候補を誤確定させるので従来どおり全保留。
 - ask マーカーはテキスト出力なので誤確定の危険は無い。止めたいのは「人が居ないまま進めと言う」
@@ -70,6 +70,14 @@ gate は質問ごとに「どの inject を止めるか」を持つ。
   `discord:<uid>` / `slack:<uid>` は human、`auto:session-end` は lifecycle (人が
   `/end-session` を叩いた終了指示なので保留すると `/session-end` が走らないまま死ぬ)、
   それ以外は automatic。**判定不能は automatic 扱い** (安全側)。
+- **素の Enter は marker 保留を通す (2026-09-07)** — 本文が CR/LF だけの inject
+  (`/enter` / 🙄 force-enter / codex の enter-fallback) は「Enter キーを押す」という
+  制御信号であり、本文が無いのでモデルが自分の質問に自分で答える経路にはならない。
+  これらの source は `platform:uid` 形式ではないため automatic と分類され、
+  「送信が取りこぼされた」と気付いた人が救済しに来るまさにその場面で握り潰されていた。
+  ただし **先に保留した本文が queue に残っている間は Enter も並ばせる** —
+  先に Enter だけ通すと flush 時に「Enter → 本文」の順になり本文が確定しないため。
+  picker (`"all"`) では Enter は既定候補を確定させるので従来どおり全保留。
 - marker 質問の gate id は `marker:<question_id>` (picker の `tool_use` id と名前空間を分ける)。
 - **未回答のまま放置すると自走は進まない** — これは仕様。回答するまで止まるのが blocker の意図で、
   Concordia 側も未回答質問があるセッションへ自動 inject を出さない。
