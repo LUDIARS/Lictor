@@ -45,6 +45,7 @@ import {
   postPendingQuestion,
   postResolveQuestion,
   providerSupportsAskUserQuestion,
+  type PendingQuestion,
 } from "./ask-question-relay.js";
 import { parseAskMarkerText, renderAskMarkerFallback, type AskMarker } from "./ask-marker.js";
 import { stripAskBlock } from "./ask-json.js";
@@ -280,6 +281,18 @@ export interface TranscriptTailOptions {
    * 記録し、Concordia 独自起源の質問 (どちらにも属さない) との三分岐を実現する。
    */
   onPickerQuestionRegistered?: (questionId: number) => void;
+  /**
+   * この起動で `--disallowedTools AskUserQuestion` を付けたか。
+   *
+   * true のとき AskUserQuestion の picker は **開かない** (PreToolUse hook が deny する)
+   * ので、質問は Concordia へ流しつつ picker 扱いにはしない:
+   *   - `onPickerQuestionRegistered` を呼ばない → wrap は回答をキー注入ではなく
+   *     テキスト注入で返す (存在しない picker に Down+Enter を打たない)
+   *   - `onQuestionOpen` を呼ばない → 開くはずのない picker を待つ gate を作らない
+   *     (gate が開いたままだと人間の 🙄 force-enter まで保留される)
+   * ExitPlanMode は deny の対象外なので従来どおり picker として扱う。
+   */
+  askUserQuestionDisabled?: boolean;
   /**
    * transcript に user メッセージ (ローカル返信、 または Discord/WebUI から注入されて
    * submit された返信) が現れたとき、 その本文つきで呼ぶ。 wrap.ts は開いている ask
@@ -839,16 +852,23 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       // の question.posted listener が embed + button を session channel に出せるようになる.
       // questions[] が複数ある場合は **全部** 一気に流す (一括投稿).
       if (askUserQuestionEnabled) {
-        const pqs = detectAskUserQuestion(line).concat(detectExitPlanMode(line));
-        for (const pq of pqs) {
+        // AskUserQuestion を deny してある起動では、その質問は picker として扱わない
+        // (picker は開かないので、キー注入も gate も相手がいない)。ExitPlanMode は
+        // deny の対象外なので常に picker 扱い。
+        const askIsPicker = opts.askUserQuestionDisabled !== true;
+        const detected: Array<{ pq: PendingQuestion; asPicker: boolean }> = [
+          ...detectAskUserQuestion(line).map((pq) => ({ pq, asPicker: askIsPicker })),
+          ...detectExitPlanMode(line).map((pq) => ({ pq, asPicker: true })),
+        ];
+        for (const { pq, asPicker } of detected) {
           // question_id を控えて tool_use id と紐付ける（後で local-resolve 通知に使う）。
           // 登録成功後に onPickerQuestionRegistered を呼び、wrap.ts が「picker 既知 qid」
           // 集合に追加できるようにする（Concordia 起源の質問との三分岐判定に使う）。
           void postPendingQuestion(opts.concordiaBaseUrl, opts.sessionId, pq).then((qid) => {
             if (qid != null && pq.id) questionIdByToolUse.set(pq.id, qid);
-            if (qid != null) opts.onPickerQuestionRegistered?.(qid);
+            if (qid != null && asPicker) opts.onPickerQuestionRegistered?.(qid);
           });
-          opts.onQuestionOpen?.(pq.id);
+          if (asPicker) opts.onQuestionOpen?.(pq.id);
         }
         // A picker resolving (locally OR remotely) writes a tool_result whose
         // tool_use_id matches the question — that is what releases the gate.

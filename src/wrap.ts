@@ -280,6 +280,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     conflictState: { count: 0, titleMark: null },
     taskState: newTaskState(),
     activeRepoState: { lastActive: null, lastList: [] },
+    // Cc spawn かどうかが決まるのは provider 引数を組む後段なので、ここでは既定の
+    // false を置き、確定後に代入する (hook はこの値を見て picker を deny する)。
+    askUserQuestionDisabled: false,
     getClaudeSessionId: null,
     getTranscript: null,
     repinTranscript: null,
@@ -659,6 +662,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // 2026-09-07 の lictor-2a7dc3e9)。 人間が端末の前にいる非 spawn 起動では外さない。
   const disableAskArgs = askUserQuestionDisableArgs(provider.name, concordia?.enrollment ?? null);
   const askUserQuestionDisabled = disableAskArgs.length > 0;
+  ctx.askUserQuestionDisabled = askUserQuestionDisabled;
   if (askMarkerPlan.injection === "claude-system-prompt") {
     try {
       if (!injector) throw new Error("activation plan requires session injector");
@@ -882,6 +886,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       onQuestionOpen: (qid) => pendingQuestionGate.openQuestion(qid),
       onQuestionResolved: (qid) => pendingQuestionGate.resolveQuestion(qid),
       askMarkerEnabled: askMarkerActive,
+      // deny してある起動では picker は開かない。 キー注入も gate も相手がいないので
+      // 「Concordia 起源の質問」 と同じテキスト回答経路に載せる。
+      askUserQuestionDisabled,
       pinnedTranscriptPath,
       // tail 対象を束縛する権威ソース。 SessionStart hook (lictor cli session-id-hook) が
       // claude の実 transcript_path をこのファイルへ書く。 これにより --session-id uuid と

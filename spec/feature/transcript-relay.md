@@ -73,6 +73,25 @@ stall 復帰も同じ束縛キーで取り直す（Claude=hook権威 / Codex=App
   対話起動では picker は実際に動くため、同じ文言を渡すとモデルに嘘を与えることになる。
   そちらは「リレー越しには届かないので ask マーカーを使う」という soft な誘導に留める。
 
+- ツールを外した起動では **picker を開かせずに deny する**。PreToolUse hook
+  (`lictor cli ask-question-hook`) が質問を Concordia へ流した直後に
+  `permissionDecision: "deny"` を返す。質問はユーザに届いているので、deny しても
+  聞けなくなることはない。deny の文面には「送信済み / 聞き直すな / ターンを閉じて待て」を
+  含める — 単に拒むとモデルは ask マーカーで同じことを聞き直し、質問カードが 2 枚出る。
+- deny してよいのは **質問が実際に Concordia へ登録できたときだけ**。sidecar は
+  deny する起動に限り pending-question の投稿完了を待ち、1 件も登録できなければ
+  `ask_user_question_disabled: false` を返して picker を開かせる。deny の文面は
+  「送信済みだから待て」と言い切るので、登録が落ちたまま deny すると質問がどこにも
+  出ないままセッションが無言で止まる (この節が潰そうとしている事故そのもの)。
+  picker を開かせる起動では従来どおり待たない (fire-and-forget)。
+- deny した質問は **picker 経路に載せない**。`onPickerQuestionRegistered` と
+  `onQuestionOpen` を呼ばず、回答は Concordia 起源の質問と同じ**テキスト注入**で返す。
+  存在しない picker に Down+Enter を打たず、開くはずのない picker を待つ gate も作らない
+  (gate が開いたままだと人間の 🙄 force-enter まで保留される)。
+- ExitPlanMode は deny の対象外なので従来どおり picker として扱う。
+- sidecar 応答が壊れている / 旧版で `ask_user_question_disabled` を返さない場合は
+  **fail-open** (従来どおり picker を開く)。hook の不調でセッションを固めない。
+
 ## SPEC-ASK-MARKER-RELAY-CONTRACT: ask マーカーの中継契約
 
 - Lictor は正常な ask マーカーを transcript 本文から消費し、散文があれば先に通常本文として

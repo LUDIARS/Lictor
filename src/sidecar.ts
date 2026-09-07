@@ -61,6 +61,17 @@ export interface SidecarContext {
   /** 許可監査の書き出し先。 未指定なら state dir 配下へ日付ごとに追記する。 */
   permissionAudit?: PermissionAuditWriter;
   /**
+   * この起動で `--disallowedTools AskUserQuestion` を付けたか
+   * ({@link ../ask-marker-activation.js askUserQuestionDisableArgs} の結果)。
+   *
+   * PreToolUse hook (`lictor cli ask-question-hook`) はこの値を見て、 質問を
+   * Concordia へ流したうえで **picker を開かせずにツールを deny** する。 deny の
+   * 文面で 「質問は既にユーザへ送った / 回答は通常のメッセージで届く」 と伝えることで、
+   * モデルが ask マーカーで同じことを聞き直して質問カードが 2 枚出るのを防ぐ。
+   * 未指定は false (= 従来どおり picker を開く)。
+   */
+  askUserQuestionDisabled?: boolean;
+  /**
    * v0.8 active-repo relay — ホスト PostToolUse hook が `<state-dir>/active-
    * repos-<claude-sid>.txt` に書き込んだ repo root を読み取って Concordia に
    * 反映する. `lastActive` は前回 push 済の repo path、 `lastList` は前回観測
@@ -675,7 +686,6 @@ async function handle(
   // PreToolUse(AskUserQuestion) hook (`lictor cli ask-question-hook`) が picker-open
   // 時に叩く。 質問を **回答前に** Concordia へ早期投稿し、 Discord から答えられる
   // ようにする。 transcript-tail の遅延投稿は Concordia 側の冪等化で重複しない。
-  // fire-and-forget — picker をネットワーク往復で待たせない。
   if (method === "POST" && url === "/v1/internal/ask-question") {
     if (!ctx.concordia || !ctx.sessionId) {
       return writeJson(res, 200, { ok: true, skipped: "no concordia" });
@@ -686,10 +696,34 @@ async function handle(
     const pqs = extractPendingQuestions(payload.questions);
     const baseUrl = ctx.concordia.cfg.baseUrl;
     const sid = ctx.sessionId;
-    for (const pq of pqs) {
-      void postPendingQuestion(baseUrl, sid, pq);
+    // deny を返さない起動 (= picker を開かせる) では投稿完了を待つ必要がない。
+    // picker をネットワーク往復で待たせないよう fire-and-forget のままにする。
+    if (ctx.askUserQuestionDisabled !== true) {
+      for (const pq of pqs) {
+        void postPendingQuestion(baseUrl, sid, pq);
+      }
+      return writeJson(res, 200, { ok: true, count: pqs.length, ask_user_question_disabled: false });
     }
-    return writeJson(res, 200, { ok: true, count: pqs.length });
+    // deny する起動では **投稿の成否を待ってから** フラグを返す。 deny の文面は
+    // 「質問は送信済みだからターンを閉じて待て」 と言い切るので、 Concordia への
+    // 投稿が落ちたまま deny すると質問がどこにも出ないままセッションが黙って
+    // 止まる (この PR が潰そうとしている事故そのもの)。 1 件も登録できなければ
+    // fail-open して picker を開かせる。
+    const posted = await Promise.all(pqs.map((pq) => postPendingQuestion(baseUrl, sid, pq)));
+    const registered = posted.filter((qid) => qid != null).length;
+    if (registered === 0 && pqs.length > 0) {
+      process.stderr.write(
+        "lictor: ask-question early-post failed; letting the picker open (fail-open)\n",
+      );
+    }
+    // hook はこのフラグを見て picker を deny する。 質問が実際に Concordia へ
+    // 届いたときだけ true にする。
+    return writeJson(res, 200, {
+      ok: true,
+      count: pqs.length,
+      registered,
+      ask_user_question_disabled: registered > 0,
+    });
   }
 
   // Notification hook (`lictor cli notification-hook`) の入口。 Claude が人間の
