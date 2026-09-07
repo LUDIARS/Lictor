@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planAskMarkerActivation } from "../src/ask-marker-activation.js";
+import { askUserQuestionDisableArgs, planAskMarkerActivation } from "../src/ask-marker-activation.js";
 
 // @implements SPEC-ASK-MARKER-ACTIVATION
 
@@ -42,4 +42,29 @@ test("planAskMarkerActivation: unsupported providers stay disabled", () => {
     injection: "none",
     reason: "provider-unsupported",
   });
+});
+
+// --- Cc spawn では AskUserQuestion をツールごと外す -----------------------
+// 2026-09-05 / 2026-09-07: 追記プロンプトの「使わないでください」だけでは
+// Claude Code 既定の「迷ったら AskUserQuestion」に負け、リレー越しに押せない
+// picker でセッションが無言停止した。
+
+test("askUserQuestionDisableArgs: Cc spawn の claude では picker を外す", () => {
+  assert.deepEqual(
+    askUserQuestionDisableArgs("claude", "d631f7c5-5d3d-4a5d-9993-53d9f75103c4"),
+    ["--disallowedTools", "AskUserQuestion"],
+  );
+});
+
+test("askUserQuestionDisableArgs: enrollment が無い対話起動では外さない", () => {
+  // 人間が端末の前にいるので picker は普通に答えられる。
+  assert.deepEqual(askUserQuestionDisableArgs("claude", null), []);
+  assert.deepEqual(askUserQuestionDisableArgs("claude", ""), []);
+  assert.deepEqual(askUserQuestionDisableArgs("claude", "   "), []);
+});
+
+test("askUserQuestionDisableArgs: claude 以外には付けない", () => {
+  // codex / gemini に AskUserQuestion 相当のツールは無い。
+  assert.deepEqual(askUserQuestionDisableArgs("codex", "spawn-id"), []);
+  assert.deepEqual(askUserQuestionDisableArgs("gemini", "spawn-id"), []);
 });

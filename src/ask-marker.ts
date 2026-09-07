@@ -66,14 +66,58 @@ export const ASK_MARKER_COMMON = `# ユーザへの選択提示 (Lictor relay)
 - ラベルは短く、ニュアンスは "description" に入れてください。
 `;
 
-/** **Claude 固有** addendum。組み込み AskUserQuestion を封じて ask マーカーへ寄せる。 */
+/**
+ * **Claude 固有** addendum (Cc spawn 版)。 `--disallowedTools AskUserQuestion` で
+ * ツール自体を外した起動にだけ渡す。
+ *
+ * 「使わないでください」だけでは Claude Code 既定プロンプトの「判断に迷ったら
+ * AskUserQuestion」に負ける (2026-09-05 の委託子セッション事故)。 ツールを物理的に
+ * 外してあるので、 文言も 「禁止」 ではなく **「使えない。ask マーカーだけが回答経路」**
+ * と事実を述べる形にする。 能力が無いという記述は既定プロンプトと綱引きにならない。
+ */
 export const ASK_MARKER_CLAUDE_ADDENDUM = `
 ## ツールの注意 (Claude Code)
 
-- 組み込みの AskUserQuestion ツールは**使わないでください**。代わりに上記の \`ask\` マーカーで質問してください。AskUserQuestion の対話 picker はリレー越しに回答できません。
+- **AskUserQuestion は使えません。** このセッションでの回答経路は上記の \`ask\` マーカーだけです。
+- AskUserQuestion の対話 picker はリレー越しに回答できないため、呼んでもユーザには届かず、セッションが無言で停止します。
+- 選択肢を示したいときは必ず \`ask\` マーカーを出力してターンを終えてください。
 `;
 
-/** Claude の \`--append-system-prompt-file\` に渡す本文 (共通 + AskUserQuestion 禁止)。 */
+/**
+ * **Claude 固有** addendum (人間が端末の前にいる対話起動版)。
+ *
+ * enrollment を持たない起動では `--disallowedTools` を付けない (picker は普通に
+ * 答えられるので外すと利便性を削るだけ) ため、 spawn 版の 「使えません」 は
+ * **事実に反する**。 モデルに嘘を渡すと、 実際には動く picker を避けたり、 逆に
+ * 「使えないはずのツールが使えた」 と矛盾した推論をする余地が生まれる。 ここは
+ * 従来どおり ask マーカーを優先させる soft な誘導に留める。
+ */
+export const ASK_MARKER_CLAUDE_ADDENDUM_INTERACTIVE = `
+## ツールの注意 (Claude Code)
+
+- 選択肢を提示するときは組み込みの AskUserQuestion ではなく、上記の \`ask\` マーカーを使ってください。
+- AskUserQuestion の対話 picker は Lictor のリレー (Discord 等) 越しには回答できないため、リモートから見ているユーザには届きません。
+`;
+
+/**
+ * Claude の \`--append-system-prompt-file\` に渡す本文 (共通 + AskUserQuestion 誘導)。
+ *
+ * `askUserQuestionDisabled` は `askUserQuestionDisableArgs` が実際に
+ * `--disallowedTools` を付けたかどうかと **必ず一致させる**。 ずれると
+ * 「使えません」 と言いながら使えるセッションが生まれる。
+ *
+ * @implements SPEC-ASK-MARKER-ACTIVATION
+ */
+export function claudeAskMarkerSystemPrompt(askUserQuestionDisabled: boolean): string {
+  return (
+    ASK_MARKER_COMMON +
+    (askUserQuestionDisabled
+      ? ASK_MARKER_CLAUDE_ADDENDUM
+      : ASK_MARKER_CLAUDE_ADDENDUM_INTERACTIVE)
+  );
+}
+
+/** Cc spawn 版の全文 (後方互換のためのエイリアス)。 */
 export const ASK_MARKER_CLAUDE_SYSTEM_PROMPT = ASK_MARKER_COMMON + ASK_MARKER_CLAUDE_ADDENDUM;
 
 /**
@@ -90,10 +134,16 @@ export const ASK_MARKER_SKILL_DESCRIPTION =
   "ユーザに選択肢や判断を求めるときは ask マーカー (```ask + JSON) で質問する。Lictor がリモート回答に変換する。";
 export const ASK_MARKER_SKILL_BODY = ASK_MARKER_COMMON;
 
-/** Claude 用 ask マーカー system-prompt をセッションdirに書き、`--append-system-prompt-file` 用のパスを返す。 */
-export function writeAskMarkerPrompt(sessionDir: string): string {
+/**
+ * Claude 用 ask マーカー system-prompt をセッションdirに書き、
+ * `--append-system-prompt-file` 用のパスを返す。
+ *
+ * `askUserQuestionDisabled` は呼び出し側が `--disallowedTools AskUserQuestion` を
+ * 付けたかどうかを渡す (既定 true = Cc spawn 版の文言)。
+ */
+export function writeAskMarkerPrompt(sessionDir: string, askUserQuestionDisabled = true): string {
   const path = join(sessionDir, "ask-marker-system-prompt.txt");
-  writeFileSync(path, ASK_MARKER_CLAUDE_SYSTEM_PROMPT, "utf8");
+  writeFileSync(path, claudeAskMarkerSystemPrompt(askUserQuestionDisabled), "utf8");
   return path;
 }
 

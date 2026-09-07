@@ -57,7 +57,7 @@ import {
 } from "./active-repos.js";
 import { createSubmitWatchdog } from "./submit-watchdog.js";
 import { writeAskMarkerPrompt, type AskMarker } from "./ask-marker.js";
-import { planAskMarkerActivation } from "./ask-marker-activation.js";
+import { askUserQuestionDisableArgs, planAskMarkerActivation } from "./ask-marker-activation.js";
 import { postAnswerQuestion, postResolveQuestion } from "./ask-question-relay.js";
 import { buildTextAnswerBody } from "./answer-code.js";
 import {
@@ -653,15 +653,29 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   );
   let askMarkerActive = askMarkerPlan.enabled;
   let askMarkerReason: string = askMarkerPlan.reason;
+  // Cc spawn では picker を物理的に開けなくする。 追記プロンプトだけでは Claude Code
+  // 既定の「判断に迷ったら AskUserQuestion」に負けることがあり、 リレー越しに押せない
+  // picker でセッションが無言停止する (2026-09-05 の委託子セッション事故、
+  // 2026-09-07 の lictor-2a7dc3e9)。 人間が端末の前にいる非 spawn 起動では外さない。
+  const disableAskArgs = askUserQuestionDisableArgs(provider.name, concordia?.enrollment ?? null);
+  const askUserQuestionDisabled = disableAskArgs.length > 0;
   if (askMarkerPlan.injection === "claude-system-prompt") {
     try {
       if (!injector) throw new Error("activation plan requires session injector");
-      const promptPath = writeAskMarkerPrompt(injector.sessionDir);
+      // 文言はツールを実際に外したかどうかと揃える。 外していない対話起動に
+      // 「使えません」 と書くと、 実際には動く picker について嘘を渡すことになる。
+      const promptPath = writeAskMarkerPrompt(injector.sessionDir, askUserQuestionDisabled);
       providerArgs.push("--append-system-prompt-file", promptPath);
     } catch (err) {
       askMarkerActive = false;
       askMarkerReason = `system-prompt-write-failed:${(err as Error).message}`;
     }
+  }
+  if (askUserQuestionDisabled) {
+    providerArgs.push(...disableAskArgs);
+    process.stderr.write(
+      `lictor: AskUserQuestion disabled for Cc spawn (${disableAskArgs.join(" ")})\n`,
+    );
   }
   process.stderr.write(
     `lictor: ask-marker provider=${provider.name} enabled=${askMarkerActive} reason=${askMarkerReason}\n`,

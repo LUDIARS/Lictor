@@ -57,6 +57,21 @@ stall 復帰も同じ束縛キーで取り直す（Claude=hook権威 / Codex=App
 - 判定は provider 名 / Concordia 有無 / injector 有無だけに依存する純関数に置き
   （[`../../src/ask-marker-activation.ts`](../../src/ask-marker-activation.ts)）、
   起動時に provider・enabled・reason を必ずログへ出す（無効化は無言で起きない）。
+- **Cc spawn の Claude では組み込み `AskUserQuestion` をツールごと外す**
+  （`--disallowedTools AskUserQuestion`）。判定材料は enrollment（`CONCORDIA_SPAWN_ID`）の
+  有無だけで、これも純関数（`askUserQuestionDisableArgs`）に置く。system prompt 追記は
+  soft な指示にすぎず、Claude Code 既定の「判断に迷ったら AskUserQuestion」と競合したとき
+  負けることがある。picker は Discord / Slack のリレー越しには押せないため、開いた時点で
+  セッションは無言で停止する（2026-09-05 の委託子セッション、2026-09-07 の
+  `lictor-2a7dc3e9`）。
+- enrollment を持たない起動は**人間が端末の前にいる**対話セッションなので picker は
+  普通に答えられる。ここでツールを外すのは利便性を削るだけなので付けない。
+- 追記プロンプトの文言は**ツールを実際に外したかどうかと必ず一致させる**
+  （`claudeAskMarkerSystemPrompt(askUserQuestionDisabled)`）。ツールを外した Cc spawn では
+  「**使えません。ask マーカーだけが回答経路です**」と事実を述べる（禁止の言い回しは既定
+  プロンプトとの綱引きになるが、能力が無いという記述は競合しない）。ツールを外していない
+  対話起動では picker は実際に動くため、同じ文言を渡すとモデルに嘘を与えることになる。
+  そちらは「リレー越しには届かないので ask マーカーを使う」という soft な誘導に留める。
 
 ## SPEC-ASK-MARKER-RELAY-CONTRACT: ask マーカーの中継契約
 

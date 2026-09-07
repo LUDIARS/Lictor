@@ -7,6 +7,7 @@ import {
   ASK_MARKER_CLAUDE_SYSTEM_PROMPT,
   ASK_MARKER_COMMON,
   ASK_MARKER_SKILL_BODY,
+  claudeAskMarkerSystemPrompt,
   detectAskMarker,
   parseAskMarkerText,
   renderAskMarkerFallback,
@@ -153,6 +154,27 @@ test("writeAskMarkerPrompt: ファイルに Claude system-prompt を書き出す
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("writeAskMarkerPrompt: ツールを外していない対話起動では「使えません」と書かない", () => {
+  // --disallowedTools を付けない起動では picker は実際に動く。 そこへ
+  // 「使えません」 と書くとモデルに嘘を渡すことになる。
+  const dir = mkdtempSync(join(tmpdir(), "lictor-askmarker-"));
+  try {
+    const body = readFileSync(writeAskMarkerPrompt(dir, false), "utf8");
+    assert.ok(body.includes("```ask"));
+    assert.ok(!body.includes("使えません"));
+    // 誘導自体は残す (ask マーカーを優先させる soft な指示)。
+    assert.ok(body.includes("AskUserQuestion"));
+    assert.equal(body, claudeAskMarkerSystemPrompt(false));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("claudeAskMarkerSystemPrompt: spawn 版だけが「使えません」と断言する", () => {
+  assert.ok(claudeAskMarkerSystemPrompt(true).includes("使えません"));
+  assert.equal(claudeAskMarkerSystemPrompt(true), ASK_MARKER_CLAUDE_SYSTEM_PROMPT);
 });
 
 test("共通本文は AskUserQuestion 禁止を含まない (Claude addendum 専用)", () => {
