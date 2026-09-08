@@ -37,6 +37,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import type { ProviderConfig } from "./provider.js";
+import { findCodexTranscriptSuccessor } from "./codex-transcript-successor.js";
 import { readClaudeTranscriptPath } from "./active-repos.js";
 import {
   detectAnsweredQuestionIds,
@@ -395,8 +396,8 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // 以上更新されず、 かつ session active なら relay スタールとみなして取り直す。
   let lastProgressAt = Date.now();
   // codex (pin 不可 + hook 権威なし) の session_id 施錠キー。 初回束縛で
-  // session_meta.session_id を読んで記録し、 以後この id を持つ rollout 以外には
-  // 一切紐づけない (鉄のルール: mtime 推測での再束縛を排し crosstalk を構造排除)。
+  // session_meta.session_id を読んで記録する。通常は同じ ID に固定するが、legacy TUI
+  // の同一 wrapper 内の新会話は固有 originator + 作成時刻で確認して追従する。
   //
   // ローカルLLM/Ollama 系 (usesFilenameSessionLock): transcript ファイル名の末尾 UUID が
   // Lictor の session id なので、 自分の session id から施錠キーを **事前施錠** する。
@@ -554,10 +555,10 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   //
   //   - 未施錠 (初回): 候補 1 件なら束縛。複数候補なら spawn 直後の mtime 最新を採る。
   //     最新 mtime が同点なら曖昧として fail-loud し、推測束縛しない。
-  //   - 施錠済: 施錠キー一致の rollout だけを対象にする。 一致 0 件なら束縛喪失として
-  //     fail-loud し、 別 session_id へは降りない。
+  //   - 施錠済: 同一 wrapper の検証済 legacy 後続会話、または施錠キー一致だけを対象にする。
+  //     どちらも無ければ fail-loud し、mtime 推測で別 session_id へは降りない。
   const discoverCodex = (): string | null => {
-    type C = { path: string; sessionId: string | null; fileSessionId: string | null; mtime: number };
+    type C = { path: string; firstLine: string | null; sessionId: string | null; fileSessionId: string | null; mtime: number };
     const candidates: C[] = [];
     walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => {
       // 過去セッションの継承を防ぐ recency 下限。候補が複数なら mtime で最新を選ぶ。
@@ -567,10 +568,36 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       const metaSid = meta.first ? opts.provider.transcriptMetaSessionId?.(meta.first) ?? null : null;
       const fileSid = sessionIdFromTranscriptPath(p);
       const sid = metaSid ?? fileSid;
-      candidates.push({ path: p, sessionId: sid, fileSessionId: fileSid, mtime: st.mtimeMs });
+      candidates.push({ path: p, firstLine: meta.first, sessionId: sid, fileSessionId: fileSid, mtime: st.mtimeMs });
     });
 
     if (boundSessionId) {
+      // A legacy TUI may restart/new-chat inside the same PTY. The wrapper's
+      // unique originator survives that rotation; an explicit App Server pin does not rotate.
+      if (jsonlPath && opts.provider.name === "codex" && !opts.expectedCodexThreadId) {
+        // 現束縛は通常 candidates に居る (walkJsonl が先頭行を 1 度読んでいる)。
+        // 居ないときだけ読み直し、 discover 毎の 256 KiB 再読を避ける。
+        const currentCandidate = candidates.find((c) => c.path === jsonlPath);
+        const successor = findCodexTranscriptSuccessor(
+          { path: jsonlPath, firstLine: currentCandidate ? currentCandidate.firstLine : readTranscriptFirstLine(jsonlPath) },
+          candidates, opts.sessionId, expectedOriginator,
+        );
+        if (successor) {
+          const safe = safeTranscriptPath(successor.path);
+          if (!safe) return jsonlPath;
+          const nextClaim = tryClaimJsonl(safe, STALE_CLAIM_MS, opts.sessionId);
+          if (!nextClaim) return jsonlPath;
+          // Keep the working binding until the replacement has been validated and claimed.
+          if (claimPath) { try { unlinkSync(claimPath); } catch { /* best-effort stale claim cleanup */ } }
+          claimPath = nextClaim;
+          boundSessionId = successor.sessionId;
+          hasBoundOnce = true;
+          codexFailLoudWarned = false;
+          recentAssistantDedupeKeys.clear();
+          claimDbg(`codex conversation replaced within wrapper owner=${opts.sessionId}`);
+          return safe;
+        }
+      }
       const matches = candidates
         .filter((c) => c.sessionId === boundSessionId || c.fileSessionId === boundSessionId)
         .sort((a, b) => b.mtime - a.mtime);
@@ -730,14 +757,13 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   //     mtime 推測は **絶対にしない**。 共有 projects/<cwd> で複数セッションが同居しても、
   //     権威パスは「このセッションの実ファイル」 を一意に指すので誤掴みが起きない。
   //
-  //   - hook 権威なし + session_id 読取り可 (codex): session_id 施錠のまま同一 id の
-  //     rollout を取り直す (recoverCodexLocked)。 別 session_id へは絶対に降りない。
+  //   - codex: 同一 ID または固有 originator で確認済みの legacy 後続会話を取り直す。
   //   - pin のみ (hook 無し claude / メタ無し provider): pin へ束縛し直すだけ
   //     (recoverByPin)。 いずれの経路も mtime 推測での誤掴みが構造的に起きない。
   const recoverRelay = (force = false): { ok: boolean; path: string | null } => {
     if (opts.lictorTranscriptStatePath) return recoverByAuthority();
     // codex (session_meta 施錠) と ローカルLLM (filename 施錠) はどちらも施錠キーで
-    // discoverCodex を取り直す。 別 session へは降りない (crosstalk 構造排除)。
+    // discoverCodex を取り直す。別 wrapper の会話へは降りない。
     if (opts.provider.transcriptMetaSessionId || opts.provider.usesFilenameSessionLock) {
       return recoverCodexLocked();
     }
@@ -772,10 +798,8 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     return { ok: true, path: want };
   };
 
-  // codex の stall 復帰 / 手動 repin: session_id 施錠のまま同一 id の rollout を
-  // discoverCodex で取り直すだけ。 mtime 推測で別 session_id を掴む経路は持たない
-  // (crosstalk 構造排除)。 施錠済で同一 id が見つかればそこへ束縛し直し、 見つからなければ
-  // discoverCodex 内で fail-loud する (別 id へは降りない)。 未施錠なら初回束縛を再試行する。
+  // codex の stall 復帰 / 手動 repin: 同一 ID または検証済みの legacy 後続会話を
+  // discoverCodex で取り直す。mtime だけで ID を切り替えない。未施錠なら初回束縛を再試行。
   const recoverCodexLocked = (): { ok: boolean; path: string | null } => {
     if (!dir || !existsSync(dir)) return { ok: false, path: jsonlPath };
     const found = discoverCodex();
