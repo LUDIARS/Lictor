@@ -5,7 +5,7 @@
   "templateRules": [],
   "membership": [
     {
-      "pathPattern": "(^|/)src/(?:transcript-sink|transcript-tail|user-activity|process-tree|stat|cost-one-shot|osc|auto-title)\\.ts$"
+      "pathPattern": "(^|/)src/(?:transcript-sink|transcript-tail|transcript-path-report|user-activity|process-tree|stat|cost-one-shot|osc|auto-title)\\.ts$"
     },
     {
       "pathPattern": "(^|/)tests/(?:transcript|stat|cost|auto-title|user-activity|process-tree)[a-z0-9-]*\\.test\\.ts$"

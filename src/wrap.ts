@@ -899,11 +899,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       // 権威 transcript_path を Concordia の session 行へ届ける (best-effort)。
       // Concordia のコンテキスト推定が時刻マッチ推測ではなく実パスを読めるようになる。
       onAuthoritativeTranscriptPath: (path) => {
-        void concordia.client
-          .patchSession(concordia.id, { transcript_path: path })
-          .catch(() => {
-            /* best-effort — Concordia 不通で tail を止めない */
-          });
+        // The tail owns retry/acknowledgement; do not turn a rejected PATCH into success.
+        return concordia.client.patchSession(concordia.id, { transcript_path: path });
       },
       onUserMessage: () => {
         submitWatchdog.noteUserMessage();

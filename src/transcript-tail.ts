@@ -21,6 +21,7 @@
  * Web UI re-reads the JSONL via session detail GETs if it wants history.
  */
 
+import { TranscriptPathReport } from "./transcript-path-report.js";
 import {
   closeSync,
   existsSync,
@@ -334,7 +335,7 @@ export interface TranscriptTailOptions {
    * 渡すパスは必ず provider の transcript directory 配下に実在する `.jsonl` の実体パス
    * (realpath 済) — 呼び出し側で検証済みなので、 受け手は追加検証なしに読んでよい。
    */
-  onAuthoritativeTranscriptPath?: (path: string) => void;
+  onAuthoritativeTranscriptPath?: (path: string) => void | Promise<void>;
   /**
    * spawn 時に `--session-id <uuid>` で固定した transcript JSONL の **計算上の** 絶対パス
    * (`<cwdKey>/<uuid>.jsonl`)。
@@ -390,7 +391,9 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // fail-loud 警告を出すためのフラグ (沈黙死禁止)。
   let relayUnresolvedWarned = false;
   // onAuthoritativeTranscriptPath の重複抑止 (同じ権威パスは 1 度だけ通知する)。
-  let reportedAuthoritativePath: string | null = null;
+  const pathReport = opts.onAuthoritativeTranscriptPath
+    ? new TranscriptPathReport(opts.onAuthoritativeTranscriptPath, (message) => process.stderr.write(`${message}\n`))
+    : null;
   const startedAt = Date.now();
   // watchdog: 最後に「束縛できた / 新バイトを読めた」 時刻。 これが STALL_RECOVERY_MS
   // 以上更新されず、 かつ session active なら relay スタールとみなして取り直す。
@@ -523,13 +526,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
    */
   const reportBoundPath = (path: string): void => {
     const safe = safeTranscriptPath(path);
-    if (!safe || safe === reportedAuthoritativePath) return;
-    reportedAuthoritativePath = safe;
-    try {
-      opts.onAuthoritativeTranscriptPath?.(safe);
-    } catch {
-      /* best-effort — 報告失敗で tail を止めない */
-    }
+    if (safe) pathReport?.offer(safe);
   };
 
   // 束縛先パスを差し替える共通処理 (offset/pending を初期化し watchdog grace をリセット)。
@@ -849,6 +846,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   const pollOnce = async (): Promise<void> => {
     if (stopped) return;
     maybeRebind();
+    pathReport?.flush();
     if (!jsonlPath) {
       jsonlPath = discover();
       if (!jsonlPath) {
@@ -1029,6 +1027,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   return {
     stop: () => {
       stopped = true;
+      pathReport?.stop();
       clearInterval(timer);
       if (claimPath) {
         try { unlinkSync(claimPath); } catch { /* best-effort */ }
