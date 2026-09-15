@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  claudeAssistantPhase,
   lineToFrame,
   lineToFrames,
   tryClaimJsonl,
@@ -55,6 +56,46 @@ test("lineToFrame: assistant text → text frame", () => {
     message: { role: "assistant", content: [{ type: "text", text: "hello world" }] },
   }));
   assert.deepEqual(f, { kind: "text", payload: { role: "assistant", text: "hello world", claude_uuid: "msg-1" } });
+});
+
+test("lineToFrame: Claude assistant text with end_turn → final_answer phase", () => {
+  const f = lineToFrame(JSON.stringify({
+    type: "assistant",
+    uuid: "msg-end",
+    message: { role: "assistant", stop_reason: "end_turn", content: [{ type: "text", text: "done" }] },
+  }));
+  assert.deepEqual(f, {
+    kind: "text",
+    payload: { role: "assistant", text: "done", claude_uuid: "msg-end", phase: "final_answer" },
+  });
+});
+
+test("lineToFrame: Claude assistant text before a tool call → commentary phase", () => {
+  const f = lineToFrame(JSON.stringify({
+    type: "assistant",
+    uuid: "msg-mid",
+    message: { role: "assistant", stop_reason: "tool_use", content: [{ type: "text", text: "checking" }] },
+  }));
+  assert.deepEqual(f, {
+    kind: "text",
+    payload: { role: "assistant", text: "checking", claude_uuid: "msg-mid", phase: "commentary" },
+  });
+});
+
+test("lineToFrame: Claude user text never gets a phase", () => {
+  const f = lineToFrame(JSON.stringify({
+    type: "user",
+    uuid: "msg-user",
+    message: { role: "user", stop_reason: "end_turn", content: [{ type: "text", text: "hi" }] },
+  }));
+  assert.deepEqual(f, { kind: "text", payload: { role: "user", text: "hi", claude_uuid: "msg-user" } });
+});
+
+test("claudeAssistantPhase: missing stop_reason stays undetermined", () => {
+  assert.equal(claudeAssistantPhase(undefined), undefined);
+  assert.equal(claudeAssistantPhase(null), undefined);
+  assert.equal(claudeAssistantPhase("end_turn"), "final_answer");
+  assert.equal(claudeAssistantPhase("max_tokens"), "commentary");
 });
 
 test("lineToFrame: user text → text frame", () => {

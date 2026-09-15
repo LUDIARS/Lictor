@@ -1246,11 +1246,15 @@ export function lineToFrames(line: string): Frame[] {
   // ─── Claude Code 形式 ────────────────────────────────────────────────
   if (type === "user" || type === "assistant") {
     const content = msg.message?.content;
+    const phase = type === "assistant" ? claudeAssistantPhase(msg.message?.stop_reason) : undefined;
     if (Array.isArray(content)) {
       const frames: Frame[] = [];
       for (const part of content) {
         if (part?.type === "text" && typeof part.text === "string") {
-          frames.push({ kind: "text", payload: { role: type, text: part.text, claude_uuid: claudeUuid } });
+          frames.push({
+            kind: "text",
+            payload: { role: type, text: part.text, claude_uuid: claudeUuid, ...(phase ? { phase } : {}) },
+          });
         }
         if (part?.type === "tool_use") {
           const task = part.name === "Task" && part.input && typeof part.input === "object"
@@ -1403,6 +1407,17 @@ export function lineToFrames(line: string): Frame[] {
 }
 
 /** Backward-compatible single-frame view for callers that only need the first frame. */
+/**
+ * Claude の assistant 行を Codex と同じ phase 語彙へ写す。
+ * ターンの最後の発言だけが stop_reason=end_turn を持ち、tool 呼び出し前の途中発言は
+ * tool_use になる。Concordia はこれを見て Discord の「作業中」を待機へ戻す。
+ * stop_reason が無い行 (古い形式・途中書き出し) は判定不能なので phase を付けない。
+ */
+export function claudeAssistantPhase(stopReason: unknown): "final_answer" | "commentary" | undefined {
+  if (typeof stopReason !== "string") return undefined;
+  return stopReason === "end_turn" ? "final_answer" : "commentary";
+}
+
 export function lineToFrame(line: string): Frame | null {
   return lineToFrames(line)[0] ?? null;
 }
