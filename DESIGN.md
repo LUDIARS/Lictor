@@ -247,7 +247,7 @@ skill clutter.
    `~/.claude/projects/<cwd-encoded>/memory/*.md`. Scoring:
    - +3 if the cwd repo-leaf appears in the filename (e.g.
      `feedback_ks_release_build_required.md` matches when cwd is
-     `KuzuSurvivors`)
+     `PrivateGame`)
    - +1 per body occurrence, capped at 3
    Top 3 are pasted, total capped at 8 KiB. `MEMORY.md` (the index) is
    skipped — claude loads it on its own.
