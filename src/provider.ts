@@ -414,13 +414,24 @@ function submitInjectTwoStep(write: (data: string) => void, text: string): void 
 }
 
 // Claude / Codex の transcript dir resolver.
+//
+// 設定フォルダは env で差し替えられる (Claude = CLAUDE_CONFIG_DIR、 Codex = CODEX_HOME)。 Concordia の相談は
+// 専用の設定フォルダで claude / codex を起動するので、 ~/.claude / ~/.codex 固定だと transcript を見つけられず
+// Discord への中継が止まる (2026-10-03)。 Lictor は Concordia が渡した起動 env をそのまま子に渡すので、
+// 自分の env を見れば子と同じ場所になる。
+export function claudeConfigRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+}
+export function codexHomeRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return env.CODEX_HOME?.trim() || join(homedir(), ".codex");
+}
 function claudeTranscriptDir(cwd: string): string | null {
-  return join(homedir(), ".claude", "projects", cwdToProjectKey(cwd));
+  return join(claudeConfigRoot(), "projects", cwdToProjectKey(cwd));
 }
 function codexTranscriptDir(_cwd: string): string | null {
-  // Codex は cwd 別に分けず、 grobal な ~/.codex/sessions/YYYY/MM/DD/ に出す.
+  // Codex は cwd 別に分けず、 grobal な <CODEX_HOME>/sessions/YYYY/MM/DD/ に出す.
   // discover 側で start 時刻フィルタ + cwd 一致フィルタで該当 jsonl を選ぶ.
-  return join(homedir(), ".codex", "sessions");
+  return join(codexHomeRoot(), "sessions");
 }
 
 // claude の transcript filename は `<uuid>.jsonl`、 codex は

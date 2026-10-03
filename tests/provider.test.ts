@@ -287,3 +287,15 @@ test("PROVIDERS.*.extractSessionId returns null for non-matching names", () => {
   assert.equal(PROVIDERS.codex.extractSessionId("rollout-without-uuid"), null);
   assert.equal(PROVIDERS.gemini.extractSessionId("anything"), null);
 });
+
+// 2026-10-03: Concordia の相談は専用の設定フォルダ (CLAUDE_CONFIG_DIR / CODEX_HOME) で claude / codex を起動する。
+// ~/.claude / ~/.codex 固定だと transcript を見つけられず Discord への中継が止まる。
+test("transcript の設定フォルダは CLAUDE_CONFIG_DIR / CODEX_HOME に従い、 無ければホーム直下", async () => {
+  const { claudeConfigRoot, codexHomeRoot } = await import("../src/provider.js");
+  const { homedir } = await import("node:os");
+  const { join } = await import("node:path");
+  assert.equal(claudeConfigRoot({ CLAUDE_CONFIG_DIR: "E:/Document/Consult/.claude-config" }), "E:/Document/Consult/.claude-config");
+  assert.equal(codexHomeRoot({ CODEX_HOME: "E:/Document/Consult/.codex-home" }), "E:/Document/Consult/.codex-home");
+  assert.equal(claudeConfigRoot({}), join(homedir(), ".claude"));
+  assert.equal(codexHomeRoot({ CODEX_HOME: "  " }), join(homedir(), ".codex"));
+});

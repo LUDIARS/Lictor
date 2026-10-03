@@ -109,7 +109,9 @@ export function seedWorkspaceTrust(opts: {
   };
 }): WorkspaceTrustSeedResult | null {
   const fsApi = opts.fsApi ?? { existsSync, readFileSync, writeFileSync };
-  const claudeJsonPath = opts.claudeJsonPath ?? join(homedir(), ".claude.json");
+  // CLAUDE_CONFIG_DIR で動く claude (Concordia の相談) は、その下の .claude.json を読む。
+  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
+  const claudeJsonPath = opts.claudeJsonPath ?? (configDir ? join(configDir, ".claude.json") : join(homedir(), ".claude.json"));
   if (!fsApi.existsSync(claudeJsonPath)) return null;
 
   let root: { projects?: Record<string, ClaudeProjectEntry>; [key: string]: unknown };
