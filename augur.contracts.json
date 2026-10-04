@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "contractsDir": "src/contracts",
+  "importFrom": "@ludiars/log-weaver",
+  "contracts": [
+    {
+      "id": "C-1",
+      "criterion": "C-1 isMissingReportResponse(status, text): HTTP404かつJSONのerrorがreport_not_foundの場合だけ真を返す",
+      "symbol": "isMissingReportResponse",
+      "file": "src/report-append-error.ts",
+      "module": "src/contracts/report-append.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    }
+  ]
+}

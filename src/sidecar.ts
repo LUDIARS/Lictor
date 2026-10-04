@@ -4,6 +4,7 @@ import { resetTitle, setTitle } from "./osc.js";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 import type { Meta } from "./meta.js";
 import type { ConcordiaClient } from "./concordia.js";
+import { ReportNotFoundError } from "./report-append-error.js";
 import type { SkillInjector } from "./skill-injector.js";
 import type { NotifyState } from "./event-reactor.js";
 import type { ConflictState } from "./conflict-watcher.js";
@@ -390,11 +391,16 @@ async function handle(
       typeof payload.role === "string" && payload.role.length > 0
         ? payload.role
         : (ctx.meta.persona?.name as string | undefined) ?? ctx.roleLabel ?? "lictor";
-    const reply = await ctx.concordia.reportAppend(ctx.sessionId, {
-      role,
-      monologue: payload.monologue,
-    });
-    writeJson(res, 200, reply);
+    try {
+      const reply = await ctx.concordia.reportAppend(ctx.sessionId, {
+        role,
+        monologue: payload.monologue,
+      });
+      writeJson(res, 200, reply);
+    } catch (error) {
+      if (!(error instanceof ReportNotFoundError)) throw error;
+      writeJson(res, 404, { error: "report_not_found" });
+    }
     return;
   }
 

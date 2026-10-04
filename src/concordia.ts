@@ -12,6 +12,8 @@ import type {
   SessionPatch,
 } from "./concordia-types.js";
 
+import { isMissingReportResponse, ReportNotFoundError } from "./report-append-error.js";
+
 const DEFAULT_HOST = "127.0.0.1";
 const SESSION_END_DONE_TIMEOUT_MS = 5_000;
 // unregister は wrapper の終了経路 (wrap.ts の cleanup) から呼ばれる。 Concordia が
@@ -134,6 +136,8 @@ export class ConcordiaClient {
       "POST",
       `/v1/reports/${encodeURIComponent(id)}/append`,
       payload,
+      undefined,
+      true,
     );
   }
 
@@ -250,6 +254,7 @@ export class ConcordiaClient {
     path: string,
     body?: unknown,
     signal?: AbortSignal,
+    diagnoseMissingReport = false,
   ): Promise<T> {
     const url = `${this.cfg.baseUrl}${path}`;
     const init: RequestInit = {
@@ -261,6 +266,9 @@ export class ConcordiaClient {
     const res = await fetch(url, init);
     const text = await res.text();
     if (!res.ok) {
+      if (diagnoseMissingReport && isMissingReportResponse(res.status, text)) {
+        throw new ReportNotFoundError();
+      }
       throw new Error(`Concordia ${method} ${path}: HTTP ${res.status} ${text.slice(0, 200)}`);
     }
     if (!text) return {} as T;

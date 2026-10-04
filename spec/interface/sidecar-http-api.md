@@ -36,6 +36,14 @@
 | POST | `/v1/implementation-tools/review` | — | Revisor local PR を初回提出または再審査 |
 | GET | `/v1/transcript` | `?limit=N&raw=0\|1` | ラップ中 CLI の transcript（Claude/Codex JSONL）。`limit` 1–500（既定 50）。`raw=1` でパース済オブジェクト、既定は slim frame。`{path, available, total_lines, returned, frames\|lines}`。transcript-tail 非活性時 503 |
 
+## 日報追記の診断
+
+`POST /v1/report` は既存の日報への独白追記専用で、一般の完了報告には使用しない。
+上流がHTTP404かつJSONのトップレベル`error`が`report_not_found`の場合のみ、
+HTTP404と`{"error":"report_not_found"}`を返す。上流の追加本文・URL・識別子等はこの応答に含めない。
+成功時の200、未登録時の503、その他エラーの既存500応答は維持する。他ルートには適用しない。
+日報の自動作成、再送、チャットへの転送は行わない。
+
 ## `/v1/internal/*`（hook 専用）
 
 | Method | Path | Body | 動作 |

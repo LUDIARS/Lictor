@@ -139,7 +139,7 @@ lictor cli implement review           # submit or retry through Cc/Revisor
 | POST   | `/v1/keys`                 | `{data}`                               | Raw keystroke injection (C0 controls stripped except `\t \n \r \b ESC`; Ctrl-C dropped to prevent accidental session kill) |
 | POST   | `/v1/answer`               | `{choice, escape_first?}`              | Send `(choice-1)` Down-Arrow + Enter to answer an `AskUserQuestion` picker. `choice` 1-based, 1–50. |
 | POST   | `/v1/chat`                 | `{channel, text, author_label?, in_reply_to?, scope?}` | Proxy to Concordia /v1/chat; stamps authoritative `session_id` + resolves held `discord_channel_id`; auto-fills `author_label` (anti-crosstalk — see `Concordia/spec/discord-lictor-relay.md`) |
-| POST   | `/v1/report`               | `{monologue, role?}`                   | Append daily-report monologue to Concordia /v1/reports/:id/append; stamps authoritative `session_id` |
+| POST   | `/v1/report`               | `{monologue, role?}`                   | 既存の日報に独白を追記（一般の完了報告ではない）。上流404かつ `report_not_found` の場合のみ404と同じ固定コードを返す。`session_id` はsidecarが付与 |
 | POST   | `/v1/event`                | `{kind, payload?, ts?}`                | Proxy to Concordia /v1/sessions/:id/event |
 | GET    | `/v1/conflicts`            | `?repo=<path>&branch=<name>`           | Proxy to Concordia /v1/monitor/conflicts (excludes self) |
 | GET    | `/v1/skill`                | —                                      | List injected skill names + the dir claude scans |

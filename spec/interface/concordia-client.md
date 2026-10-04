@@ -22,6 +22,8 @@ Lictor は Concordia（loopback `127.0.0.1:11111`、`CONCORDIA_HOST`/`CONCORDIA_
 | 終了 | `DELETE /v1/sessions/<id>` | 終了時（`report` フィールドを受領） |
 
 ## 注意
+- `reportAppend`だけが上流404かつ`error: "report_not_found"`を本文や識別子を保持しない
+  `ReportNotFoundError`へ変換する。他の応答・メソッドの既存エラー処理は維持する。
 - Concordia の上記契約が壊れると Lictor の互換面に影響する。Concordia 側の
   破壊的変更時は Lictor の対応バージョンを bump する。
 - Discord 中継は Lictor 仲介（anti-crosstalk）: Lictor が session/meta channel id を
