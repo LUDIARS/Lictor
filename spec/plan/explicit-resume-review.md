@@ -1,0 +1,5 @@
+Explicit codex resume currently receives a new Lictor originator marker and fails to bind the old rollout, leaving normal Discord replies unrelayed. Pin an explicit resume UUID, permit the prior originator only after exact identity validation, and suppress pre-launch or undated records so resume does not replay historical replies/questions. Preserve cwd/subagent/exec and claim guards. Reject explicit resume with app-server rather than launching a different thread.
+
+Boundaries: session-coordination launch intent, codex-runtime-bridge resume policy, transcript-observation relay. Spec LI-EXPLICIT-CODEX-RESUME. Recovery: revert this change and keep the affected wrapper stopped/unbound; do not alter rollout headers or disable general isolation. Existing wrappers require replacement after main build.
+
+Validation: TypeScript --noEmit passed; git diff --check passed. Session has not run unit/integration/startup tests under the current permission policy. Added tests/codex-resume-binding.test.ts for exact old-originator binding, wrong-thread/subagent/cwd/exec rejection and historical/new response isolation. Normal Discord delivery remains unverified pending deployment.

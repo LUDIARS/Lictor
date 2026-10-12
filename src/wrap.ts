@@ -77,6 +77,8 @@ import {
 const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
 
+import { explicitCodexResumeThreadId } from "./codex-resume-binding.js";
+
 export type CodexTransport = "app-server" | "legacy";
 
 export function codexTransport(env: NodeJS.ProcessEnv = process.env): CodexTransport {
@@ -688,13 +690,20 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
 
   const delegationPrompt = loadDelegationPrompt(env);
   let codexAppServerSession: CodexAppServerSession | null = null;
-  let expectedCodexThreadId: string | null = null;
+  const resumedCodexThreadId = provider.name === "codex"
+    ? explicitCodexResumeThreadId(providerArgs) : null;
+  let expectedCodexThreadId: string | null = resumedCodexThreadId;
   let codexTranscriptSink: TranscriptFrameSink | null = null;
   const transport = provider.name === "codex"
     ? resolveCodexTransport(env, delegationPrompt !== null)
     : "legacy";
 
   if (provider.name === "codex" && transport === "app-server") {
+    if (resumedCodexThreadId) {
+      await cleanupShared();
+      await unregisterConcordiaSession(concordia);
+      throw new Error("Explicit Codex resume requires legacy transport; refusing to create a different thread");
+    }
     const standaloneSink = concordia ? undefined : createVolatileTranscriptSink();
     try {
       codexAppServerSession = await startCodexAppServerSession({
@@ -873,6 +882,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       concordiaBaseUrl,
       provider,
       expectedCodexThreadId,
+      resumedCodexThreadId,
+      resumeRelaySinceMs: resumedCodexThreadId ? Date.parse(meta.start_iso) : undefined,
       // originator 施錠: 自分が env に焼いたマーカー (またはユーザ明示値) と
       // 完全一致する rollout だけを束縛候補にする。
       expectedCodexOriginator:

@@ -22,6 +22,7 @@
  */
 
 import { TranscriptPathReport } from "./transcript-path-report.js";
+import { isResumeRelayRecord } from "./codex-resume-binding.js";
 import {
   closeSync,
   existsSync,
@@ -243,6 +244,10 @@ export interface TranscriptTailOptions {
    * 許可し、mtime による候補選択へ降りない。
    */
   expectedCodexThreadId?: string | null;
+  /** Explicit resume launch identity permits an older wrapper originator only for this thread. */
+  resumedCodexThreadId?: string | null;
+  /** Do not replay pre-launch history when resuming an existing conversation. */
+  resumeRelaySinceMs?: number;
   /**
    * Lictor が spawn した codex の session_meta.originator に焼いたマーカー
    * (CODEX_INTERNAL_ORIGINATOR_OVERRIDE の値)。 指定時は originator 完全一致の
@@ -468,7 +473,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     // originator 施錠モードでは先頭行が読めない候補を掴まない (fail-open すると
     // mtime 推測束縛が復活する)。 自分の rollout の書きかけは次回 poll で読める。
     if (first === null) return { accepted: !expectedOriginator, first };
-    if (accepts(first, { cwd: opts.cwd, startedAtMs: startedAt, mtimeMs: st?.mtimeMs, expectedOriginator })) {
+    const explicitResume = opts.provider.name === "codex" && !!opts.resumedCodexThreadId;
+    if (explicitResume && opts.provider.transcriptMetaSessionId?.(first) !== opts.resumedCodexThreadId) {
+      return { accepted: false, first };
+    }
+    if (accepts(first, { cwd: opts.cwd, startedAtMs: explicitResume ? undefined : startedAt,
+      mtimeMs: st?.mtimeMs, expectedOriginator: explicitResume ? null : expectedOriginator })) {
       return { accepted: true, first };
     }
     claimDbg(`candidate rejected by meta filter path=${path} owner=${opts.sessionId}`);
@@ -559,7 +569,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     const candidates: C[] = [];
     walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => {
       // 過去セッションの継承を防ぐ recency 下限。候補が複数なら mtime で最新を選ぶ。
-      if (st.mtimeMs < startedAt - 5_000) return;
+      if (!opts.resumedCodexThreadId && st.mtimeMs < startedAt - 5_000) return;
       const meta = readCandidateMeta(p, st); // cwd / exec / head-ts (先頭行は 1 度だけ読む)
       if (!meta.accepted) return;
       const metaSid = meta.first ? opts.provider.transcriptMetaSessionId?.(meta.first) ?? null : null;
@@ -902,6 +912,8 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     pending = lines.pop() ?? "";
     for (const line of lines) {
       if (!line.trim()) continue;
+      if (opts.resumedCodexThreadId &&
+          !isResumeRelayRecord(line, opts.resumeRelaySinceMs ?? startedAt)) continue;
       // AskUserQuestion / ExitPlanMode tool_use を見つけたら、 transcript.frame の正規ルートとは別に
       // Concordia の pending-question API に直接通知する. これで Discord 側 (bot.routeEvent)
       // の question.posted listener が embed + button を session channel に出せるようになる.

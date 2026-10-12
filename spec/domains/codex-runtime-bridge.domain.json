@@ -12,6 +12,12 @@
     },
     {
       "pathPattern": "(^|/)tests/provider\\.test\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)src/codex-resume-binding\\.ts$"
     }
+  ],
+  "specRefs": [
+    "LI-EXPLICIT-CODEX-RESUME"
   ]
 }
