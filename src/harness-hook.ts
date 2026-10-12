@@ -58,18 +58,22 @@ export function resolveHarnessGuard(cwd: string): string | null {
 export function buildLictorHookSettings(
   harnessGuard: string | null,
   sessionStateDir: string,
+  // hook から Lictor 自身を呼ぶ前置き。 wrap.ts は実行中の node + bin の絶対パスを渡す
+  // (PATH に lictor が無い拠点でも hook が動くように。 lictor-command.ts)。
+  lictorCommand = "lictor",
 ): LictorHookSettings {
+  const cli = (args: string): string => `${lictorCommand} cli ${args}`;
   const preToolUse: HookMatcher[] = [
     {
       // 自動許可モードでは無害な読み取りを遅延通知できるよう、Read/Glob/Grep も含める。
       // 人による確認は最大 10 分待つため、hook 自体には終了処理用の余裕を加える。
       matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit|Read|Glob|Grep|mcp__.*",
-      hooks: [{ type: "command", command: "lictor cli permission-hook", timeout: 610 }],
+      hooks: [{ type: "command", command: cli("permission-hook"), timeout: 610 }],
     },
     {
       // AskUserQuestion を picker-open 時に検知して Concordia へ早期投稿する。
       matcher: "AskUserQuestion",
-      hooks: [{ type: "command", command: "lictor cli ask-question-hook", timeout: 10 }],
+      hooks: [{ type: "command", command: cli("ask-question-hook"), timeout: 10 }],
     },
   ];
 
@@ -90,7 +94,7 @@ export function buildLictorHookSettings(
   const postToolUse: HookMatcher[] = [
     {
       matcher: "SendUserFile",
-      hooks: [{ type: "command", command: "lictor cli send-file-hook", timeout: 30 }],
+      hooks: [{ type: "command", command: cli("send-file-hook"), timeout: 30 }],
     },
   ];
 
@@ -102,7 +106,7 @@ export function buildLictorHookSettings(
     {
       hooks: [{
         type: "command",
-        command: `lictor cli session-id-hook ${encodeSessionStateDirArgument(sessionStateDir)}`,
+        command: cli(`session-id-hook ${encodeSessionStateDirArgument(sessionStateDir)}`),
         timeout: 10,
       }],
     },
@@ -113,7 +117,7 @@ export function buildLictorHookSettings(
   // タイムアウトは短くてよい。
   const notification: HookMatcher[] = [
     {
-      hooks: [{ type: "command", command: "lictor cli notification-hook", timeout: 10 }],
+      hooks: [{ type: "command", command: cli("notification-hook"), timeout: 10 }],
     },
   ];
 

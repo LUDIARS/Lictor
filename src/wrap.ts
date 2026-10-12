@@ -13,6 +13,7 @@ import { withRepoOrigin } from "./repo-origin.js";
 import { renderSkillMd, SkillInjector } from "./skill-injector.js";
 import { findRepoMemories, memoryDirForCwd, renderMemoryDigest, repoLeafFromCwd } from "./memory-loader.js";
 import { buildLictorHookSettings, resolveHarnessGuard } from "./harness-hook.js";
+import { currentLictorCommand } from "./lictor-command.js";
 import {
   applyTitleWithMarks,
   isNotifyStale,
@@ -1201,7 +1202,7 @@ function writePermissionHookSettings(
   const path = `${sessionDir}/lictor-hook-settings.json`;
   // cwd から上位を辿って .claude/hooks/harness-guard.mjs を見つけたら PreToolUse(Bash)
   // に注入する (HARNESS §4 の地雷を着手前に止める)。無ければ従来どおり 2 フックのみ。
-  const settings = buildLictorHookSettings(resolveHarnessGuard(cwd), sessionStateDir);
+  const settings = buildLictorHookSettings(resolveHarnessGuard(cwd), sessionStateDir, currentLictorCommand());
   writeFileSync(path, JSON.stringify(settings, null, 2), "utf8");
   return path;
 }
