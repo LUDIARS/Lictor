@@ -1,0 +1,21 @@
+# Excubitor catalog fragment (per-repo) -- Lictor
+#
+# Lictor は常駐サービスではなく、 Cc が spawn するセッションごとに起動する CLI ラッパー。
+# 起動・死活監視はしない (exec / health なし)。 ここに載せる目的は、 拠点 (federation peer)
+# の Lictor を Excubitor の依頼 (update / deploy) で最新にできるようにすること。
+# deploy = git fast-forward → npm install → build_command。 走っているセッションには効かず、
+# 次に spawn したセッションから新しい dist が使われる。
+services:
+  - code: lictor
+    name: Lictor (セッション sidecar CLI)
+    tier: local-app
+    project_code: lictor
+    component: cli
+    repo: LUDIARS/Lictor
+    runtime: app
+    app_kind: cli
+    cwd: ${ARS_ROOT}/Lictor
+    build_command: npm run build
+    autostart: false
+    restart_policy: "no"
+    deploy_notify: false
