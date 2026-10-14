@@ -70,6 +70,8 @@ export interface SpawnCodexAppServerOptions extends CodexAppServerClientOptions 
   binary: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
+  /** `app-server` の後ろに付ける設定 (`-c key=value` / `--enable` / `--disable`)。 */
+  configArgs?: readonly string[];
   spawnProcess?: () => ChildProcessWithoutNullStreams;
 }
 
@@ -365,7 +367,7 @@ export class CodexAppServerClient {
 }
 
 function spawnCodexAppServer(options: SpawnCodexAppServerOptions): ChildProcessWithoutNullStreams {
-  const args = ["app-server", "--listen", "stdio://"];
+  const args = ["app-server", "--listen", "stdio://", ...(options.configArgs ?? [])];
   if (process.platform !== "win32") {
     return spawn(options.binary, args, {
       cwd: options.cwd,
@@ -378,6 +380,13 @@ function spawnCodexAppServer(options: SpawnCodexAppServerOptions): ChildProcessW
     throw new CodexAppServerError(
       "codex_app_server_start_failed",
       "unsafe character in Codex binary path",
+    );
+  }
+  // cmd.exe 経由なので設定値にもメタ文字を許さない (model 名と固定キーしか来ない)。
+  if (args.some((arg) => /[\0\r\n&|<>^%!]/u.test(arg))) {
+    throw new CodexAppServerError(
+      "codex_app_server_start_failed",
+      "unsafe character in Codex app-server argument",
     );
   }
   return spawn(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", options.binary, ...args], {

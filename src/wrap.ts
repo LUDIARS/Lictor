@@ -78,6 +78,15 @@ const STAT_INTERVAL_MS = 10 * 60 * 1000;
 const POLL_INTERVAL_MS = 60 * 1000;
 
 import { explicitCodexResumeThreadId } from "./codex-resume-binding.js";
+import {
+  codexAppServerConfigArgs,
+  codexSandboxArgs,
+  codexSandboxFromEnv,
+  configDeclaresNodeRepl,
+  nodeReplDisableArgs,
+  type CodexSandboxMode,
+} from "./codex-launch-policy.js";
+import { readCodexConfigText } from "./codex-config-file.js";
 
 export type CodexTransport = "app-server" | "legacy";
 
@@ -697,6 +706,27 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   const transport = provider.name === "codex"
     ? resolveCodexTransport(env, delegationPrompt !== null)
     : "legacy";
+  // Cc が決めた sandbox (LICTOR_CODEX_SANDBOX)。 Cc が決めた起動だけ node_repl を外す。
+  // node_repl は env を継承せず LICTOR_PORT が届かないので、 退避先にさせない。
+  let codexSandbox: CodexSandboxMode | null = null;
+  let codexNodeReplArgs: string[] = [];
+  if (provider.name === "codex") {
+    try {
+      codexSandbox = codexSandboxFromEnv(env);
+    } catch (error) {
+      await cleanupShared();
+      await unregisterConcordiaSession(concordia);
+      throw error;
+    }
+    codexNodeReplArgs = nodeReplDisableArgs(
+      codexSandbox,
+      configDeclaresNodeRepl(readCodexConfigText(env)),
+    );
+    if (codexSandbox) {
+      const nodeRepl = codexNodeReplArgs.length > 0 ? "disabled" : "not-configured";
+      process.stderr.write(`lictor: codex sandbox=${codexSandbox} node_repl=${nodeRepl}\n`);
+    }
+  }
 
   if (provider.name === "codex" && transport === "app-server") {
     if (resumedCodexThreadId) {
@@ -723,6 +753,8 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         transcriptRetryBaseMs: envInt(env.LICTOR_TRANSCRIPT_RETRY_BASE_MS, 100),
         transcriptMaxQueue: envInt(env.LICTOR_TRANSCRIPT_MAX_QUEUE, 1_000),
         onDiagnostic: (message) => process.stderr.write(`lictor: codex app-server: ${message}\n`),
+        sandbox: codexSandbox,
+        configArgs: [...codexAppServerConfigArgs(providerArgs), ...codexNodeReplArgs],
       });
     } catch (error) {
       await cleanupShared();
@@ -787,6 +819,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // node-pty on Windows uses CreateProcessW which does not auto-resolve .cmd
   // extensions. CLI bins ship as `<name>.cmd` in npm global bin, so wrap via
   // cmd.exe; on POSIX, spawn the binary directly.
+  if (provider.name === "codex") {
+    providerArgs.push(...codexSandboxArgs(codexSandbox), ...codexNodeReplArgs);
+  }
   const isWindows = process.platform === "win32";
   const ptyFile = isWindows ? process.env.ComSpec ?? "cmd.exe" : effectiveBinary;
   const ptyArgs = isWindows ? ["/d", "/s", "/c", effectiveBinary, ...providerArgs] : providerArgs;

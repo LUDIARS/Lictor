@@ -48,6 +48,7 @@ not silently fall back to legacy discovery after an App Server failure.
 | Variable | Default | Effect |
 |---|---:|---|
 | `LICTOR_CODEX_TRANSPORT` | `app-server` | `app-server` or explicit rollback `legacy` |
+| `LICTOR_CODEX_SANDBOX` | unset | Sandbox chosen by Concordia: `read-only`, `workspace-write` or `danger-full-access` (also approval `never`). When set, the `node_repl` MCP from `config.toml` is disabled because it does not inherit `LICTOR_PORT`. Unset keeps the user's Codex config |
 | `LICTOR_CODEX_APP_SERVER_REQUEST_TIMEOUT_MS` | `30000` | JSON-RPC request timeout |
 | `LICTOR_CODEX_APP_SERVER_TURN_TIMEOUT_MS` | `14400000` | Delegation turn timeout |
 | `LICTOR_TRANSCRIPT_RELAY_TIMEOUT_MS` | `5000` | Concordia transcript write timeout |

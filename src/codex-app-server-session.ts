@@ -19,6 +19,7 @@ import {
   OrderedTranscriptSink,
   type TranscriptFrameSink,
 } from "./transcript-sink.js";
+import type { CodexSandboxMode } from "./codex-launch-policy.js";
 
 const TurnStartResponseSchema = z.object({
   turn: z.object({
@@ -31,6 +32,8 @@ export interface CodexAppServerSession {
   client: CodexAppServerClient;
   sink: TranscriptFrameSink;
   identity: CodexSessionIdentity;
+  /** 委託ターンの sandboxPolicy に使う。 null は従来の workspace-write。 */
+  sandbox?: CodexSandboxMode | null;
 }
 
 export interface StartCodexAppServerSessionOptions {
@@ -48,6 +51,10 @@ export interface StartCodexAppServerSessionOptions {
   transcriptMaxQueue?: number;
   onDiagnostic?: (message: string) => void;
   spawnProcess?: SpawnCodexAppServerOptions["spawnProcess"];
+  /** Cc が決めた sandbox (LICTOR_CODEX_SANDBOX)。 未指定は従来どおり workspace-write。 */
+  sandbox?: CodexSandboxMode | null;
+  /** `app-server` に渡す `-c` 等 (model / node_repl 無効化)。 */
+  configArgs?: readonly string[];
 }
 
 export interface RunCodexDelegationOptions {
@@ -87,15 +94,17 @@ export async function startCodexAppServerSession(
     requestTimeoutMs: options.requestTimeoutMs,
     onDiagnostic: options.onDiagnostic,
     spawnProcess: options.spawnProcess,
+    configArgs: options.configArgs,
   });
+  const sandbox = options.sandbox ?? null;
   try {
     const identity = await bootstrapCodexSession(client, sink, {
       cwd: options.cwd,
       clientVersion: options.lictorVersion,
       approvalPolicy: "never",
-      sandbox: "workspace-write",
+      sandbox: sandbox ?? "workspace-write",
     });
-    return { client, sink, identity };
+    return { client, sink, identity, sandbox };
   } catch (error) {
     await client.close().catch(() => undefined);
     throw error;
@@ -221,11 +230,7 @@ export async function runCodexDelegationTurn(
         input: [{ type: "text", text: options.prompt }],
         cwd: options.cwd,
         approvalPolicy: "never",
-        sandboxPolicy: {
-          type: "workspaceWrite",
-          writableRoots: [options.cwd],
-          networkAccess: false,
-        },
+        sandboxPolicy: turnSandboxPolicy(session.sandbox ?? null, options.cwd),
       });
     } catch (error) {
       throw new CodexDelegationError(
@@ -315,4 +320,14 @@ function positiveInt(value: number | undefined, fallback: number): number {
 
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+/**
+ * turn/start の sandboxPolicy。 未指定は従来の workspace-write (cwd のみ書込・通信なし)。
+ * Cc が danger-full-access を渡した委託は枠なし (Satelles の host access と同じ)。
+ */
+export function turnSandboxPolicy(sandbox: CodexSandboxMode | null, cwd: string): Record<string, unknown> {
+  if (sandbox === "danger-full-access") return { type: "dangerFullAccess" };
+  if (sandbox === "read-only") return { type: "readOnly" };
+  return { type: "workspaceWrite", writableRoots: [cwd], networkAccess: false };
 }
