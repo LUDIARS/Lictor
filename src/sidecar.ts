@@ -4,6 +4,7 @@ import { resetTitle, setTitle } from "./osc.js";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 import type { Meta } from "./meta.js";
 import type { ConcordiaClient } from "./concordia.js";
+import { ImplementationBindProxyError, unknownImplementationBind } from "./implementation-bind.js";
 import { ReportNotFoundError } from "./report-append-error.js";
 import type { SkillInjector } from "./skill-injector.js";
 import type { NotifyState } from "./event-reactor.js";
@@ -520,10 +521,15 @@ async function handle(
     ) {
       return writeJson(res, 400, { error: "non-empty cwd and task (string) required" });
     }
-    writeJson(res, 200, await ctx.concordia.bindImplementation(ctx.sessionId, {
-      cwd: payload.cwd,
-      task: payload.task,
-    }));
+    try {
+      writeJson(res, 200, await ctx.concordia.bindImplementation(ctx.sessionId, {
+        cwd: payload.cwd,
+        task: payload.task,
+      }));
+    } catch (error) {
+      const failure = error instanceof ImplementationBindProxyError ? error : unknownImplementationBind();
+      writeJson(res, failure.status, failure.body);
+    }
     return;
   }
 

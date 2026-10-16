@@ -13,6 +13,7 @@ import type {
 } from "./concordia-types.js";
 
 import { isMissingReportResponse, ReportNotFoundError } from "./report-append-error.js";
+import { requestImplementationBind } from "./implementation-bind.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const SESSION_END_DONE_TIMEOUT_MS = 5_000;
@@ -157,10 +158,7 @@ export class ConcordiaClient {
     id: string,
     payload: { cwd: string; task: string },
   ): Promise<unknown> {
-    return this.fetchJson("POST", "/v1/implementation-tools/bind", {
-      session_id: id,
-      ...payload,
-    });
+    return requestImplementationBind(this.cfg.baseUrl, id, payload);
   }
 
   async controlImplementationService(

@@ -1,5 +1,9 @@
 # Lictor — Design Notes
 
+Implementation binding relay: [LI-BIND-01](spec/feature/implementation-bind.md)
+keeps Cc as the state owner and preserves safe rejection versus unknown-result
+semantics across the sidecar. It does not retry writes automatically.
+
 ## Problem statement
 
 Claude Code's TUI captures subprocess stdout. Any OSC escape sequence emitted

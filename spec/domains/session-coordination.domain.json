@@ -4,6 +4,8 @@
   "presetRules": [],
   "templateRules": [],
   "membership": [
+    { "pathPattern": "(^|/)src/implementation-bind\\.ts$" },
+    { "pathPattern": "(^|/)tests/implementation-(bind|tools)\\.test\\.ts$" },
     {
       "pathPattern": "(^|/)src/(?:active-repos|cli|client|concordia|concordia-types|exit-deadline|graceful-exit|meta|provider-runtime-metadata|repo-origin|runtime-model-effort|session-archive|session-end-skill|session-id-hook|session-shutdown|session-state-authority|session-state-skill|sidecar|spawn-context|submit-watchdog|task-relay|version|vestigium|workspace-trust-seed|wrap)\\.ts$"
     },
@@ -24,6 +26,7 @@
     "enrolled-detached-workspace-trust"
   ],
   "specRefs": [
+    "spec/feature/implementation-bind.md",
     "タスク宣言プロトコル",
     "セットアップ — 観測 (Vestigium) は best-effort",
     "SPEC-RUNTIME-MODEL-EFFORT",

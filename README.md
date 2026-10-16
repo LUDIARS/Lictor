@@ -149,7 +149,7 @@ lictor cli implement review           # submit or retry through Cc/Revisor
 | GET    | `/v1/lictor/task`          | —                                      | Current task state `{branch, desc, updatedAt}` |
 | POST   | `/v1/lictor/task`          | `{branch?, desc?}`                     | PATCH Concordia session + emit event + refresh `lictor-current-task` skill |
 | GET    | `/v1/lictor/state`         | —                                      | `{notify, conflict, task}` snapshot for dashboards |
-| POST   | `/v1/implementation-tools/bind` | `{cwd, task}`                       | Resolve repo/origin/branch/project code and update existing Cc session binding in one request |
+| POST   | `/v1/implementation-tools/bind` | `{cwd, task}`                       | Resolve repo/origin/branch/project code and update existing Cc session binding in one request; safe Cc rejection stays 409, unknown result is 502 (see spec/feature/implementation-bind.md) |
 | POST   | `/v1/implementation-tools/service` | `{service_code, action, note?}`  | Run Cc testing claim → Excubitor control → release in one request |
 | POST   | `/v1/implementation-tools/review` | —                                  | Submit or retry this session's Revisor local PR |
 | POST   | `/v1/pr/submit`              | `{repo_path, branch?}`                 | Submit a local PR for the supplied repository without requiring an implementation-session repository binding; `branch`, when provided, must be non-empty |

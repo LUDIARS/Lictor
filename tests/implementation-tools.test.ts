@@ -6,6 +6,26 @@ import { join } from "node:path";
 import { startSidecar, type SidecarContext } from "../src/sidecar.js";
 import { gatherBaseMeta } from "../src/meta.js";
 import { SkillInjector } from "../src/skill-injector.js";
+import { ImplementationBindProxyError } from "../src/implementation-bind.js";
+
+test("bind relay keeps safe rejection status and hides unexpected exceptions", async () => {
+  for (const typed of [true, false]) {
+    const concordia = { bindImplementation: async () => {
+      if (!typed) throw new Error("private database path");
+      throw new ImplementationBindProxyError(409, { error: "implementation_bind_failed",
+        reason: "stale_session", stage: "persistence", binding: "unchanged", guidance: "Inspect binding." });
+    } } as unknown as SidecarContext["concordia"];
+    await withSidecar({ concordia, sessionId: "owner-session" }, async port => {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/implementation-tools/bind`, {
+        method: "POST", body: JSON.stringify({ cwd: "/workspace/game", task: "repair" }),
+      });
+      assert.equal(response.status, typed ? 409 : 502);
+      const body = await response.json() as Record<string, unknown>;
+      assert.equal(body.binding, typed ? "unchanged" : "unknown");
+      assert.doesNotMatch(JSON.stringify(body), /private database path/);
+    });
+  }
+});
 
 async function withSidecar<T>(
   overrides: Partial<SidecarContext>,
