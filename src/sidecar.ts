@@ -6,6 +6,9 @@ import type { Meta } from "./meta.js";
 import type { ConcordiaClient } from "./concordia.js";
 import { ImplementationBindProxyError, unknownImplementationBind } from "./implementation-bind.js";
 import { ReportNotFoundError } from "./report-append-error.js";
+import type { SessionCollaboration } from "./session-collaboration.js";
+import { CollaborationError } from "./collaboration-transport.js";
+import { sanitizeDelegationPrompt } from "./delegation-inject.js";
 import type { SkillInjector } from "./skill-injector.js";
 import type { NotifyState } from "./event-reactor.js";
 import type { ConflictState } from "./conflict-watcher.js";
@@ -114,6 +117,7 @@ export interface SidecarContext {
    */
   requestGracefulExit: ((opts?: { immediate?: boolean }) => void) | null;
   shutdown?: SessionShutdown | null;
+  collaboration?: SessionCollaboration | null;
 }
 
 export interface Sidecar {
@@ -168,6 +172,42 @@ async function handle(
 ): Promise<void> {
   const url = req.url ?? "";
   const method = req.method ?? "GET";
+
+  if (url === "/v1/collaboration" || url === "/v1/collaboration/message" || url === "/v1/collaboration/answer") {
+    if (!ctx.concordia || !ctx.sessionId || !ctx.collaboration) {
+      return writeJson(res, 503, { error: "collaboration_unavailable" });
+    }
+    if (method === "GET" && url === "/v1/collaboration") {
+      return writeJson(res, 200, ctx.collaboration.snapshot());
+    }
+    if (method !== "POST" || url === "/v1/collaboration") return writeJson(res, 405, { error: "method_not_allowed" });
+    const body = await readJson(req);
+    if (!body.ok) return writeJson(res, 400, { error: body.error });
+    const input = body.value;
+    if (!input || typeof input !== "object" || Array.isArray(input)) return writeJson(res, 400, { error: "invalid_body" });
+    const payload = input as Record<string, unknown>;
+    const answer = url.endsWith("/answer");
+    const keys = answer ? ["run_id", "question_id", "text", "answer_index"] : ["run_id", "text"];
+    const indexed = answer && payload.answer_index !== undefined;
+    if (Object.keys(payload).some(key => !keys.includes(key))
+      || typeof payload.run_id !== "string" || !payload.run_id.trim() || payload.run_id.length > 128
+      || (indexed ? payload.text !== undefined || !Number.isSafeInteger(payload.answer_index) || Number(payload.answer_index) < 0
+        : typeof payload.text !== "string" || !payload.text.trim() || payload.text.length > 16_000)
+      || (answer && (!Number.isSafeInteger(payload.question_id) || Number(payload.question_id) <= 0))) {
+      return writeJson(res, 400, { error: "invalid_collaboration_request" });
+    }
+    const safeText = indexed ? "" : sanitizeDelegationPrompt(payload.text as string);
+    if (!indexed && !safeText.trim()) return writeJson(res, 400, { error: "empty_collaboration_text" });
+    try {
+      const result = answer
+        ? await ctx.collaboration.answer(payload.run_id, payload.question_id as number, indexed ? payload.answer_index as number : safeText)
+        : await ctx.collaboration.message(payload.run_id, safeText);
+      return writeJson(res, 200, result);
+    } catch (error) {
+      return writeJson(res, error instanceof CollaborationError ? error.status : 502,
+        { error: error instanceof CollaborationError ? error.message : "collaboration_outcome_unknown" });
+    }
+  }
 
   if (method === "GET" && url === "/v1/health") {
     writeJson(res, 200, { ok: true });

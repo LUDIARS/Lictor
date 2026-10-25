@@ -35,6 +35,8 @@ import { scheduleGracefulExit, type GracefulExitHandle } from "./graceful-exit.j
 import { exitAfterCleanup } from "./exit-deadline.js";
 import { archiveSessionLog } from "./session-archive.js";
 import { SessionShutdown } from "./session-shutdown.js";
+import { SessionCollaboration } from "./session-collaboration.js";
+import { createCollaborationTransport } from "./collaboration-transport.js";
 import { terminateProcessTree } from "./process-tree.js";
 import { reportTaskInquiry } from "./task-inquiry.js";
 import { PendingQuestionGate, markerGateId } from "./pending-question-gate.js";
@@ -386,10 +388,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // WS reactor — attach AFTER ctx so the dispatcher can read live state.
   if (concordia) {
     concordia.liveness.close(); // close the pre-ctx liveness opened by tryRegisterConcordia
-    concordia.liveness = concordia.client.openLiveness(
-      concordia.id,
-      concordia.enrollment,
-      (msg) => reactToEvent(msg, {
+    const dispatch = (msg: unknown): void => reactToEvent(msg, {
         meta: ctx.meta,
         titleState: ctx.titleState,
         notifyState: ctx.notifyState,
@@ -525,8 +524,16 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
             `lictor: answered Concordia-originated question via text (qid=${questionId}, provider=${provider.name})\n`,
           );
         },
-      }),
-    );
+      });
+    const collaboration = new SessionCollaboration(concordia.id,
+      process.env.CONCORDIA_DELEGATION_RUN_ID?.trim() || null,
+      createCollaborationTransport(concordia.client.cfg.baseUrl),
+      text => dispatch({ type: "session.inject", target_session_id: concordia.id,
+        text, source: "auto:collaboration" }));
+    ctx.collaboration = collaboration;
+    concordia.liveness = concordia.client.openLiveness(concordia.id, concordia.enrollment,
+      msg => { collaboration.onEvent(msg); dispatch(msg); },
+      () => collaboration.disconnected());
   }
 
   // Periodic stat polling — only when Concordia is reachable.
@@ -552,6 +559,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     if (pollTimer) clearInterval(pollTimer);
     submitWatchdog.stop();
     pendingQuestionGate.forceClear();
+    ctx.collaboration?.dispose();
     concordia?.liveness.close();
     sidecar.close();
     resetTitle();
@@ -953,6 +961,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         submitWatchdog.noteUserMessage();
         // 委託 prompt の到達確認も同じシグナルで行う (再送を止める)。
         delegationInjector?.noteUserMessage();
+        ctx.collaboration?.setReady();
       },
       onPickerQuestionRegistered: (qid) => {
         // 組み込み AskUserQuestion picker が Concordia に登録された。

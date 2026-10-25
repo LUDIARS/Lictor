@@ -243,8 +243,9 @@ export class ConcordiaClient {
     id: string,
     enrollment: string | null,
     onMessage?: WsMessageHandler,
+    onDisconnect?: () => void,
   ): LivenessHandle {
-    return new LivenessHandle(this.cfg, id, enrollment, onMessage);
+    return new LivenessHandle(this.cfg, id, enrollment, onMessage, onDisconnect);
   }
 
   private async fetchJson<T>(
@@ -308,6 +309,7 @@ export class LivenessHandle {
     private readonly sessionId: string,
     private readonly enrollment: string | null,
     private readonly onMessage?: WsMessageHandler,
+    private readonly onDisconnect?: () => void,
   ) {
     this.connect();
   }
@@ -344,6 +346,7 @@ export class LivenessHandle {
       });
       ws.addEventListener("close", (event) => {
         this.ws = null;
+        this.onDisconnect?.();
         if (isTerminalLivenessClose(event.code)) {
           this.closed = true;
           try {

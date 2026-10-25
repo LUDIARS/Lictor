@@ -138,6 +138,23 @@ captures repo_path / branch / host / pid / wt_session. Response includes
 
 ### Liveness via WebSocket
 
+Lictor also owns a relationship-aware collaboration view (`SessionCollaboration`).
+The enrolled socket carries Cc run changes and linked peers' lifecycle/messages;
+it is not only a liveness or management-command relay. On hello/reconnect, the
+view restores delegation relationships and recent progress with bounded reads.
+It never opens a socket claiming a peer's identity. Cc owns the run relationship
+and Actio owns task status. See `spec/feature/session-collaboration.md`.
+
+Loopback `/v1/collaboration/message` and `/answer` resolve a run again immediately
+before addressing a peer. Callers cannot supply a target session or source.
+The parent uses `/v1/delegation/runs/:id/inject`; children use their canonical
+parent's `/v1/sessions/:id/inject`; answers use `/answer-question`. No automatic
+mutation retry is permitted. Notices use the existing injection sanitizer and
+pending-question gate. Routine progress is cached, not repeatedly pasted into
+the agent. Unknown question state after reconnect remains explicitly unknown;
+Cc's existing parent-first relay/escalation remains the question authority.
+
+
 Concordia's `/ws?session=<id>` increments `ws_clients` on connect; a
 session with an active WS is exempt from the lost-detection scan. Lictor
 holds the WS open for the lifetime of the wrapped claude, reconnecting

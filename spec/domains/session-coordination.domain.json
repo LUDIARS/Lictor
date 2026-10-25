@@ -4,6 +4,8 @@
   "presetRules": [],
   "templateRules": [],
   "membership": [
+    { "pathPattern": "(^|/)src/(session-collaboration|collaboration-transport)\\.ts$" },
+    { "pathPattern": "(^|/)tests/(session-collaboration|collaboration-transport|collaboration-sidecar)\\.test\\.ts$" },
     { "pathPattern": "(^|/)src/implementation-bind\\.ts$" },
     { "pathPattern": "(^|/)tests/implementation-(bind|tools)\\.test\\.ts$" },
     {
@@ -26,6 +28,7 @@
     "enrolled-detached-workspace-trust"
   ],
   "specRefs": [
+    "spec/feature/session-collaboration.md",
     "spec/feature/implementation-bind.md",
     "タスク宣言プロトコル",
     "セットアップ — 観測 (Vestigium) は best-effort",

@@ -1,6 +1,6 @@
 # Lictor — Agent TUI Sidecar & Session Coordinator
 
-Agent TUI CLI (**Claude Code / OpenAI Codex / Ollama**) 用のセッション管理サイドカー。
+Agent TUI CLI (**Claude Code / OpenAI Codex / Ollama**) 間の連携通信を担うセッションコーディネーター。
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
@@ -9,13 +9,16 @@ Agent TUI CLI (**Claude Code / OpenAI Codex / Ollama**) 用のセッション管
 
 ---
 
-Per-session sidecar that wraps **agent TUI CLIs** (Claude Code or OpenAI Codex)
-so hooks running inside the session can drive the host terminal — primarily
-the **window/tab title** — inject keystrokes into the wrapped TUI (`/rename`
-to set the session name visible on claude.ai/code, generalized `/slash` /
-`/keys` / `/answer` for any TUI), query session meta, and talk to
-[Concordia](https://github.com/LUDIARS/Concordia) (the LUDIARS multi-agent
-session coordinator).
+Lictor keeps **agent sessions working together** through
+[Concordia](https://github.com/LUDIARS/Concordia): it restores delegation links,
+observes linked sessions over WebSocket, and routes parent/child instructions,
+questions and answers using verified relationships. Actio stores the work;
+Lictor maintains the communication while that work proceeds.
+
+Each Lictor instance wraps an agent CLI and also provides terminal titles,
+safe TUI input, session metadata and the local control API. These are supporting
+interfaces for session collaboration. See `spec/feature/session-collaboration.md`
+for the coordination contract and verification boundaries.
 
 LUDIARS short code: **Li**. Default loopback port: ephemeral (registered in
 `LICTOR_PORT` env var that `lictor <provider> ...` injects into the child).
@@ -149,6 +152,9 @@ lictor cli implement review           # submit or retry through Cc/Revisor
 | GET    | `/v1/lictor/task`          | —                                      | Current task state `{branch, desc, updatedAt}` |
 | POST   | `/v1/lictor/task`          | `{branch?, desc?}`                     | PATCH Concordia session + emit event + refresh `lictor-current-task` skill |
 | GET    | `/v1/lictor/state`         | —                                      | `{notify, conflict, task}` snapshot for dashboards |
+| GET    | `/v1/collaboration` | — | Cc-owned parent/child links, latest peer progress, observed questions and connection/sync health |
+| POST   | `/v1/collaboration/message` | `{run_id,text}` | Relationship-scoped parent instruction or child question/message; acceptance is not delivery acknowledgement |
+| POST   | `/v1/collaboration/answer` | `{run_id,question_id,text}` or `{run_id,question_id,answer_index}` | Parent answer through Cc's existing question lifecycle (index is zero-based); never automatic approval |
 | POST   | `/v1/implementation-tools/bind` | `{cwd, task}`                       | Resolve repo/origin/branch/project code and update existing Cc session binding in one request; safe Cc rejection stays 409, unknown result is 502 (see spec/feature/implementation-bind.md) |
 | POST   | `/v1/implementation-tools/service` | `{service_code, action, note?}`  | Run Cc testing claim → Excubitor control → release in one request |
 | POST   | `/v1/implementation-tools/review` | —                                  | Submit or retry this session's Revisor local PR |
