@@ -339,6 +339,10 @@ reacting to Concordia state and relaying changes back automatically:
 - **Task declaration** — `lictor cli task set --branch <b> --desc <text>`
   for explicit task description (auto branch detection covers the rest).
   Seeded `lictor-task-protocol` skill tells the wrapped claude to call it.
+  `lictor cli task set --repo <checkout> --branch <b> [--desc <text>]` adds
+  another checkout registration (Cc `PATCH /v1/sessions/:id/working-targets`)
+  without changing the primary one — the command Cc's task-branch gate
+  suggests when it denies an action in an unregistered checkout.
 - **Implementation fast paths** — `lictor cli implement begin --task <text>`
   batches project-code lookup and git binding; service and review commands batch
   their existing Cc/Ex/Rv operations. No session-level workflow state is added,

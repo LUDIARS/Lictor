@@ -14,6 +14,7 @@ import type { NotifyState } from "./event-reactor.js";
 import type { ConflictState } from "./conflict-watcher.js";
 import type { TaskState } from "./task-relay.js";
 import { relayTask } from "./task-relay.js";
+import { relayWorkingTarget } from "./working-target-relay.js";
 import { fsRead, fsList, fsGrep } from "./fs-rpc.js";
 import type { TranscriptReadResult } from "./transcript-tail.js";
 import { extractPendingQuestions, postPendingQuestion } from "./ask-question-relay.js";
@@ -517,6 +518,18 @@ async function handle(
           : undefined;
     if (branch === undefined && desc === undefined) {
       return writeJson(res, 400, { error: "at least one of branch or desc must be a string" });
+    }
+    const repo = typeof (payload as { repo?: unknown }).repo === "string" ? (payload as { repo: string }).repo : undefined;
+    // --repo: 先頭の登録は変えずに checkout の登録を足す。branch はその checkout のもので、先頭の branch には入れない。
+    if (repo !== undefined) {
+      const added = await relayWorkingTarget({ client: ctx.concordia, sessionId: ctx.sessionId, repo, branch });
+      if (!added.ok) return writeJson(res, added.status, { error: added.error });
+      if (desc !== undefined) {
+        ctx.taskState = await relayTask({ client: ctx.concordia, sessionId: ctx.sessionId, injector: ctx.injector,
+          state: ctx.taskState, desc, source: "explicit" });
+      }
+      writeJson(res, 200, { ok: true, task: ctx.taskState, registration: added.registration });
+      return;
     }
     const next = await relayTask({
       client: ctx.concordia,

@@ -1,6 +1,7 @@
 import http from "node:http";
 import { readFileSync } from "node:fs";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
+import { parseTaskSetArgs } from "./task-set-args.js";
 import { resolveChatInput } from "./chat-input.js";
 
 export async function runClient(args: string[]): Promise<void> {
@@ -239,33 +240,15 @@ async function cmdTask(port: string, rest: string[]): Promise<void> {
     return;
   }
   if (op !== "set") {
-    process.stderr.write(`lictor cli task: unknown op '${op}'. Use get | set [--branch <b>] [--desc <text>].\n`);
+    process.stderr.write(`lictor cli task: unknown op '${op}'. Use get | set [--repo <checkout>] [--branch <b>] [--desc <text>].\n`);
     process.exit(2);
   }
-  // Parse --branch / --desc. Keep it minimal — no full getopts dep.
-  let branch: string | undefined;
-  let desc: string | undefined;
-  for (let i = 0; i < more.length; i++) {
-    const tok = more[i];
-    if (tok === "--branch" && i + 1 < more.length) {
-      branch = more[++i];
-    } else if (tok === "--desc" && i + 1 < more.length) {
-      // Allow trailing tokens to form the description if not quoted in shell.
-      desc = more.slice(i + 1).join(" ");
-      break;
-    } else {
-      process.stderr.write(`lictor cli task set: unexpected arg '${tok}'\n`);
-      process.exit(2);
-    }
-  }
-  if (branch === undefined && desc === undefined) {
-    process.stderr.write("usage: lictor cli task set [--branch <b>] [--desc <text>]\n");
+  const parsed = parseTaskSetArgs(more, process.cwd());
+  if (!parsed.ok) {
+    process.stderr.write(parsed.error + "\n");
     process.exit(2);
   }
-  const payload: { branch?: string; desc?: string } = {};
-  if (branch !== undefined) payload.branch = branch;
-  if (desc !== undefined) payload.desc = desc;
-  const reply = await postJsonText(port, "/v1/lictor/task", payload);
+  const reply = await postJsonText(port, "/v1/lictor/task", parsed.payload);
   process.stdout.write(reply + "\n");
 }
 

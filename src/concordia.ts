@@ -101,6 +101,14 @@ export class ConcordiaClient {
     await this.fetchJson("PATCH", `/v1/sessions/${encodeURIComponent(id)}`, patch);
   }
 
+  /**
+   * TB-MULTI: checkout の登録を足す (`lictor cli task set --repo`)。先頭の登録 (repo_path / branch) は変えない。
+   * Cc が保存して読み直した登録を返す。
+   */
+  async addWorkingTarget(id: string, target: { repo: string; branch: string }): Promise<unknown> {
+    return this.fetchJson("PATCH", `/v1/sessions/${encodeURIComponent(id)}/working-targets`, { add: target });
+  }
+
   async pendingTasks(id: string): Promise<PendingTasksResponse> {
     return this.fetchJson<PendingTasksResponse>(
       "GET",
