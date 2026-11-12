@@ -22,6 +22,9 @@ CI（`.github/workflows/ci.yml`）で build / typecheck / unit / smoke-sidecar �
 - **Concordia 連携**: `concordia.test.ts`（登録）、`event-reactor.test.ts`、
   `task-relay.test.ts`、`discord-channels.test.ts`、`ask-question-relay.test.ts`、
   `permission-proxy.test.ts`、`delegation-inject.test.ts`、`transcript-tail.test.ts`。
+- **chat CLI 入力**: `chat-input.test.ts`（位置引数互換、UTF-8 ファイルの日本語・改行・
+  引用符・BOM 保持規則、入力エラーの秘匿・未送信、失敗時の再送なし）。
+  HTTP はモックで捕捉し、sidecar や実配送を起動しない。
 - **許可カードの発火点**: `permission-runtime.test.ts`（記録 → Notification → 投稿 →
   打鍵回答の全経路・待機催促の除外・二重回答防止・回答期限）、
   `permission-hook.test.ts`（観測専用 hook の stdout/exit 契約）、

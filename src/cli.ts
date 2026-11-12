@@ -28,6 +28,9 @@ Usage:
   lictor cli session                   Print Concordia session id / persona.
   lictor cli chat <channel> <text...>  Post to Concordia chat (author_label
                                        auto-filled from persona).
+  lictor cli chat <channel> --text-file <path>
+                                       Read strict UTF-8; strip one leading BOM.
+                                       Reject empty text; do not mix with text args.
   lictor cli event <kind> [json]       Post a session event to Concordia.
   lictor cli conflicts [repo] [branch] Ask Concordia which other sessions are
                                        touching the same repo/branch.

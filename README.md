@@ -122,6 +122,7 @@ lictor cli rename "[Cr] 認証 502 デバッグ"  # types /rename ... into claud
 lictor cli meta                       # PID / cwd / WT_SESSION / persona
 lictor cli session                    # Concordia session id + persona JSON
 lictor cli chat team "デプロイ前確認" # author_label auto-filled from persona
+lictor cli chat team --text-file ./report.txt # UTF-8 の複数行本文
 lictor cli event branch.created '{"branch":"feat/x"}'
 lictor cli conflicts                  # other sessions on the same repo
 lictor cli implement begin --task "Fix review workflow"
@@ -129,6 +130,12 @@ lictor cli implement review           # submit or retry through Cc/Revisor
 ```
 
 ## Sidecar API (loopback only)
+
+チャットの複数行本文は UTF-8 ファイルを作成し、`lictor cli chat team --text-file ./report.txt`
+で送信できます。先頭 BOM は 1 個除去し、改行・引用符・残りの空白を保持します。
+本文の位置引数との併用、余分な引数、不正 UTF-8、読取失敗、空または空白のみの本文は
+送信前に終了コード 2 と固定エラーで拒否します。エラーに本文やファイルパスは含めません。
+従来の `lictor cli chat team "本文"` も使えます。配送の自動再送は行いません。
 
 | Method | Path                       | Body / params                          | Effect |
 |--------|----------------------------|----------------------------------------|--------|
@@ -289,7 +296,7 @@ keep working in lictor-wrapped sessions, but they're now redundant:
 |----------------------------------|---------------------------------------------|
 | Session register                 | (handled by lictor at wrapper start)        |
 | Heartbeat / stat polling cron    | (handled by lictor's 10-min cron)           |
-| Chat curl with manual author_label | `lictor cli chat <channel> <text>`        |
+| Chat curl with manual author_label | `lictor cli chat <channel> <text>` / `<channel> --text-file <path>` |
 | Conflicts check before `git checkout -b` | `lictor cli conflicts`              |
 
 For sessions NOT launched via `lictor claude` (e.g. raw `claude` invocations),

@@ -1,7 +1,8 @@
 {
   "version": 1,
   "contractsDir": "src/contracts",
-  "importFrom": "@ludiars/log-weaver",
+  "importFrom": "./contracts/contract-runtime.js",
+  "runtimeFile": "src/contracts/contract-runtime.ts",
   "contracts": [
     {
       "id": "C-1",
@@ -9,6 +10,15 @@
       "symbol": "isMissingReportResponse",
       "file": "src/report-append-error.ts",
       "module": "src/contracts/report-append.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-2",
+      "criterion": "C-2 decodeChatText(bytes): 不正UTF-8と空白のみの本文を固定エラーで拒否し、先頭BOMだけを除いた本文を保持する",
+      "symbol": "decodeChatText",
+      "file": "src/chat-input.ts",
+      "module": "src/contracts/chat-input.contract.ts",
       "mode": "observe",
       "sample": 1
     }

@@ -9,7 +9,10 @@
     { "pathPattern": "(^|/)src/implementation-bind\\.ts$" },
     { "pathPattern": "(^|/)tests/implementation-(bind|tools)\\.test\\.ts$" },
     {
-      "pathPattern": "(^|/)src/(?:active-repos|cli|client|concordia|concordia-types|exit-deadline|graceful-exit|meta|provider-runtime-metadata|repo-origin|runtime-model-effort|session-archive|session-end-skill|session-id-hook|session-shutdown|session-state-authority|session-state-skill|sidecar|spawn-context|submit-watchdog|task-relay|version|vestigium|workspace-trust-seed|wrap)\\.ts$"
+      "pathPattern": "(^|/)src/(?:active-repos|chat-input|cli|client|concordia|concordia-types|exit-deadline|graceful-exit|meta|provider-runtime-metadata|repo-origin|runtime-model-effort|session-archive|session-end-skill|session-id-hook|session-shutdown|session-state-authority|session-state-skill|sidecar|spawn-context|submit-watchdog|task-relay|version|vestigium|workspace-trust-seed|wrap)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)src/contracts/(?:chat-input\\.contract|contract-runtime)\\.ts$"
     },
     {
       "pathPattern": "(^|/)(bin/lictor|scripts/ensure-root-build)\\.mjs$"
@@ -34,7 +37,8 @@
     "セットアップ — 観測 (Vestigium) は best-effort",
     "SPEC-RUNTIME-MODEL-EFFORT",
     "SETUP-ROOT-BUILD-FRESHNESS",
-    "SPEC-WORKSPACE-TRUST-SEED"
+    "SPEC-WORKSPACE-TRUST-SEED",
+    "spec/tasks/2026-11-12-chat-text-file.md"
   ],
   "rationale": "Session coordination owns task declaration and provider launch settings. Persistent workspace trust is limited to registered Cc-launched sessions with a Concordia enrollment, regardless of whether their unattended terminal reports stdin as a TTY; launches without an enrollment retain provider confirmation UI. The executable boundary must refuse stale root build artifacts, while optional observability remains outside the control dependency chain."
 }

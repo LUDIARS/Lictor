@@ -1,6 +1,7 @@
 import http from "node:http";
 import { readFileSync } from "node:fs";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
+import { resolveChatInput } from "./chat-input.js";
 
 export async function runClient(args: string[]): Promise<void> {
   const [sub, ...rest] = args;
@@ -327,13 +328,13 @@ async function cmdRename(port: string, rest: string[]): Promise<void> {
 }
 
 async function cmdChat(port: string, rest: string[]): Promise<void> {
-  const channel = rest[0];
-  const text = rest.slice(1).join(" ");
-  if (!channel || !text) {
-    process.stderr.write("usage: lictor cli chat <channel> <text...>\n");
+  const input = resolveChatInput(rest);
+  if ("error" in input) {
+    process.stderr.write(`lictor cli chat: ${input.error}\n` +
+      "usage: lictor cli chat <channel> <text...> | <channel> --text-file <path>\n");
     process.exit(2);
   }
-  const reply = await postJsonText(port, "/v1/chat", { channel, text });
+  const reply = await postJsonText(port, "/v1/chat", input);
   process.stdout.write(reply + "\n");
 }
 

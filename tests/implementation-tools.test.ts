@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
+import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startSidecar, type SidecarContext } from "../src/sidecar.js";
@@ -55,6 +56,24 @@ async function withSidecar<T>(
   }
 }
 
+function postSidecar(port: number, path: string, body: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = request({
+      host: "127.0.0.1",
+      port,
+      path,
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    }, (res) => {
+      res.resume();
+      res.on("error", reject);
+      res.on("end", () => resolve(res.statusCode ?? 0));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
 test("implementation and direct PR tools require a registered Concordia session", async () => {
   await withSidecar({}, async (port) => {
     for (const path of [
@@ -63,11 +82,7 @@ test("implementation and direct PR tools require a registered Concordia session"
       "/v1/implementation-tools/review",
       "/v1/pr/submit",
     ]) {
-      const response = await fetch(`http://127.0.0.1:${port}${path}`, {
-        method: "POST",
-        body: "{}",
-      });
-      assert.equal(response.status, 503);
+      assert.equal(await postSidecar(port, path, "{}"), 503);
     }
   });
 });
