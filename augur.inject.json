@@ -3,7 +3,8 @@
   "include": [
     "src/chat-input.ts",
     "src/task-set-args.ts",
-    "src/task-set-repo.ts"
+    "src/task-set-repo.ts",
+    "src/session-identity-env.ts"
   ],
   "runtime": {
     "autoImport": false

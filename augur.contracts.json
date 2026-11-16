@@ -39,6 +39,15 @@
       "module": "src/contracts/task-set-repo.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-5",
+      "criterion": "C-5 pinSessionIdentityEnv(env, sessionId): wrapped CLI へ渡す LICTOR_SESSION_ID / CONCORDIA_SESSION_ID を自プロセスの登録 id に固定し、未登録なら継承した別セッションの id を除去する (他の env は不変)",
+      "symbol": "pinSessionIdentityEnv",
+      "file": "src/session-identity-env.ts",
+      "module": "src/contracts/session-identity-env.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }

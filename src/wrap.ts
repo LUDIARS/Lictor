@@ -89,6 +89,7 @@ import {
   type CodexSandboxMode,
 } from "./codex-launch-policy.js";
 import { readCodexConfigText } from "./codex-config-file.js";
+import { pinSessionIdentityEnv } from "./session-identity-env.js";
 
 export type CodexTransport = "app-server" | "legacy";
 
@@ -579,19 +580,23 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // claude-desktop 由来の「子セッション」 マーカー (CHILD_SESSION_ENV_KEYS) を wrapped
   // claude へ渡さない。 残すと claude が transcript JSONL を永続化せず中継が全停止する。
   // claude provider 限定で strip する (詳細は stripChildSessionEnv の docstring)。
-  const env: NodeJS.ProcessEnv = stripChildSessionEnv(
-    {
-      ...process.env,
-      LICTOR_PORT: String(sidecar.port),
-      LICTOR_PID: String(process.pid),
-      LICTOR_SESSION_START: meta.start_iso,
-      LICTOR_PROVIDER: provider.name,
-    },
-    provider,
+  // Session identity is pinned to this process's own registered id. Without a
+  // registration (Concordia down/restarting) the inherited id of whichever
+  // session launched us must be dropped, never passed through.
+  const env: NodeJS.ProcessEnv = pinSessionIdentityEnv(
+    stripChildSessionEnv(
+      {
+        ...process.env,
+        LICTOR_PORT: String(sidecar.port),
+        LICTOR_PID: String(process.pid),
+        LICTOR_SESSION_START: meta.start_iso,
+        LICTOR_PROVIDER: provider.name,
+      },
+      provider,
+    ),
+    concordia?.id ?? null,
   );
   if (concordia) {
-    env.LICTOR_SESSION_ID = concordia.id;
-    env.CONCORDIA_SESSION_ID = concordia.id;
     if (meta.persona?.name) env.LICTOR_PERSONA_NAME = String(meta.persona.name);
     if (meta.role_label) env.LICTOR_ROLE_LABEL = meta.role_label;
   }
