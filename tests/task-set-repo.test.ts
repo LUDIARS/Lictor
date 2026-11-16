@@ -26,8 +26,8 @@ test("keeps the existing --branch / --desc forms and rejects unknown args", () =
   assert.deepEqual(parseTaskSetArgs(["--branch", "main", "--desc", "a", "b"], "."), { ok: true, payload: { branch: "main", desc: "a b" } });
   assert.equal(parseTaskSetArgs(["--bogus", "x"], ".").ok, false);
   assert.equal(parseTaskSetArgs([], ".").ok, false);
-  // --repo は branch が無いと登録にならない。
-  assert.equal(parseTaskSetArgs(["--repo", "/x", "--desc", "a"], ".").ok, false);
+  // --branch 省略の --repo は解析では通し、checkout の現在 branch を後段 (resolveTaskSetRepo) で補う。
+  assert.deepEqual(parseTaskSetArgs(["--repo", "/x", "--desc", "a"], "."), { ok: true, payload: { repo: resolve("/x"), desc: "a" } });
 });
 
 test("relays --repo as an added working target and reports failures", async () => {

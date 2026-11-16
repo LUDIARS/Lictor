@@ -2,6 +2,7 @@ import http from "node:http";
 import { readFileSync } from "node:fs";
 import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 import { parseTaskSetArgs } from "./task-set-args.js";
+import { gitCheckoutProbe, resolveTaskSetRepo } from "./task-set-repo.js";
 import { resolveChatInput } from "./chat-input.js";
 
 export async function runClient(args: string[]): Promise<void> {
@@ -245,10 +246,19 @@ async function cmdTask(port: string, rest: string[]): Promise<void> {
   }
   const parsed = parseTaskSetArgs(more, process.cwd());
   if (!parsed.ok) {
+    if (parsed.help) {
+      process.stdout.write(parsed.usage + "\n");
+      return;
+    }
     process.stderr.write(parsed.error + "\n");
     process.exit(2);
   }
-  const reply = await postJsonText(port, "/v1/lictor/task", parsed.payload);
+  const checked = resolveTaskSetRepo(parsed.payload, gitCheckoutProbe);
+  if (!checked.ok) {
+    process.stderr.write(checked.error + "\n");
+    process.exit(2);
+  }
+  const reply = await postJsonText(port, "/v1/lictor/task", checked.payload);
   process.stdout.write(reply + "\n");
 }
 

@@ -21,6 +21,24 @@
       "module": "src/contracts/chat-input.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-3",
+      "criterion": "C-3 parseTaskSetArgs(args, cwd): --repo を cwd 基準の絶対パスにし、--desc は後続語を全部吸い、--help は --repo を含む usage を返し、未知引数は usage 付きで拒否する",
+      "symbol": "parseTaskSetArgs",
+      "file": "src/task-set-args.ts",
+      "module": "src/contracts/task-set-args.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-4",
+      "criterion": "C-4 resolveTaskSetRepo(payload, probe): 存在しない / git checkout でない --repo を拒否し、--branch 省略時は checkout の現在 branch を補う (detached は拒否)",
+      "symbol": "resolveTaskSetRepo",
+      "file": "src/task-set-repo.ts",
+      "module": "src/contracts/task-set-repo.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }

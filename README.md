@@ -343,6 +343,10 @@ reacting to Concordia state and relaying changes back automatically:
   another checkout registration (Cc `PATCH /v1/sessions/:id/working-targets`)
   without changing the primary one — the command Cc's task-branch gate
   suggests when it denies an action in an unregistered checkout.
+  The path must be an existing git checkout (otherwise exit 2); without
+  `--branch`, that checkout's current branch is registered. `--desc` takes
+  every remaining word, so put `--repo` / `--branch` before it.
+  `lictor cli task set --help` prints the usage.
 - **Implementation fast paths** — `lictor cli implement begin --task <text>`
   batches project-code lookup and git binding; service and review commands batch
   their existing Cc/Ex/Rv operations. No session-level workflow state is added,

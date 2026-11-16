@@ -1,6 +1,14 @@
 {
   "service": "lictor",
-  "include": ["src/chat-input.ts"],
-  "runtime": { "autoImport": false },
-  "rules": { "contract-wrap": true }
+  "include": [
+    "src/chat-input.ts",
+    "src/task-set-args.ts",
+    "src/task-set-repo.ts"
+  ],
+  "runtime": {
+    "autoImport": false
+  },
+  "rules": {
+    "contract-wrap": true
+  }
 }
