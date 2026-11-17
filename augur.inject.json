@@ -4,7 +4,8 @@
     "src/chat-input.ts",
     "src/task-set-args.ts",
     "src/task-set-repo.ts",
-    "src/session-identity-env.ts"
+    "src/session-identity-env.ts",
+    "src/session-dir-trust.ts"
   ],
   "runtime": {
     "autoImport": false

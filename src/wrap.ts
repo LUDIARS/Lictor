@@ -6,6 +6,7 @@ import { gatherBaseMeta, type Meta } from "./meta.js";
 import { resetTitle } from "./osc.js";
 import { createUserActivitySignal } from "./user-activity.js";
 import { seedWorkspaceTrust, shouldSeedWorkspaceTrust } from "./workspace-trust-seed.js";
+import { releaseSessionDirTrust, seedSessionDirTrust } from "./session-dir-trust.js";
 import { concordiaSpawnSessionMetadata } from "./spawn-context.js";
 import { ConcordiaClient, loadConcordiaConfig, type LivenessHandle } from "./concordia.js";
 import { gatherRepoStat } from "./stat.js";
@@ -552,6 +553,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   pollTimer?.unref?.();
   if (concordia) pollLiveState(ctx).catch(() => {});
 
+  let sessionDirTrustSeeded = false;
   let sharedCleanupDone = false;
   const cleanupShared = async (): Promise<void> => {
     if (sharedCleanupDone) return;
@@ -565,6 +567,15 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     sidecar.close();
     resetTitle();
     injector?.cleanup();
+    if (sessionDirTrustSeeded && injector) {
+      // セッション用フォルダの片付けに合わせて ~/.claude.json の登録も外す (増え続けない)。
+      // 失敗しても次回起動時の掃除 (実フォルダが無い登録の削除) で回収される。
+      try {
+        releaseSessionDirTrust({ sessionDir: injector.sessionDir, sessionsRoot: injector.sessionsRoot });
+      } catch {
+        // best-effort。パスを含み得る例外詳細は出さない。
+      }
+    }
   };
 
   // spawn する実バイナリ。 binaryEnvVar (例: gemma4-12 の LICTOR_FAMULUS_BIN) が
@@ -807,6 +818,19 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     process.stderr.write(
       `lictor: Codex thread bound via app-server (${expectedCodexThreadId}); starting interactive resume\n`,
     );
+  }
+
+  // --add-dir で渡すセッション用フォルダは毎回新しく、claude が起動のたびに trust picker を
+  // 出す。Lictor 自身が作った sessions 直下のフォルダに限り、人間の端末起動も含めて起動前に
+  // trust 済みとして登録する (cwd の trust と eligibility は下の別処理のまま変えない)。
+  if (provider.name === "claude" && provider.skillStrategy === "claude-add-dir" && injector) {
+    try {
+      const seeded = seedSessionDirTrust({ sessionDir: injector.sessionDir, sessionsRoot: injector.sessionsRoot });
+      sessionDirTrustSeeded = seeded !== null;
+    } catch {
+      // fs error message はホームディレクトリ等を含み得る。詳細を端末ログへ漏らさない。
+      process.stderr.write("lictor: session dir trust pre-seed failed\n");
+    }
   }
 
   // Detached Cc spawn (人間が picker に答えられない) は、claude の初回 picker

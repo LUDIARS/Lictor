@@ -30,6 +30,8 @@ export interface SkillInjectorOptions {
  *     `provider.supportsSkills` before constructing.
  */
 export class SkillInjector {
+  /** `<homeRoot>/.claude/lictor/sessions` — parent of every Lictor session dir. */
+  readonly sessionsRoot: string;
   readonly sessionDir: string;
   readonly skillsDir: string;
   readonly strategy: SkillStrategy;
@@ -39,7 +41,8 @@ export class SkillInjector {
     }
     this.strategy = strategy;
     const home = opts.homeRoot ?? homedir();
-    this.sessionDir = join(home, ...CLAUDE_SESSION_ROOT_PARTS, sessionId);
+    this.sessionsRoot = join(home, ...CLAUDE_SESSION_ROOT_PARTS);
+    this.sessionDir = join(this.sessionsRoot, sessionId);
     this.skillsDir = join(this.sessionDir, ".claude", "skills");
     mkdirSync(this.skillsDir, { recursive: true });
   }

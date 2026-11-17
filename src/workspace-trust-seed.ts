@@ -15,9 +15,20 @@
  * まだ起動していない spawn 直前に限って呼ぶことで競合窓を最小にする。
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
+import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import {
+  type ClaudeJsonFs,
+  defaultClaudeJsonFs,
+  findProjectKey,
+  isWritableEntry,
+  loadClaudeJson,
+  normalizeProjectKey,
+  resolveClaudeJsonPath,
+  saveClaudeJson,
+} from "./claude-json.js";
+
+export { normalizeProjectKey };
 
 export interface WorkspaceTrustSeedResult {
   trustGranted: boolean;
@@ -28,21 +39,6 @@ export interface WorkspaceTrustSeedEligibility {
   hasRegisteredConcordiaSession: boolean;
   hasSpawnCredential: boolean;
   providerName: string;
-}
-
-interface ClaudeProjectEntry {
-  hasTrustDialogAccepted?: boolean;
-  enabledMcpjsonServers?: string[];
-  disabledMcpjsonServers?: string[];
-  [key: string]: unknown;
-}
-
-/**
- * claude.json の project key 流儀 (新しめの entry は forward slash)。
- * @implements SPEC-WORKSPACE-TRUST-SEED
- */
-export function normalizeProjectKey(cwd: string): string {
-  return resolve(cwd).replace(/\\/g, "/");
 }
 
 /**
@@ -102,46 +98,18 @@ export function collectMcpServerNames(
 export function seedWorkspaceTrust(opts: {
   cwd: string;
   claudeJsonPath?: string;
-  fsApi?: {
-    existsSync: typeof existsSync;
-    readFileSync: typeof readFileSync;
-    writeFileSync: typeof writeFileSync;
-  };
+  fsApi?: ClaudeJsonFs;
 }): WorkspaceTrustSeedResult | null {
-  const fsApi = opts.fsApi ?? { existsSync, readFileSync, writeFileSync };
-  // CLAUDE_CONFIG_DIR で動く claude (Concordia の相談) は、その下の .claude.json を読む。
-  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  const claudeJsonPath = opts.claudeJsonPath ?? (configDir ? join(configDir, ".claude.json") : join(homedir(), ".claude.json"));
-  if (!fsApi.existsSync(claudeJsonPath)) return null;
-
-  let root: { projects?: Record<string, ClaudeProjectEntry>; [key: string]: unknown };
-  try {
-    root = JSON.parse(fsApi.readFileSync(claudeJsonPath, "utf8")) as typeof root;
-  } catch {
-    // 壊れた claude.json をこちらの整形で上書きしない (claude 本体の自己修復に任せる)。
-    return null;
-  }
-  if (!root || typeof root !== "object" || Array.isArray(root)) return null;
-  if (root.projects !== undefined
-    && (!root.projects || typeof root.projects !== "object" || Array.isArray(root.projects))) {
-    return null;
-  }
-  const projects = (root.projects ??= {});
+  const fsApi = opts.fsApi ?? defaultClaudeJsonFs;
+  const claudeJsonPath = opts.claudeJsonPath ?? resolveClaudeJsonPath();
+  const doc = loadClaudeJson(claudeJsonPath, fsApi);
+  if (!doc) return null;
+  const { projects } = doc;
 
   // 既存 entry はセパレータ表記ゆれ (E:/ と E:\) の両方を探す。
   const normalized = normalizeProjectKey(opts.cwd);
-  const existingKey = Object.keys(projects).find((key) => {
-    const candidate = key.replace(/\\/g, "/");
-    return process.platform === "win32"
-      ? candidate.toLowerCase() === normalized.toLowerCase()
-      : candidate === normalized;
-  });
-  const projectKey = existingKey ?? normalized;
-  const existingEntry = projects[projectKey];
-  if (existingEntry !== undefined
-    && (!existingEntry || typeof existingEntry !== "object" || Array.isArray(existingEntry))) {
-    return null;
-  }
+  const projectKey = findProjectKey(projects, normalized) ?? normalized;
+  if (!isWritableEntry(projects[projectKey])) return null;
   const entry = (projects[projectKey] ??= {});
 
   if ((entry.enabledMcpjsonServers !== undefined && !Array.isArray(entry.enabledMcpjsonServers))
@@ -173,7 +141,7 @@ export function seedWorkspaceTrust(opts: {
   if (disabledServers.length > 0) entry.disabledMcpjsonServers = [...disabled];
 
   if (changed) {
-    fsApi.writeFileSync(claudeJsonPath, JSON.stringify(root), "utf8");
+    saveClaudeJson(claudeJsonPath, doc, fsApi);
   }
   return { trustGranted: true, disabledServerCount: disabledServers.length };
 }

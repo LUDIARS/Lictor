@@ -48,6 +48,24 @@
       "module": "src/contracts/session-identity-env.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-6",
+      "criterion": "C-6 seedSessionDirTrust(opts): Lictor の sessions 直下のセッション用フォルダだけを projects[<正規化キー>].hasTrustDialogAccepted=true で登録し、同じ sessions 直下で実フォルダが消えた登録を掃除する (sessions 外の登録・壊れた設定は変えない)",
+      "symbol": "seedSessionDirTrust",
+      "file": "src/session-dir-trust.ts",
+      "module": "src/contracts/session-dir-trust.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-7",
+      "criterion": "C-7 releaseSessionDirTrust(opts): 終了したセッション用フォルダの登録を ~/.claude.json から外し、sessions 外の登録には触れない",
+      "symbol": "releaseSessionDirTrust",
+      "file": "src/session-dir-trust.ts",
+      "module": "src/contracts/session-dir-release.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }
