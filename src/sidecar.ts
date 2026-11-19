@@ -10,6 +10,7 @@ import type { SessionCollaboration } from "./session-collaboration.js";
 import { CollaborationError } from "./collaboration-transport.js";
 import { sanitizeDelegationPrompt } from "./delegation-inject.js";
 import type { SkillInjector } from "./skill-injector.js";
+import { PENDING_STAT_INSTRUCTIONS_PATH, type PendingStatInstructions } from "./pending-stat-instructions.js";
 import type { NotifyState } from "./event-reactor.js";
 import type { ConflictState } from "./conflict-watcher.js";
 import type { TaskState } from "./task-relay.js";
@@ -42,6 +43,7 @@ export interface SidecarContext {
   sessionId: string | null;
   roleLabel: string | null;
   injector: SkillInjector | null;
+  pendingStatInstructions?: PendingStatInstructions;
   /**
    * Writes raw bytes to the wrapped claude's pty stdin. Set by wrap.ts after
    * the pty is spawned; null when the sidecar is started without a pty (e.g.
@@ -173,6 +175,12 @@ async function handle(
 ): Promise<void> {
   const url = req.url ?? "";
   const method = req.method ?? "GET";
+
+  if (method === "GET" && url.startsWith(PENDING_STAT_INSTRUCTIONS_PATH)) {
+    const instructions = ctx.pendingStatInstructions?.get(url.slice(PENDING_STAT_INSTRUCTIONS_PATH.length));
+    if (instructions === undefined) return writeJson(res, 404, { error: "stat_instructions_not_found" });
+    return writeJson(res, 200, { instructions });
+  }
 
   if (url === "/v1/collaboration" || url === "/v1/collaboration/message" || url === "/v1/collaboration/answer") {
     if (!ctx.concordia || !ctx.sessionId || !ctx.collaboration) {

@@ -13,6 +13,7 @@
 | GET | `/v1/version` | — | `{"name":"lictor","version":"<semver>"}` |
 | GET | `/v1/meta` | — | セッション meta + persona JSON |
 | GET | `/v1/concordia/session` | — | `{session_id, persona, role_label, concordia_enabled, discord}`（`discord` = 保持中の Discord channel ids） |
+| GET | `/v1/pending-tasks/stat-collect/<task_id>` | — | 自セッションで保持中の定期状況収集の `{instructions}`。未保持の場合は404。 |
 | POST | `/v1/title` | `{text}` | OSC 0 発行 + 手動オーバーライド設定 |
 | POST | `/v1/title/auto` | — | 手動オーバーライド解除（次 stat 周期で auto 再開） |
 | POST | `/v1/rename` | `{text}` | claude TUI stdin に `/rename <text>\r` 注入（実セッション非ラップ時 503） |

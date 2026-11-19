@@ -16,6 +16,17 @@
   - `lictor-conflicts` + タイトル `⚠N` prefix ← `GET /v1/monitor/conflicts`
     ([`../../src/conflict-watcher.ts`](../../src/conflict-watcher.ts))
 
+## 定期状況収集の指示全文
+
+関連タスクは `actio:c3e5de6b-502b-49a0-9ab7-8bd4fe616c59`。
+各 payload の JSON プレビューは従来どおり最大200 UTF-16コード単位で表示する。
+省略された定期状況収集（`stat-collect` の `interval` と `idle`）は、
+自セッションの `LICTOR_PORT` で指示全文を取得できる場合に限り、タスク ID ごとの参照先を表示する。
+
+Concordia の pending-tasks 取得はタスクを配信済みにするため、全文の再取得にはローカル sidecar を使う。
+sidecar はこの wrapper が受け取った指示だけをメモリに保持する。保持上限は20件、指示ごとに UTF-8 で32 KiB。
+参照先は [sidecar HTTP API](../interface/sidecar-http-api.md) を参照。
+
 ## TASK-CLI-ENTRYPOINT-BOUNDARY: CLI entrypoint の責務境界
 
 対象ドメインは **session coordination / task declaration** とする。

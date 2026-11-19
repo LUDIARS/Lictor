@@ -90,6 +90,10 @@ Sidecar binds `127.0.0.1:0` (ephemeral). Concurrent lictor instances in
 sibling Windows Terminal tabs never collide; each session gets its own port
 and exports it as `$LICTOR_PORT`.
 
+A truncated periodic status request points to the wrapper's own sidecar for
+its full instructions. The sidecar reads a bounded in-memory cache of
+delivered instructions, so a lookup does not consume the Concordia queue.
+
 Loopback hardening: per-handler check rejects any request whose
 `remoteAddress` isn't `127.0.0.1` / `::1` / `::ffff:127.0.0.1`. Belt-and-
 braces alongside the explicit `listen(0, '127.0.0.1', ...)` bind.

@@ -5,7 +5,8 @@
     "src/task-set-args.ts",
     "src/task-set-repo.ts",
     "src/session-identity-env.ts",
-    "src/session-dir-trust.ts"
+    "src/session-dir-trust.ts",
+    "src/pending-tasks.ts"
   ],
   "runtime": {
     "autoImport": false

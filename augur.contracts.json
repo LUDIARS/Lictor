@@ -66,6 +66,15 @@
       "module": "src/contracts/session-dir-release.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-8",
+      "criterion": "C-8 renderTaskPayload(task, instructions): payload のプレビューは既存の200文字上限を保ち、定期状況収集で省略され、全文を取得できる場合だけ自セッションの確認先を示す",
+      "symbol": "renderTaskPayload",
+      "file": "src/pending-tasks.ts",
+      "module": "src/contracts/pending-task-payload.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }

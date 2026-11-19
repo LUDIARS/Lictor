@@ -23,6 +23,7 @@ import {
 } from "./event-reactor.js";
 import { refreshConflictState } from "./conflict-watcher.js";
 import { refreshPendingTasksSkill } from "./pending-tasks.js";
+import { PendingStatInstructions } from "./pending-stat-instructions.js";
 import { newTaskState, relayTask, seedTaskProtocolSkill } from "./task-relay.js";
 import { writeSessionStateSkill } from "./session-state-skill.js";
 import {
@@ -284,6 +285,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // ptyWriter is wired into ctx so sidecar endpoints (e.g. /v1/rename) can
   // inject keystrokes into claude's TUI input stream. Assigned after the pty
   // is spawned below.
+  const pendingStatInstructions = new PendingStatInstructions();
   const ctx: SidecarContext = {
     meta,
     titleState,
@@ -291,6 +293,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     sessionId: concordia?.id ?? null,
     roleLabel: meta.role_label,
     injector,
+    pendingStatInstructions,
     ptyWriter: null,
     notifyState: newNotifyState(),
     conflictState: { count: 0, titleMark: null },
@@ -399,7 +402,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
         ownSessionId: ctx.sessionId,
         onPendingTaskHint: () => {
           if (ctx.concordia && ctx.sessionId && ctx.injector) {
-            void refreshPendingTasksSkill(ctx.concordia, ctx.sessionId, ctx.injector);
+            void refreshPendingTasksSkill(ctx.concordia, ctx.sessionId, ctx.injector, pendingStatInstructions);
           }
         },
         onTaskCompletion: ({ prNumber, outcome }) => {
@@ -1641,9 +1644,9 @@ async function pollLiveState(ctx: SidecarContext): Promise<void> {
   }
 
   // Pending tasks → lictor-pending-tasks skill
-  if (ctx.injector) {
+  if (ctx.injector && ctx.pendingStatInstructions) {
     try {
-      await refreshPendingTasksSkill(ctx.concordia, ctx.sessionId, ctx.injector);
+      await refreshPendingTasksSkill(ctx.concordia, ctx.sessionId, ctx.injector, ctx.pendingStatInstructions);
     } catch {
       // ignore
     }

@@ -143,6 +143,7 @@ lictor cli implement review           # submit or retry through Cc/Revisor
 | GET    | `/v1/version`              | —                                      | `{"name":"lictor","version":"<semver>"}` — version of the lictor binary running this sidecar (which can differ from a globally-installed `lictor` if you `npm link` from a checkout) |
 | GET    | `/v1/meta`                 | —                                      | Session meta + persona JSON |
 | GET    | `/v1/concordia/session`    | —                                      | `{session_id, persona, role_label, concordia_enabled, discord}` — `discord` = held Discord channel ids (session + meta) |
+| GET    | `/v1/pending-tasks/stat-collect/<task_id>` | —                         | `{instructions}` for a retained periodic status request in this sidecar, or 404 |
 | POST   | `/v1/title`                | `{"text":"<title>"}`                   | Emit OSC 0 + set manual override |
 | POST   | `/v1/title/auto`           | —                                      | Drop manual override + reset title (auto resumes next stat cycle) |
 | POST   | `/v1/rename`               | `{"text":"<title>"}`                   | Inject `/rename <text>\r` into claude's TUI stdin (503 if not wrapping a real session) |
