@@ -32,6 +32,7 @@ import {
   SESSION_END_SKILL_NAME,
 } from "./session-end-skill.js";
 import { type ProviderConfig, PROVIDERS, resolveBinary } from "./provider.js";
+import { prepareAgyLaunch, type AgyLaunch } from "./agy-pty.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
 import { scheduleGracefulExit, type GracefulExitHandle } from "./graceful-exit.js";
 import { exitAfterCleanup } from "./exit-deadline.js";
@@ -557,6 +558,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   if (concordia) pollLiveState(ctx).catch(() => {});
 
   let sessionDirTrustSeeded = false;
+  let agyLaunch: AgyLaunch | null = null;
   let sharedCleanupDone = false;
   const cleanupShared = async (): Promise<void> => {
     if (sharedCleanupDone) return;
@@ -570,6 +572,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     sidecar.close();
     resetTitle();
     injector?.cleanup();
+    agyLaunch?.dispose();
     if (sessionDirTrustSeeded && injector) {
       // セッション用フォルダの片付けに合わせて ~/.claude.json の登録も外す (増え続けない)。
       // 失敗しても次回起動時の掃除 (実フォルダが無い登録の削除) で回収される。
@@ -863,6 +866,14 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
     providerArgs.push(...codexSandboxArgs(codexSandbox), ...codexNodeReplArgs);
   }
   const isWindows = process.platform === "win32";
+  if (provider.name === "agy" && concordia) {
+    try {
+      agyLaunch = prepareAgyLaunch(providerArgs, env);
+      if (!agyLaunch) process.stderr.write("lictor: agy transcript relay requires a Lictor-owned --log-file\n");
+    } catch {
+      process.stderr.write("lictor: could not create the private agy transcript binding log\n");
+    }
+  }
   const ptyFile = isWindows ? process.env.ComSpec ?? "cmd.exe" : effectiveBinary;
   const ptyArgs = isWindows ? ["/d", "/s", "/c", effectiveBinary, ...providerArgs] : providerArgs;
   const ptyTerm = normalizePtyTerm(env.TERM);
@@ -901,7 +912,11 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       lastActivityMs: () => {
         const p = transcriptTail?.getTranscriptPath() ?? null;
         if (!p) return null;
-        try { return statSync(p).mtimeMs; } catch { return null; }
+        try {
+          const main = statSync(p).mtimeMs;
+          const wal = provider.name === "agy" ? statSync(p + "-wal", { throwIfNoEntry: false }) : undefined;
+          return Math.max(main, wal?.mtimeMs ?? main);
+        } catch { return null; }
       },
       kill: () => terminatePty(child, "SIGTERM"),
       idleMs: envInt(env.LICTOR_SESSION_END_IDLE_KILL_MS, 300_000),
@@ -956,6 +971,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
       sessionId: concordia.id,
       concordiaBaseUrl,
       provider,
+      agyLaunch,
       expectedCodexThreadId,
       resumedCodexThreadId,
       resumeRelaySinceMs: resumedCodexThreadId ? Date.parse(meta.start_iso) : undefined,
@@ -1080,7 +1096,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
           : [meta.cwd],
       ),
       reason,
-      transcriptPath: transcriptTail?.getTranscriptPath() ?? null,
+      transcriptPath: provider.name === "agy" ? null : transcriptTail?.getTranscriptPath() ?? null,
       stateDir: activeReposStateDir,
     }).path,
     reportSessionEndDone: async () => {
@@ -1100,6 +1116,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   let workspaceTrustPending = autoConfirmWorkspaceTrust;
   let workspaceTrustOutput = "";
   const onData = (data: string) => {
+    transcriptTail?.observeTerminal?.(data);
     // First output from the wrapped CLI means its TUI is alive; arm the
     // one-shot delegation inject (fires after delayMs). Harmless when null.
     delegationInjector?.notifyData();

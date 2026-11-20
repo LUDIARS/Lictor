@@ -35,7 +35,11 @@ LUDIARS short code: **Li**. Default loopback port: ephemeral (registered in
 `lictor agy` wraps the Antigravity CLI (used for Gemini 4 models such as
 `gemini-4-neon`). The binary resolves as `LICTOR_AGY_BIN` > `PATH` >
 `%LOCALAPPDATA%/agy/bin/agy.exe` (installer default, often missing from the
-PATH of processes started before the install). Transcript tail is a no-op for agy.
+PATH of processes started before the install). Concordia-connected sessions read
+the bound agy SQLite transcript to relay accepted prompts, tool names, and assistant
+answers. This reader requires Node.js 22.13 or newer. Lictor uses a private CLI
+log to identify the conversation. An explicit `--log-file` disables the relay for
+that launch. See [the transcript relay spec](spec/feature/transcript-relay.md#agy-sqlite-reader).
 
 Claude/Codex/Gemini/agy share the title/Concordia/session-meta/pty surface; only the
 skill-injection paths differ. Codex's own `--add-dir` widens the writable

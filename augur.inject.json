@@ -6,7 +6,10 @@
     "src/task-set-repo.ts",
     "src/session-identity-env.ts",
     "src/session-dir-trust.ts",
-    "src/pending-tasks.ts"
+    "src/pending-tasks.ts",
+    "src/agy-binding.ts",
+    "src/agy-steps.ts",
+    "src/agy-turns.ts"
   ],
   "runtime": {
     "autoImport": false

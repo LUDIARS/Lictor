@@ -1,7 +1,7 @@
 # transcript リレー / pull
 
 ## 目的
-ラップ中の CLI（Claude / Codex / ローカルLLM）の **transcript（JSONL）** を読み取り、
+ラップ中の CLI（Claude / Codex / agy / ローカルLLM）の transcript を読み取り、
 Discord リレーやダッシュボードへ転送・取得できるようにする。
 
 ## 振る舞い
@@ -17,6 +17,41 @@ Discord リレーやダッシュボードへ転送・取得できるようにす
 - **push（現行legacy）**: fire-and-forget で Discord リレー等へ送る経路（best-effort）。
 - **push（App Server target）**: session内で直列化し、HTTP statusと`persisted`を確認する。
   詳細はCodex初回sequence仕様のtranscript sink節に従う。
+
+## agy SQLite reader
+
+Actio `actio:6719398b-e0f9-4a6f-9cec-a328756c97db`
+
+2026-11-21 に、agy が注入された指示を処理した後も Concordia の transcript は
+0 件で、Discord に応答と入力確認が表示されなかった。agy は JSONL の監視対象外だった。
+
+- Concordia 連携中の `lictor agy` は既存の対話 PTY を使う。ACP は stdio サーバー、
+  `-p --output-format stream-json` はヘッドレス実行で、どちらも端末での対話と
+  既存の注入経路を変える。SQLite を使う構成では両方を維持できる。
+- Lictor が起動ごとに渡す `--log-file` の `Streaming conversation <UUID>` を照合する。
+  `~/.gemini/antigravity-cli/cache/last_conversations.json` の起動 cwd と、起動時刻以降に
+  作られた同一 ID の `presence/<UUID>.lock` がそろった場合に
+  `conversations/<UUID>.db` を束縛する。束縛中はログと lock の同一性を確認する。
+  同じ cwd で並走してキャッシュが先に上書きされた場合、中継は条件がそろうまで保留する。
+  明示された `--log-file` は利用者の指定を優先し、その起動の中継は無効になる。
+- Node.js 標準の `node:sqlite` で DB を読み取り専用で開き、WAL のコミット済み行を
+  `steps.idx` 順に取得する。起動時刻以前のプロンプトに属する履歴は送らない。
+  完了した step 14 の本文は既存の user フレームと入力確認経路へ渡す。共有
+  `history.jsonl` は会話 ID を持たないため使わない。
+- step 15 は既知の protobuf フィールドから表示用本文を取り出す。step 132 はツール名・
+  呼び出し ID のみを送る。ツール引数、出力、内部推論、未対応の protobuf 形式は中継しない。
+  pull API の `raw=1` には正規化済みのフレームを返す。
+- 最終回答には、現在の入力に続く完了済み step 15 を使う。予定または後続のツールや
+  モデル処理がある場合は途中経過として扱う。後続の入力が始まった時点、
+  または同じ PTY の OSC 7501 `working → done` を受けた時点で最終回答を確定する。
+  OSC が受信できないときは、表示用応答が DB に書かれ、後続処理が見つからず、
+  同じ状態を 2 秒以上観測できた場合に確定する。
+- JSONL 向けの終了時アーカイブには SQLite 本体を渡さない。最終応答の保証は
+  agy のログと保存形式に依存する。対応する形式が変わった場合は読めない行を保留または
+  スキップする。外部プロセスや新規ライブラリは追加しない。
+
+[Antigravity CLI コマンド](https://antigravity.google/docs/cli/reference/)
+・[Antigravity のリリースノート](https://antigravity.google/docs/changelog/)
 
 ## discover / anti-crosstalk（束縛先の決め方）
 tail 対象 JSONL を「別セッションの JSONL」 と取り違えると発話が別チャンネルへ混線する。

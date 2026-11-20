@@ -75,6 +75,33 @@
       "module": "src/contracts/pending-task-payload.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-9",
+      "criterion": "C-9 selectAgyConversation(workspaceIds, loggedId, presenceCreatedAt, spawnedAt): 起動固有ログ、cwd の一意な記録、起動後の presence lock が同じ会話を示す場合だけ束縛する",
+      "symbol": "selectAgyConversation",
+      "file": "src/agy-binding.ts",
+      "module": "src/contracts/agy-binding.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-10",
+      "criterion": "C-10 decodeAgyStep(row): 確認済み protobuf の step 14・15・132 から入力・表示用応答・ツール識別子を取り出し、思考とツールの引数を中継しない",
+      "symbol": "decodeAgyStep",
+      "file": "src/agy-steps.ts",
+      "module": "src/contracts/agy-step.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-11",
+      "criterion": "C-11 selectAgyAssistantPhase(step, later, idle): 後続のモデル・ツール処理がなく、応答が確定し、ターン境界または idle があるときだけ final_answer にする",
+      "symbol": "selectAgyAssistantPhase",
+      "file": "src/agy-turns.ts",
+      "module": "src/contracts/agy-turn.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }

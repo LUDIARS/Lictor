@@ -22,6 +22,8 @@
  */
 
 import { TranscriptPathReport } from "./transcript-path-report.js";
+import { startAgyTranscript } from "./agy-transcript.js";
+import type { AgyLaunch } from "./agy-pty.js";
 import { isResumeRelayRecord } from "./codex-resume-binding.js";
 import {
   closeSync,
@@ -190,6 +192,7 @@ export function refreshClaim(claimPath: string): void {
 
 export interface TranscriptTailHandle {
   stop: () => void;
+  observeTerminal?: (data: string) => void;
   /**
    * Session JSONL を discover 済の場合に session UUID を返す.
    * provider.extractSessionId に従って filename から抽出.
@@ -239,6 +242,7 @@ export interface TranscriptTailOptions {
   sessionId: string;
   concordiaBaseUrl: string;
   provider: ProviderConfig;
+  agyLaunch?: AgyLaunch | null;
   /**
    * App Server bootstrap で確定済みの Codex thread id。指定時は初回から exact match のみを
    * 許可し、mtime による候補選択へ降りない。
@@ -442,6 +446,17 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       throw error;
     }
   };
+
+  if (opts.provider.name === "agy" && opts.agyLaunch) {
+    return startAgyTranscript({
+      launch: opts.agyLaunch,
+      cwd: opts.cwd,
+      send: (frame) => sendFrame(frame.kind, frame.payload),
+      onUserMessage: opts.onUserMessage,
+      isSessionActive: opts.isSessionActive,
+      warn: (message) => process.stderr.write(`lictor: ${message}\n`),
+    });
+  }
 
   // provider.transcriptDir が null を返す provider (Gemini 等) は no-op handle.
   if (!dir) {

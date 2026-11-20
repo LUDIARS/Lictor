@@ -570,7 +570,7 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // gemini と同じ単発書き (複数行は delay 2 段) から始め、 submit されない事象が
     // 出たら codex 同様の submitInjectTwoStep へ切り替える。
     submitInject: submitInjectSingleWrite,
-    // transcript の保存形式・位置は未調査のため transcript-tail は no-op。
+    // SQLite transcript は専用 reader が扱う。JSONL discovery と session pin は使わない。
     transcriptDir: () => null,
     extractSessionId: () => null,
     supportsSessionPin: false,
