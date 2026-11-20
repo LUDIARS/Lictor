@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getProvider, PROVIDERS, resolveBinary } from "../src/provider.js";
+import { agyDefaultInstallPaths, getProvider, isOnPath, PROVIDERS, resolveBinary } from "../src/provider.js";
 
 test("PROVIDERS registers claude with claude-add-dir skill strategy", () => {
   const p = PROVIDERS.claude;
@@ -33,6 +33,7 @@ test("getProvider: known names resolve", () => {
   assert.equal(getProvider("claude")?.binary, "claude");
   assert.equal(getProvider("codex")?.binary, "codex");
   assert.equal(getProvider("gemini")?.binary, "gemini");
+  assert.equal(getProvider("agy")?.binary, "agy");
 });
 
 test("getProvider: unknown returns null", () => {
@@ -298,4 +299,96 @@ test("transcript の設定フォルダは CLAUDE_CONFIG_DIR / CODEX_HOME に従�
   assert.equal(codexHomeRoot({ CODEX_HOME: "E:/Document/Consult/.codex-home" }), "E:/Document/Consult/.codex-home");
   assert.equal(claudeConfigRoot({}), join(homedir(), ".claude"));
   assert.equal(codexHomeRoot({ CODEX_HOME: "  " }), join(homedir(), ".codex"));
+});
+
+// ─── agy (Antigravity CLI) ─────────────────────────────────────────────
+
+test("PROVIDERS registers agy (Antigravity CLI) with no skill injection", () => {
+  const p = PROVIDERS.agy;
+  assert.equal(p.name, "agy");
+  assert.equal(p.binary, "agy");
+  assert.equal(p.binaryEnvVar, "LICTOR_AGY_BIN");
+  assert.equal(p.skillStrategy, "none");
+  assert.equal(p.supportsSkills, false);
+  assert.equal(p.concordiaProvider, "antigravity-cli");
+  assert.equal(p.displayName, "Antigravity CLI");
+  assert.equal(p.transcriptDir("/tmp/x"), null);
+  assert.equal(p.extractSessionId("anything"), null);
+  assert.equal(p.supportsSessionPin, false);
+});
+
+test("submitInject(agy): gemini と同じ単発書き", () => {
+  const writes: string[] = [];
+  PROVIDERS.agy.submitInject((d) => writes.push(d), "hi");
+  assert.deepEqual(writes, ["hi\r"]);
+});
+
+test("gemini は agy 追加後も残る", () => {
+  assert.equal(PROVIDERS.gemini.concordiaProvider, "gemini-cli");
+});
+
+const AGY_EXE = "C:\\Users\\u\\AppData\\Local\\agy\\bin\\agy.exe";
+const winEnv = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
+  LOCALAPPDATA: "C:\\Users\\u\\AppData\\Local",
+  Path: "C:\\Windows\\System32;C:\\tools",
+  PATHEXT: ".COM;.EXE;.BAT;.CMD",
+  ...extra,
+});
+const existsIn = (paths: string[]) => (p: string) => paths.includes(p);
+
+test("agyDefaultInstallPaths: win32 は %LOCALAPPDATA%/agy/bin/agy.exe", () => {
+  assert.deepEqual(agyDefaultInstallPaths(winEnv(), "win32"), [AGY_EXE]);
+});
+
+test("agyDefaultInstallPaths: LOCALAPPDATA 未設定 / 非 win32 は候補なし", () => {
+  assert.deepEqual(agyDefaultInstallPaths({}, "win32"), []);
+  assert.deepEqual(agyDefaultInstallPaths(winEnv(), "linux"), []);
+});
+
+test("isOnPath: Windows は Path 大小揺れと PATHEXT を吸収する", () => {
+  const exists = existsIn(["C:\\tools\\agy.EXE"]);
+  assert.equal(isOnPath("agy", winEnv(), exists, "win32"), true);
+  assert.equal(isOnPath("agy", winEnv({ Path: "C:\\Windows\\System32" }), exists, "win32"), false);
+});
+
+test("isOnPath: POSIX は PATH を : で区切り拡張子なしで探す", () => {
+  const exists = existsIn(["/opt/bin/agy"]);
+  assert.equal(isOnPath("agy", { PATH: "/usr/bin:/opt/bin" }, exists, "linux"), true);
+  assert.equal(isOnPath("agy", { PATH: "/usr/bin" }, exists, "linux"), false);
+});
+
+test("resolveBinary(agy): env 上書きが PATH・既定位置より優先", () => {
+  const bin = resolveBinary(PROVIDERS.agy, winEnv({ LICTOR_AGY_BIN: " D:\\agy\\agy.exe " }), {
+    exists: () => true,
+    platform: "win32",
+  });
+  assert.equal(bin, "D:\\agy\\agy.exe");
+});
+
+test("resolveBinary(agy): PATH 上にあれば binary 名のまま (既定位置が実在しても)", () => {
+  const bin = resolveBinary(PROVIDERS.agy, winEnv(), {
+    exists: existsIn(["C:\\tools\\agy.EXE", AGY_EXE]),
+    platform: "win32",
+  });
+  assert.equal(bin, "agy");
+});
+
+test("resolveBinary(agy): PATH に無く既定位置が実在すれば絶対パス", () => {
+  const bin = resolveBinary(PROVIDERS.agy, winEnv(), { exists: existsIn([AGY_EXE]), platform: "win32" });
+  assert.equal(bin, AGY_EXE);
+});
+
+test("resolveBinary(agy): どこにも無ければ binary 名に戻す", () => {
+  const bin = resolveBinary(PROVIDERS.agy, winEnv(), { exists: () => false, platform: "win32" });
+  assert.equal(bin, "agy");
+});
+
+test("resolveBinary: defaultInstallPaths を持たない provider は実在確認を呼ばない", () => {
+  let called = false;
+  const bin = resolveBinary(PROVIDERS.gemini, winEnv(), {
+    exists: () => { called = true; return true; },
+    platform: "win32",
+  });
+  assert.equal(bin, "gemini");
+  assert.equal(called, false);
 });

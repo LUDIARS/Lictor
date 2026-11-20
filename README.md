@@ -29,9 +29,15 @@ LUDIARS short code: **Li**. Default loopback port: ephemeral (registered in
 |----------------------|-----------------------|-----------------|--------------------|-----------|
 | Claude Code          | `lictor claude [args]`| ✅ (`--add-dir`) | ✅                  | ✅         |
 | OpenAI Codex CLI     | `lictor codex [args]` | ❌ (no SKILL.md disco) | ✅                  | ✅         |
+| Antigravity CLI (agy) | `lictor agy [args]`  | ❌ (no SKILL.md disco) | ✅ (inject 単発書き、TUI 実挙動は未検証) | ✅ (`antigravity-cli`) |
 | Local LLM (Ollama)   | `lictor gemma4-12`    | ❌ (built-in agent)   | ✅                  | ✅         |
 
-Claude/Codex/Gemini share the title/Concordia/session-meta/pty surface; only the
+`lictor agy` wraps the Antigravity CLI (used for Gemini 4 models such as
+`gemini-4-neon`). The binary resolves as `LICTOR_AGY_BIN` > `PATH` >
+`%LOCALAPPDATA%/agy/bin/agy.exe` (installer default, often missing from the
+PATH of processes started before the install). Transcript tail is a no-op for agy.
+
+Claude/Codex/Gemini/agy share the title/Concordia/session-meta/pty surface; only the
 skill-injection paths differ. Codex's own `--add-dir` widens the writable
 sandbox but doesn't trigger skill scanning, so `/v1/skill` returns 503 for
 Codex sessions.

@@ -8,8 +8,9 @@
  * downgrades to a no-op rather than breaking.
  */
 
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { cwdToProjectKey } from "./memory-loader.js";
 
 /**
@@ -41,6 +42,15 @@ export interface ProviderConfig {
    * {@link resolveBinary} に集約する (wrap が spawn 前に必ず通す)。
    */
   binaryEnvVar?: string;
+  /**
+   * 任意。 binary が PATH 上に見つからないときに試す既定インストール位置
+   * (絶対パス候補) を env から組み立てる。 実在する最初の候補を spawn 先にする。
+   * 解決順は env 上書き ({@link binaryEnvVar}) > PATH > 既定位置。
+   *
+   * 例: `agy` (Antigravity CLI) のインストーラ既定は `%LOCALAPPDATA%/agy/bin/agy.exe`
+   * で、 インストール前から起動しているプロセスの PATH には入っていないことがある。
+   */
+  defaultInstallPaths?: (env: NodeJS.ProcessEnv, platform: NodeJS.Platform) => string[];
   /**
    * binary に対して **ユーザ args の前に** 必ず差し込む固定 args。
    * `local` provider が `binary = "lictor"` を自分自身 (`lictor cli local-agent`)
@@ -543,6 +553,28 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // transcript ファイル自体が安定形式で吐かれないため pin 不可 (tail 自体 no-op)。
     supportsSessionPin: false,
   },
+  agy: {
+    name: "agy",
+    binary: "agy",
+    // Antigravity CLI。 Gemini 4 系 (gemini-4-neon 等) は Gemini CLI ではなく agy で使う。
+    // インストーラ既定の %LOCALAPPDATA%/agy/bin は既存プロセスの PATH に無いことがあるため、
+    // LICTOR_AGY_BIN 上書き > PATH > 既定位置 の順で解決する (resolveBinary)。
+    binaryEnvVar: "LICTOR_AGY_BIN",
+    defaultInstallPaths: agyDefaultInstallPaths,
+    // SKILL.md 相当の per-session discovery 機構は未確認なので skill 注入は no-op.
+    skillStrategy: "none",
+    supportsSkills: false,
+    concordiaProvider: "antigravity-cli",
+    displayName: "Antigravity CLI",
+    // agy の TUI が「text + \r の 1 chunk」 を submit として扱うかは未実測。
+    // gemini と同じ単発書き (複数行は delay 2 段) から始め、 submit されない事象が
+    // 出たら codex 同様の submitInjectTwoStep へ切り替える。
+    submitInject: submitInjectSingleWrite,
+    // transcript の保存形式・位置は未調査のため transcript-tail は no-op。
+    transcriptDir: () => null,
+    extractSessionId: () => null,
+    supportsSessionPin: false,
+  },
   // ローカル LLM エージェント (既定モデル gemma4:12b)。実体は別リポ Famulus
   // (@ludiars/famulus、ローカル LLM スポナー) の `famulus run` を pty で起動する。
   // 旧 `lictor cli local-agent` 内蔵実装からの載せ替え (2026-06-10)。Famulus は
@@ -577,21 +609,76 @@ export function getProvider(name: string): ProviderConfig | null {
 }
 
 /**
- * spawn する実バイナリを解決する。 provider が {@link ProviderConfig.binaryEnvVar}
- * を持ち、 その env が非空に設定されていれば trim した値で {@link ProviderConfig.binary}
- * を上書きする。 未設定 / 空白のみなら既定の binary をそのまま返す。
+ * agy (Antigravity CLI) の既定インストール位置。 Windows インストーラは
+ * `%LOCALAPPDATA%/agy/bin/agy.exe` に置く。 他 OS の既定位置は未確認なので候補なし。
+ */
+export function agyDefaultInstallPaths(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+  if (platform !== "win32") return [];
+  const localAppData = (env.LOCALAPPDATA ?? "").trim();
+  return localAppData ? [win32.join(localAppData, "agy", "bin", "agy.exe")] : [];
+}
+
+/** {@link resolveBinary} の副作用 (ファイル実在確認・OS) を差し替えるための注入点。 */
+export interface ResolveBinaryDeps {
+  exists?: (path: string) => boolean;
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * binary 名が env の PATH 上に実在するか。 Windows では PATHEXT の拡張子も試す
+ * (cmd.exe 経由の spawn と同じ解決規則に寄せる)。 PATH 変数名の大小揺れ (Path) も吸収する。
+ */
+export function isOnPath(
+  binary: string,
+  env: NodeJS.ProcessEnv,
+  exists: (path: string) => boolean,
+  platform: NodeJS.Platform,
+): boolean {
+  const isWin = platform === "win32";
+  const pathKey = Object.keys(env).find((k) => (isWin ? k.toUpperCase() === "PATH" : k === "PATH"));
+  const pathValue = pathKey ? env[pathKey] ?? "" : "";
+  const lib = isWin ? win32 : posix;
+  const dirs = pathValue.split(lib.delimiter).map((d) => d.trim().replace(/^"(.*)"$/, "$1")).filter(Boolean);
+  const exts = isWin
+    ? ["", ...(env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").map((e) => e.trim()).filter(Boolean)]
+    : [""];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      if (exists(lib.join(dir, binary + ext))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * spawn する実バイナリを解決する。 解決順:
  *
- * wrap が pty.spawn の直前に必ず通すことで、 「famulus が PATH に居ない」 等の
- * 環境差を一箇所で吸収する。 純粋関数 (env を引数で受ける) なのでテスト可能。
+ *  1. provider が {@link ProviderConfig.binaryEnvVar} を持ち、 その env が非空なら
+ *     trim した値 (未設定 / 空白のみは無視)。
+ *  2. provider が {@link ProviderConfig.defaultInstallPaths} を持つ場合のみ:
+ *     binary が PATH 上にあれば binary 名のまま。 無ければ実在する最初の既定位置。
+ *  3. いずれにも当たらなければ既定の binary 名 (spawn 側の PATH 解決に委ねる)。
+ *
+ * defaultInstallPaths を持たない provider は PATH を調べず従来どおり 1 → 3 だけ。
+ * wrap が pty.spawn の直前に必ず通すことで、 「famulus / agy が PATH に居ない」 等の
+ * 環境差を一箇所で吸収する。 env と実在確認を引数で受けるのでテスト可能。
  */
 export function resolveBinary(
   provider: ProviderConfig,
   env: NodeJS.ProcessEnv = process.env,
+  deps: ResolveBinaryDeps = {},
 ): string {
   const key = provider.binaryEnvVar;
   if (key) {
     const override = (env[key] ?? "").trim();
     if (override) return override;
+  }
+  if (provider.defaultInstallPaths) {
+    const exists = deps.exists ?? existsSync;
+    const platform = deps.platform ?? process.platform;
+    if (isOnPath(provider.binary, env, exists, platform)) return provider.binary;
+    const fallback = provider.defaultInstallPaths(env, platform).find((p) => exists(p));
+    if (fallback) return fallback;
   }
   return provider.binary;
 }

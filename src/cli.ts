@@ -11,6 +11,10 @@ Usage:
   lictor gemini [args...]              Wrap Gemini CLI. pty + title + Concordia
                                        (no skill injection — Gemini lacks a
                                        SKILL.md discovery mechanism).
+  lictor agy [args...]                 Wrap Antigravity CLI (agy; Gemini 4 Neon
+                                       etc.). pty + title + Concordia, no skill
+                                       injection. Binary: LICTOR_AGY_BIN > PATH >
+                                       %LOCALAPPDATA%/agy/bin/agy.exe.
   lictor gemma4-12 [args...]           ローカル LLM (Ollama) の軽量チャット
                                        エージェント (既定モデル gemma4:12b)。会話ログ
                                        永続 + 文脈 compaction + hook。pty + title +
