@@ -20,6 +20,16 @@ export function selectAgyAssistantPhase(
 // @ts-expect-error augur-inject
 selectAgyAssistantPhase = contract(selectAgyAssistantPhase, { ...augurContract_7cc804d3, contractId: 'C-11', mode: 'observe', sample: 1, where: 'src/agy-turns.ts:9', rule: 'contract-wrap', id: '7cc804d3' }); /* augur-inject:contract-wrap:7cc804d3 */
 
+/**
+ * agy は tail の応答行を本文 (text) より先に done 以外の非 pending status、
+ * または text 無しの done にすることがある。後続行が無い間はまだ本文が入る途中と
+ * みなし、次の SQLite snapshot で同じ行を読み直す。後続行があれば本当に空の行
+ * (tool call 前の空 commentary 等) なので読み飛ばしてよい。
+ */
+export function isUnsettledTail(step: AgyAssistantStep, next: AgyRow | undefined): boolean {
+  return next === undefined && !step.hasToolCalls && !(step.status === AGY_DONE && step.text);
+}
+
 const PUBLISHED_SETTLE_MS = 2_000;
 
 export class AgyTurns {
@@ -58,6 +68,10 @@ export class AgyTurns {
         frames.push({ kind: "text", payload: { role: "user", text: step.text } });
       } else if (this.promptAt !== null && step.kind === "tool" && [AGY_DONE, 6, 7].includes(row.status)) {
         frames.push({ kind: "tool-use", payload: { role: "assistant", name: step.name, tool_use_id: step.id } });
+      } else if (this.promptAt !== null && step.kind === "assistant" && isUnsettledTail(step, rows[index + 1])) {
+        // Text not yet written: re-read this row from the next SQLite snapshot.
+        this.cursor = previous;
+        break;
       } else if (this.promptAt !== null && step.kind === "assistant" && step.text && row.status === AGY_DONE) {
         const later = rows[index + 1]?.step_type;
         const idle = !later && this.isIdle(step, step.text, now, terminalDoneAt, allowStorageIdle);

@@ -10,7 +10,7 @@ import { readAgyRows } from "../src/agy-database.js";
 import { AgyTerminalStatus } from "../src/agy-pty.js";
 import { decodeAgyStep } from "../src/agy-steps.js";
 import { startAgyTranscript } from "../src/agy-transcript.js";
-import { AgyTurns } from "../src/agy-turns.js";
+import { AgyTurns, isUnsettledTail } from "../src/agy-turns.js";
 import type { TranscriptFrameInput } from "../src/transcript-sink.js";
 import { answer, prompt, tool } from "./fixtures/agy-transcript.js";
 
@@ -85,6 +85,70 @@ test("agy turns ignore resumed history, defer pending work and finalize one term
     { kind: "text", payload: { role: "assistant", text: "done", phase: "final_answer" } },
   ]);
   assert.deepEqual(turns.consume([], 32, 3_900, 3_899), []);
+});
+
+test("agy tail answer without text is unsettled only while it has no successor", () => {
+  const empty = decodeAgyStep(answer(3));
+  const filled = decodeAgyStep(answer(3, { response: "hello" }));
+  const working = decodeAgyStep({ ...answer(3, { response: "hello" }), status: 4 });
+  const queued = decodeAgyStep(answer(3, { tool: true }));
+  assert.ok(empty.kind === "assistant" && filled.kind === "assistant" && working.kind === "assistant" && queued.kind === "assistant");
+  assert.equal(isUnsettledTail(empty, undefined), true);
+  assert.equal(isUnsettledTail(working, undefined), true);
+  assert.equal(isUnsettledTail(filled, undefined), false);
+  assert.equal(isUnsettledTail(queued, undefined), false);
+  assert.equal(isUnsettledTail(empty, tool(4, 3)), false);
+});
+
+test("agy turns re-read a tail answer that was marked done before its text arrived", () => {
+  const turns = new AgyTurns(1_000);
+  assert.deepEqual(turns.consume([prompt(0, "hi", 1_100), answer(1)], 32, 1_200, null), [
+    { kind: "text", payload: { role: "user", text: "hi" } },
+  ]);
+  assert.equal(turns.cursor, 0);
+  const filled = answer(1, { response: "hello" });
+  assert.deepEqual(turns.consume([filled], 32, 1_300, null), []);
+  assert.equal(turns.cursor, 0);
+  assert.deepEqual(turns.consume([filled], 32, 1_400, 1_350), [
+    { kind: "text", payload: { role: "assistant", text: "hello", phase: "final_answer" } },
+  ]);
+  assert.equal(turns.cursor, 1);
+  assert.deepEqual(turns.consume([], 32, 1_500, 1_350), []);
+
+  const followed = new AgyTurns(1_000);
+  followed.consume([prompt(0, "hi", 1_100), answer(1)], 32, 1_200, null);
+  assert.deepEqual(followed.consume([answer(1, { response: "hello" }), prompt(2, "next", 1_600)], 32, 1_700, null), [
+    { kind: "text", payload: { role: "assistant", text: "hello", phase: "final_answer" } },
+    { kind: "text", payload: { role: "user", text: "next" } },
+  ]);
+  assert.equal(followed.cursor, 2);
+});
+
+test("agy turns hold a generating (status 8) tail answer until it settles as done with text", () => {
+  for (const fields of [{}, { response: "partial" }]) {
+    const turns = new AgyTurns(1_000);
+    assert.deepEqual(turns.consume([prompt(0, "hi", 1_100), { ...answer(1, fields), status: 8 }], 32, 1_200, 1_150), [
+      { kind: "text", payload: { role: "user", text: "hi" } },
+    ]);
+    assert.equal(turns.cursor, 0);
+    assert.deepEqual(turns.consume([{ ...answer(1, { response: "partial" }), status: 8 }], 32, 1_300, 1_250), []);
+    assert.equal(turns.cursor, 0);
+    const done = answer(1, { response: "hello" });
+    assert.deepEqual(turns.consume([done], 32, 1_400, 1_350), [
+      { kind: "text", payload: { role: "assistant", text: "hello", phase: "final_answer" } },
+    ]);
+    assert.equal(turns.cursor, 1);
+    assert.deepEqual(turns.consume([], 32, 1_500, 1_450), []);
+  }
+});
+
+test("agy turns skip an empty answer that already has a successor", () => {
+  const turns = new AgyTurns(1_000);
+  assert.deepEqual(turns.consume([prompt(0, "hi", 1_100), answer(1), tool(2, 3)], 32, 1_200, null), [
+    { kind: "text", payload: { role: "user", text: "hi" } },
+    { kind: "tool-use", payload: { role: "assistant", name: "run_command", tool_use_id: "tool-call-1" } },
+  ]);
+  assert.equal(turns.cursor, 2);
 });
 
 test("agy terminal state ignores unrelated, split or incomplete OSC 7501 reports", () => {
