@@ -28,6 +28,7 @@ spec/
 | [terminal-title.md](feature/terminal-title.md) | OSC 0 端末タイトル制御 + 自動タイトル |
 | [keystroke-injection.md](feature/keystroke-injection.md) | TUI への slash / keys / rename / answer 注入 |
 | [concordia-integration.md](feature/concordia-integration.md) | セッション登録 / WS 生存 / stat ポーリング / chat・report・event 中継 |
+| [pr-submit-diagnostic.md](feature/pr-submit-diagnostic.md) | PR 提出の結果不明時の読み取り照合 |
 | [skill-injection.md](feature/skill-injection.md) | per-session SKILL.md 注入 + repo 関連メモリ供給 |
 | [transcript-relay.md](feature/transcript-relay.md) | ラップ中 CLI の transcript 読み取り・転送 |
 | [permission-proxy.md](feature/permission-proxy.md) | PreToolUse 許可判断の Concordia 中継 |

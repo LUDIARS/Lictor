@@ -5,6 +5,7 @@ import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 import type { Meta } from "./meta.js";
 import type { ConcordiaClient } from "./concordia.js";
 import { ImplementationBindProxyError, unknownImplementationBind } from "./implementation-bind.js";
+import { PrSubmissionUnknownError } from "./pr-submit-proxy.js";
 import { ReportNotFoundError } from "./report-append-error.js";
 import type { SessionCollaboration } from "./session-collaboration.js";
 import { CollaborationError } from "./collaboration-transport.js";
@@ -642,10 +643,15 @@ async function handle(
         (typeof payload.branch !== "string" || payload.branch.trim().length === 0)) {
       return writeJson(res, 400, { error: "branch must be a non-empty string when provided" });
     }
-    writeJson(res, 200, await ctx.concordia.submitDirectLocalPr(ctx.sessionId, {
-      repo_path: repoPath,
-      ...(typeof payload?.branch === "string" ? { branch: payload.branch.trim() } : {}),
-    }));
+    try {
+      writeJson(res, 200, await ctx.concordia.submitDirectLocalPr(ctx.sessionId, {
+        repo_path: repoPath,
+        ...(typeof payload?.branch === "string" ? { branch: payload.branch.trim() } : {}),
+      }));
+    } catch (error) {
+      if (!(error instanceof PrSubmissionUnknownError)) throw error;
+      writeJson(res, 502, { error: error.message });
+    }
     return;
   }
 

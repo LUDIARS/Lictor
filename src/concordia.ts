@@ -14,6 +14,7 @@ import type {
 
 import { isMissingReportResponse, ReportNotFoundError } from "./report-append-error.js";
 import { requestImplementationBind } from "./implementation-bind.js";
+import { requestDirectLocalPr } from "./pr-submit-proxy.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const SESSION_END_DONE_TIMEOUT_MS = 5_000;
@@ -193,11 +194,7 @@ export class ConcordiaClient {
     id: string,
     payload: { repo_path: string; branch?: string },
   ): Promise<unknown> {
-    return this.fetchJson("POST", "/v1/prs/local/direct", {
-      repo_path: payload.repo_path,
-      ...(payload.branch ? { branch: payload.branch } : {}),
-      session_id: id,
-    });
+    return requestDirectLocalPr(this.cfg.baseUrl, id, payload);
   }
 
   /**

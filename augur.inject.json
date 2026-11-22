@@ -9,7 +9,8 @@
     "src/pending-tasks.ts",
     "src/agy-binding.ts",
     "src/agy-steps.ts",
-    "src/agy-turns.ts"
+    "src/agy-turns.ts",
+    "src/pr-submit-outcome.ts"
   ],
   "runtime": {
     "autoImport": false

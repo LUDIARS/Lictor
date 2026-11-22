@@ -137,7 +137,12 @@ lictor cli event branch.created '{"branch":"feat/x"}'
 lictor cli conflicts                  # other sessions on the same repo
 lictor cli implement begin --task "Fix review workflow"
 lictor cli implement review           # submit or retry through Cc/Revisor
+lictor cli pr submit [--repo <path>] [--branch <name>]
 ```
+
+`pr submit` が結果不明を返した場合は、表示された checkout とブランチを使って
+Concordia の PR 一覧で受付を照合してください。
+[PR 提出結果の照合](spec/feature/pr-submit-diagnostic.md)
 
 ## Sidecar API (loopback only)
 

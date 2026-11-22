@@ -102,6 +102,24 @@
       "module": "src/contracts/agy-turn.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-12",
+      "criterion": "C-12 isUnknownPrSubmission(status, body): 応答消失を示す HTTP 状態または提出 POST の通信診断だけを結果不明と判定し、受付結果と明確な拒否を保持する",
+      "symbol": "isUnknownPrSubmission",
+      "file": "src/pr-submit-outcome.ts",
+      "module": "src/contracts/pr-submit-outcome.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-13",
+      "criterion": "C-13 prSubmissionUnknownMessage(repo, branch): 対象リポジトリとブランチを示し、再送を避けて既存の読み取り照合経路を使うよう案内する",
+      "symbol": "prSubmissionUnknownMessage",
+      "file": "src/pr-submit-outcome.ts",
+      "module": "src/contracts/pr-submit-guidance.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }

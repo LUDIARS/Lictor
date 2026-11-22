@@ -4,6 +4,13 @@ import { LICTOR_NAME, LICTOR_VERSION } from "./version.js";
 import { parseTaskSetArgs } from "./task-set-args.js";
 import { gitCheckoutProbe, resolveTaskSetRepo } from "./task-set-repo.js";
 import { resolveChatInput } from "./chat-input.js";
+import { isUnknownPrSubmission, prSubmissionUnknownMessage } from "./pr-submit-outcome.js";
+
+// Allow the sidecar's upstream deadline to produce a reply before the CLI gives up.
+const PR_SUBMIT_DEADLINE_MS = 120_000;
+const PR_SUBMIT_RESPONSE_LOSS_CODES = new Set([
+  "ABORT_ERR", "ECONNRESET", "ETIMEDOUT", "EPIPE", "ERR_STREAM_PREMATURE_CLOSE",
+]);
 
 export async function runClient(args: string[]): Promise<void> {
   const [sub, ...rest] = args;
@@ -126,10 +133,21 @@ async function cmdPr(port: string, rest: string[]): Promise<void> {
     else if (more[i] === "--branch" && more[i + 1]) branch = more[++i];
     else return usage("lictor cli pr submit [--repo <path>] [--branch <name>]");
   }
-  process.stdout.write((await postJsonText(port, "/v1/pr/submit", {
+  const checkoutBranch = branch?.trim() ?? gitCheckoutProbe.currentBranch(repo.trim()) ?? "";
+  const reconcile = () => new Error(prSubmissionUnknownMessage(
+    repo.trim(), checkoutBranch === "HEAD" ? "" : checkoutBranch,
+  ));
+  const body = JSON.stringify({
     repo_path: repo,
     ...(branch ? { branch } : {}),
-  })) + "\n");
+  });
+  const reply = await request(port, "POST", "/v1/pr/submit", body, AbortSignal.timeout(PR_SUBMIT_DEADLINE_MS))
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error.code && PR_SUBMIT_RESPONSE_LOSS_CODES.has(error.code)) throw reconcile();
+      throw error;
+    });
+  if (isUnknownPrSubmission(reply.status, reply.body)) throw reconcile();
+  process.stdout.write(checkPostReply(reply) + "\n");
 }
 
 async function cmdImplement(port: string, rest: string[]): Promise<void> {
@@ -368,10 +386,12 @@ function postJson(port: string, path: string, payload: unknown): Promise<void> {
 
 function postJsonText(port: string, path: string, payload: unknown): Promise<string> {
   const body = JSON.stringify(payload);
-  return request(port, "POST", path, body).then(({ status, body: text }) => {
-    if (status !== 200) throw new Error(`HTTP ${status}: ${text}`);
-    return text;
-  });
+  return request(port, "POST", path, body).then(checkPostReply);
+}
+
+function checkPostReply({ status, body }: ResponseLite): string {
+  if (status !== 200) throw new Error(`HTTP ${status}: ${body}`);
+  return body;
 }
 
 function postNoBody(port: string, path: string): Promise<void> {
@@ -397,6 +417,7 @@ function request(
   method: string,
   path: string,
   body?: string,
+  signal?: AbortSignal,
 ): Promise<ResponseLite> {
   return new Promise((resolve, reject) => {
     const req = http.request(
@@ -405,6 +426,7 @@ function request(
         port: Number(port),
         path,
         method,
+        signal,
         headers:
           body !== undefined
             ? {
@@ -415,6 +437,7 @@ function request(
       },
       (res) => {
         const chunks: Buffer[] = [];
+        res.on("error", reject);
         res.on("data", (c: Buffer) => chunks.push(c));
         res.on("end", () => {
           resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") });

@@ -8,6 +8,23 @@ import { startSidecar, type SidecarContext } from "../src/sidecar.js";
 import { gatherBaseMeta } from "../src/meta.js";
 import { SkillInjector } from "../src/skill-injector.js";
 import { ImplementationBindProxyError } from "../src/implementation-bind.js";
+import { PrSubmissionUnknownError } from "../src/pr-submit-proxy.js";
+
+test("the direct PR sidecar relay exposes an unknown result as HTTP 502", async () => {
+  let calls = 0;
+  const concordia = { submitDirectLocalPr: async () => {
+    calls++;
+    throw new PrSubmissionUnknownError();
+  } } as unknown as SidecarContext["concordia"];
+  await withSidecar({ concordia, sessionId: "owner-session" }, async (port) => {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/pr/submit`, {
+      method: "POST", body: JSON.stringify({ repo_path: "/workspace/game" }),
+    });
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: "pr_submission_result_unknown" });
+    assert.equal(calls, 1);
+  });
+});
 
 test("bind relay keeps safe rejection status and hides unexpected exceptions", async () => {
   for (const typed of [true, false]) {
