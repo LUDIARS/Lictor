@@ -9,6 +9,11 @@ I/O を透過中継しつつ、sidecar から介入できる土台を作る。�
 - `lictor <provider> [...args]` で provider（claude / codex）を判定し
   ([`../../src/provider.ts`](../../src/provider.ts))、`node-pty` で spawn
   ([`../../src/wrap.ts`](../../src/wrap.ts))。
+- `lictor grok [args...]` は Grok CLI を起動し、Concordia に `grok-cli` として登録する。
+  解決順は `LICTOR_GROK_BIN`、`PATH`、既定位置（Windows は
+  `%USERPROFILE%/.grok/bin/grok.exe`、POSIX は `~/.grok/bin/grok`）。入力注入は
+  本文と Enter を別々に送信する。スキルの探索は Grok が担当する。会話ログの中継と
+  セッション ID の固定は対象外とする。関連 Actio タスク `actio:07b0c6af-dd5c-4307-9ff4-e382c691fa6b`。
 - 子の stdout/stderr を端末へ、端末の stdin を子へそのまま流す。
 - 端末リサイズ（SIGWINCH 相当）を pty に伝播、シグナルを中継。
 - 子の出力は `ptyWriter` 経由でのみ書き込む（注入系もここを通す）。

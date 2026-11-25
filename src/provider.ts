@@ -12,6 +12,8 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import { cwdToProjectKey } from "./memory-loader.js";
+import { contract } from './contracts/contract-runtime.js'; /* augur-inject:import:b580951b */
+import augurContract_4f62ec97 from './contracts/grok-install-paths.contract.js'; /* augur-inject:contract-predicate:5b6f5efc */
 
 /**
  * How lictor delivers SKILL.md files to the wrapped CLI.
@@ -494,6 +496,18 @@ export function makeLocalLlmProvider(opts: {
   };
 }
 
+/** Default locations used by the Grok CLI installer. */
+export function grokDefaultInstallPaths(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string[] {
+  if (platform === "win32") {
+    const profile = env.USERPROFILE?.trim();
+    return profile ? [win32.join(profile, ".grok", "bin", "grok.exe")] : [];
+  }
+  const home = env.HOME?.trim();
+  return home ? [posix.join(home, ".grok", "bin", "grok")] : [];
+}
+// @ts-expect-error augur-inject
+grokDefaultInstallPaths = contract(grokDefaultInstallPaths, { ...augurContract_4f62ec97, contractId: 'C-14', mode: 'observe', sample: 1, where: 'src/provider.ts:500', rule: 'contract-wrap', id: '4f62ec97' }); /* augur-inject:contract-wrap:4f62ec97 */
+
 export const PROVIDERS: Record<string, ProviderConfig> = {
   claude: {
     name: "claude",
@@ -571,6 +585,21 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     // 出たら codex 同様の submitInjectTwoStep へ切り替える。
     submitInject: submitInjectSingleWrite,
     // SQLite transcript は専用 reader が扱う。JSONL discovery と session pin は使わない。
+    transcriptDir: () => null,
+    extractSessionId: () => null,
+    supportsSessionPin: false,
+  },
+  grok: {
+    name: "grok",
+    binary: "grok",
+    binaryEnvVar: "LICTOR_GROK_BIN",
+    defaultInstallPaths: grokDefaultInstallPaths,
+    // Grok discovers its own skills and commands.
+    skillStrategy: "none",
+    supportsSkills: false,
+    concordiaProvider: "grok-cli",
+    displayName: "Grok CLI",
+    submitInject: submitInjectTwoStep,
     transcriptDir: () => null,
     extractSessionId: () => null,
     supportsSessionPin: false,

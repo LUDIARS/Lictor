@@ -120,6 +120,15 @@
       "module": "src/contracts/pr-submit-guidance.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-14",
+      "criterion": "C-14 grokDefaultInstallPaths(env, platform): Windows では USERPROFILE、POSIX では HOME を基準に Grok CLI の既定パスを返し、対応するホーム変数が空なら候補を返さない",
+      "symbol": "grokDefaultInstallPaths",
+      "file": "src/provider.ts",
+      "module": "src/contracts/grok-install-paths.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }

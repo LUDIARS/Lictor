@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agyDefaultInstallPaths, getProvider, isOnPath, PROVIDERS, resolveBinary } from "../src/provider.js";
+import { agyDefaultInstallPaths, getProvider, grokDefaultInstallPaths, isOnPath, PROVIDERS, resolveBinary } from "../src/provider.js";
 
 test("PROVIDERS registers claude with claude-add-dir skill strategy", () => {
   const p = PROVIDERS.claude;
@@ -34,6 +34,7 @@ test("getProvider: known names resolve", () => {
   assert.equal(getProvider("codex")?.binary, "codex");
   assert.equal(getProvider("gemini")?.binary, "gemini");
   assert.equal(getProvider("agy")?.binary, "agy");
+  assert.equal(getProvider("grok"), PROVIDERS.grok);
 });
 
 test("getProvider: unknown returns null", () => {
@@ -381,6 +382,55 @@ test("resolveBinary(agy): PATH に無く既定位置が実在すれば絶対パ�
 test("resolveBinary(agy): どこにも無ければ binary 名に戻す", () => {
   const bin = resolveBinary(PROVIDERS.agy, winEnv(), { exists: () => false, platform: "win32" });
   assert.equal(bin, "agy");
+});
+
+test("PROVIDERS registers Grok CLI with native skill discovery and two-step inject", () => {
+  const grok = PROVIDERS.grok;
+  assert.equal(grok.name, "grok");
+  assert.equal(grok.binary, "grok");
+  assert.equal(grok.binaryEnvVar, "LICTOR_GROK_BIN");
+  assert.equal(grok.defaultInstallPaths, grokDefaultInstallPaths);
+  assert.equal(grok.skillStrategy, "none");
+  assert.equal(grok.supportsSkills, false);
+  assert.equal(grok.concordiaProvider, "grok-cli");
+  assert.equal(grok.displayName, "Grok CLI");
+  assert.equal(grok.submitInject, PROVIDERS.codex.submitInject);
+  assert.equal(grok.transcriptDir("/tmp/project"), null);
+  assert.equal(grok.extractSessionId("anything"), null);
+  assert.equal(grok.supportsSessionPin, false);
+});
+
+const grokPlatforms = [
+  {
+    platform: "win32",
+    env: winEnv({ USERPROFILE: "C:\\Users\\u" }),
+    onPath: "C:\\tools\\grok.EXE",
+    installed: "C:\\Users\\u\\.grok\\bin\\grok.exe",
+    override: "D:\\custom\\grok.exe",
+  },
+  {
+    platform: "linux",
+    env: { HOME: "/home/u", PATH: "/usr/bin:/opt/bin" },
+    onPath: "/opt/bin/grok",
+    installed: "/home/u/.grok/bin/grok",
+    override: "/custom/grok",
+  },
+] as const;
+
+for (const { platform, env, onPath, installed, override } of grokPlatforms) {
+  test(`resolveBinary(grok): override, PATH, and default install path on ${platform}`, () => {
+    const grok = PROVIDERS.grok;
+    const both = { exists: existsIn([onPath, installed]), platform };
+    assert.equal(resolveBinary(grok, { ...env, LICTOR_GROK_BIN: ` ${override} ` }, both), override);
+    assert.equal(resolveBinary(grok, env, both), "grok");
+    assert.equal(resolveBinary(grok, env, { exists: existsIn([installed]), platform }), installed);
+    assert.equal(resolveBinary(grok, env, { exists: () => false, platform }), "grok");
+  });
+}
+
+test("grokDefaultInstallPaths: no candidate without the platform's home variable", () => {
+  assert.deepEqual(grokDefaultInstallPaths({ HOME: "/home/u", USERPROFILE: " " }, "win32"), []);
+  assert.deepEqual(grokDefaultInstallPaths({ USERPROFILE: "C:\\Users\\u", HOME: " " }, "linux"), []);
 });
 
 test("resolveBinary: defaultInstallPaths を持たない provider は実在確認を呼ばない", () => {

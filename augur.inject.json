@@ -10,7 +10,8 @@
     "src/agy-binding.ts",
     "src/agy-steps.ts",
     "src/agy-turns.ts",
-    "src/pr-submit-outcome.ts"
+    "src/pr-submit-outcome.ts",
+    "src/provider.ts"
   ],
   "runtime": {
     "autoImport": false

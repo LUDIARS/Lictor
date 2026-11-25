@@ -15,6 +15,9 @@ Usage:
                                        etc.). pty + title + Concordia, no skill
                                        injection. Binary: LICTOR_AGY_BIN > PATH >
                                        %LOCALAPPDATA%/agy/bin/agy.exe.
+  lictor grok [args...]                Wrap Grok CLI. pty + title + Concordia.
+                                       Binary: LICTOR_GROK_BIN > PATH >
+                                       ~/.grok/bin/grok (grok.exe on Windows).
   lictor gemma4-12 [args...]           ローカル LLM (Ollama) の軽量チャット
                                        エージェント (既定モデル gemma4:12b)。会話ログ
                                        永続 + 文脈 compaction + hook。pty + title +

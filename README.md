@@ -31,6 +31,7 @@ LUDIARS short code: **Li**. Default loopback port: ephemeral (registered in
 | OpenAI Codex CLI     | `lictor codex [args]` | ❌ (no SKILL.md disco) | ✅                  | ✅         |
 | Antigravity CLI (agy) | `lictor agy [args]`  | ❌ (no SKILL.md disco) | ✅ (inject 単発書き、TUI 実挙動は未検証) | ✅ (`antigravity-cli`) |
 | Local LLM (Ollama)   | `lictor gemma4-12`    | ❌ (built-in agent)   | ✅                  | ✅         |
+| Grok CLI             | `lictor grok [args]` | ❌ (native discovery) | ✅ (two-step inject) | ✅ (`grok-cli`) |
 
 `lictor agy` wraps the Antigravity CLI (used for Gemini 4 models such as
 `gemini-4-neon`). The binary resolves as `LICTOR_AGY_BIN` > `PATH` >
@@ -41,7 +42,13 @@ answers. This reader requires Node.js 22.13 or newer. Lictor uses a private CLI
 log to identify the conversation. An explicit `--log-file` disables the relay for
 that launch. See [the transcript relay spec](spec/feature/transcript-relay.md#agy-sqlite-reader).
 
-Claude/Codex/Gemini/agy share the title/Concordia/session-meta/pty surface; only the
+`lictor grok [args...]` wraps Grok CLI. Binary lookup tries `LICTOR_GROK_BIN`,
+then `PATH`, then `%USERPROFILE%/.grok/bin/grok.exe` on Windows or
+`~/.grok/bin/grok` on POSIX. Grok discovers skills and commands under `.grok/`,
+`.agents/`, and `.claude/`. Lictor sends injected text and Enter in two steps.
+Transcript relay and session pinning are unsupported for Grok.
+
+Claude/Codex/Gemini/agy/Grok share the title/Concordia/session-meta/pty surface; only the
 skill-injection paths differ. Codex's own `--add-dir` widens the writable
 sandbox but doesn't trigger skill scanning, so `/v1/skill` returns 503 for
 Codex sessions.
