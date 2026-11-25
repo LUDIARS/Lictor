@@ -165,6 +165,15 @@
       "module": "src/contracts/grok-transcript-session.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-19",
+      "criterion": "C-19 decodeGrokTurnUpdate(pending, params, previewJson): 応答断片を結合し、正常なターン終了で最終回答、他の境界で途中コメントとして後続フレームより先に出力し、制御更新では保持する",
+      "symbol": "decodeGrokTurnUpdate",
+      "file": "src/grok-turn-frames.ts",
+      "module": "src/contracts/grok-turn-frames.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }

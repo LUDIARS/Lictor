@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -33,6 +33,70 @@ const otherGrokSessionId = "9ab4960c-7008-4ff7-ad49-2d917406df48";
 function grokLine(update: object, method = "session/update"): string {
   return JSON.stringify({ jsonrpc: "2.0", method, params: { sessionId: grokSessionId, update } });
 }
+
+function grokChunk(text: string): string {
+  return grokLine({ sessionUpdate: "agent_message_chunk", content: { text } });
+}
+
+function grokTurnCompleted(stop_reason: string): string {
+  return grokLine({ sessionUpdate: "turn_completed", stop_reason }, "_x.ai/session/update");
+}
+
+function grokText(text: string, phase?: "commentary" | "final_answer") {
+  return { kind: "text", payload: { role: "assistant", text, ...(phase === undefined ? {} : { phase }) } };
+}
+
+test("readRecentFromFile(grok): phase follows the turn boundary and preserves frame order", () => {
+  const root = mkdtempSync(join(tmpdir(), "lictor-grok-history-"));
+  const updates = join(root, "updates.jsonl");
+  const lines = [
+    grokChunk("Checking"),
+    grokLine({ sessionUpdate: "tool_call", toolCallId: "call", title: "read" }),
+    grokLine({ sessionUpdate: "tool_call_update", toolCallId: "call", status: "completed" }),
+    grokChunk("Done"),
+    grokTurnCompleted("end_turn"),
+    grokChunk("Cancelled"),
+    grokTurnCompleted("cancelled"),
+    grokChunk("Rate limited"),
+    grokTurnCompleted("rate_limit"),
+    grokChunk("All"),
+    ...["hook_execution", "retry_state", "session_recap"].map((sessionUpdate) => grokLine({ sessionUpdate })),
+    grokChunk(" done"),
+    grokTurnCompleted("end_turn"),
+    grokChunk("Before user"),
+    grokLine({ sessionUpdate: "user_message_chunk", content: { text: "Next" } }),
+    grokChunk("Before thought"),
+    grokLine({ sessionUpdate: "agent_thought_chunk", content: { text: "Thinking" } }),
+    grokChunk("Before progress"),
+    grokLine({ sessionUpdate: "tool_call_update", toolCallId: "next", status: "in_progress" }),
+    grokChunk("Still"),
+    grokChunk(" writing"),
+  ];
+  try {
+    writeFileSync(updates, lines.join("\n"));
+    const history = readRecentFromFile(updates, 50, false);
+    assert.deepEqual(history.frames, [
+      grokText("Checking", "commentary"),
+      lineToFrames(lines[1])[0],
+      lineToFrames(lines[2])[0],
+      grokText("Done", "final_answer"),
+      grokText("Cancelled", "commentary"),
+      grokText("Rate limited", "commentary"),
+      grokText("All done", "final_answer"),
+      grokText("Before user", "commentary"),
+      { kind: "text", payload: { role: "user", text: "Next" } },
+      grokText("Before thought", "commentary"),
+      { kind: "thinking", payload: { role: "assistant", preview: "Thinking" } },
+      grokText("Before progress", "commentary"),
+      grokText("Still writing"),
+    ]);
+    assert.equal(history.returned, 13);
+    assert.equal(history.total_lines, lines.length);
+    assert.deepEqual(readRecentFromFile(updates, 1, true).lines, [JSON.parse(lines.at(-1)!)]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("lineToFrames relays Grok messages and thinking from both update methods", () => {
   const text = "作業中 🧪";
@@ -89,8 +153,10 @@ for (const pinned of [false, true]) {
     mkdirSync(own);
     mkdirSync(other);
     const updates = join(own, "updates.jsonl");
-    const frame = { kind: "text", payload: { role: "assistant", text: "Grok response" } };
-    const body = grokLine({ sessionUpdate: "agent_message_chunk", content: { text: frame.payload.text } }) + "\n";
+    const frame = grokText("Grok response", "final_answer");
+    const firstLine = grokChunk(frame.payload.text) + "\n";
+    const completion = grokTurnCompleted("end_turn") + "\n";
+    const body = firstLine + completion;
     if (!pinned) writeFileSync(updates, body);
     const decoys = [join(root, "prompt_history.jsonl"), ...["chat_history", "events", "rewind_points"]
       .map((name) => join(other, `${name}.jsonl`))];
@@ -113,7 +179,12 @@ for (const pinned of [false, true]) {
         await sleep(100);
         assert.equal(tail.getTranscriptPath(), null);
         assert.deepEqual(relayed, []);
-        writeFileSync(updates, body);
+        writeFileSync(updates, firstLine);
+        for (let i = 0; i < 40 && tail.getTranscriptPath() === null; i++) await sleep(50);
+        assert.equal(tail.getTranscriptPath(), updates);
+        assert.deepEqual(relayed, []);
+        assert.deepEqual(tail.readRecent(10).frames, [grokText("Grok response")]);
+        appendFileSync(updates, completion);
       }
       for (let i = 0; i < 40 && relayed.length === 0; i++) await sleep(50);
       assert.equal(tail.getTranscriptPath(), updates);
@@ -121,6 +192,17 @@ for (const pinned of [false, true]) {
       assert.deepEqual(relayed, [frame]);
       assert.deepEqual(tail.readRecent(10).frames, [frame]);
       assert.ok(decoys.every((path) => !existsSync(`${path}.lictor-claim`)));
+      if (pinned) {
+        const user = grokLine({ sessionUpdate: "user_message_chunk", content: { text: "Replace" } });
+        appendFileSync(updates, user + "\n" + grokChunk("Old pending") + "\n");
+        for (let i = 0; i < 40 && relayed.length < 2; i++) await sleep(50);
+        assert.deepEqual(relayed, [frame, lineToFrames(user)[0]]);
+        const replacement = join(own, "replacement.tmp");
+        writeFileSync(replacement, grokChunk("New response") + "\n" + completion);
+        renameSync(replacement, updates);
+        for (let i = 0; i < 40 && relayed.length < 3; i++) await sleep(50);
+        assert.deepEqual(relayed, [frame, lineToFrames(user)[0], grokText("New response", "final_answer")]);
+      }
     } finally {
       tail.stop();
       rmSync(root, { recursive: true, force: true });

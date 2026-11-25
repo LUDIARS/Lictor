@@ -25,6 +25,7 @@
 import { TranscriptPathReport } from "./transcript-path-report.js";
 import { startAgyTranscript } from "./agy-transcript.js";
 import { grokUpdateToFrames } from "./grok-transcript-frames.js";
+import { createGrokFrameDecoder } from "./grok-turn-frames.js";
 import type { AgyLaunch } from "./agy-pty.js";
 import { isResumeRelayRecord } from "./codex-resume-binding.js";
 import {
@@ -41,7 +42,7 @@ import {
   writeSync,
   type Stats,
 } from "node:fs";
-import { isAbsolute, join, relative, sep } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import type { ProviderConfig } from "./provider.js";
 import { grokSessionIdFromTranscriptPath } from "./provider.js";
 import { findCodexTranscriptSuccessor } from "./codex-transcript-successor.js";
@@ -395,6 +396,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   let fileIdentity: string | null = null;
   let seq = 0;
   let pending = "";
+  const grokDecoder = opts.provider.name === "grok" ? createGrokFrameDecoder(previewJson) : null;
   let stopped = false;
   // Codex response_item/event_msg 二重経路の dedupe key (直近 CODEX_ASSISTANT_DEDUPE_WINDOW
   // 件のみ保持。 Set の挿入順 = 古い順なので先頭を捨てれば FIFO で回る)。
@@ -564,6 +566,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     offset = 0;
     fileIdentity = null;
     pending = "";
+    grokDecoder?.reset();
     lastProgressAt = Date.now();
   };
 
@@ -906,17 +909,14 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
       return; // file went away
     }
     const identity = `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
-    if (fileIdentity !== null && fileIdentity !== identity) {
-      // 同じ path が replace された場合は size が旧 offset 以上でも別 transcript として先頭へ戻す。
-      offset = 0;
-      pending = "";
-    }
+    const replaced = fileIdentity !== null && fileIdentity !== identity;
     fileIdentity = identity;
     const size = stat.size;
-    if (size < offset) {
-      // truncate / replace 後は先頭から読み直す。途中行の pending は旧 inode の断片なので破棄。
+    if (replaced || size < offset) {
+      // Truncation and replacement invalidate both a partial line and any buffered reply.
       offset = 0;
       pending = "";
+      grokDecoder?.reset();
     }
     if (size === offset) {
       // 束縛済だが伸びていない。 単なるアイドルなら正常だが、 active なのに長時間ゼロ進捗なら
@@ -969,7 +969,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
           }
         }
       }
-      for (const frame of lineToFrames(line)) {
+      for (const frame of grokDecoder ? grokDecoder.consume(line) : lineToFrames(line)) {
         // Codex は同一ターンの assistant 出力を response_item / event_msg の 2 経路で
         // 書くことがある (二重に text frame 化される)。seq を振る前に text frame
         // だけを弾き、同じ行に含まれる thinking / tool-use は必ず残す。
@@ -1123,7 +1123,7 @@ export function decideCodexInitialBind(candidates: CodexBindCandidate[]): CodexB
  *
  * - `jsonlPath` が null (transcript 未 discover) なら available:false で即返す.
  * - 非空行だけを母数にし、 末尾 `limit` 行を古い順で返す.
- * - raw=false: 各行を `lineToFrames` で slim frame 化 (parse 不能行は捨てる).
+ * - raw=false: 各行を slim frame 化 (parse 不能行は捨てる)。Grok は行をまたいで phase を判定する。
  * - raw=true : 各行を `JSON.parse` した生オブジェクト (parse 不能行は捨てる).
  *
  * 副作用は readFileSync 1 回のみ。 sidecar の `GET /v1/transcript` から呼ばれる.
@@ -1155,10 +1155,12 @@ export function readRecentFromFile(
     }
     return { path: jsonlPath, available: true, total_lines: allLines.length, returned: lines.length, lines };
   }
+  const grokDecoder = basename(jsonlPath) === "updates.jsonl" ? createGrokFrameDecoder(previewJson) : null;
   const frames: Frame[] = [];
   for (const l of slice) {
-    frames.push(...lineToFrames(l));
+    frames.push(...(grokDecoder ? grokDecoder.consume(l) : lineToFrames(l)));
   }
+  if (grokDecoder) frames.push(...grokDecoder.flush());
   return { path: jsonlPath, available: true, total_lines: allLines.length, returned: frames.length, frames };
 }
 

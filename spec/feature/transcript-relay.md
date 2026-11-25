@@ -31,6 +31,18 @@ Actio `actio:9f0725c9-83bd-4c89-bf15-2b3d67732eb5`
 - `session/update` と `_x.ai/session/update` の user・assistant 本文、思考の先頭 400 文字、
   ツール呼び出しと終端結果を既存のフレーム形式で中継する。制御イベントと途中のツール更新は省く。
 
+### SPEC-GROK-TRANSCRIPT-PHASE
+
+Actio `actio:1fd6b56a-ef90-42e1-9efd-a366a3a43ca5`
+
+- `agent_message_chunk` の本文を順に結合し、境界で 1 件の assistant text frame として送る。
+  `turn_completed` の `stop_reason` が `end_turn` のときは `final_answer`、キャンセルや
+  レート制限など他の終了理由では `commentary` を付ける。
+- ツール呼び出し・ツール更新・利用者入力・思考が届いた場合は、保留中の本文を
+  `commentary` として先に送る。フック、再試行、セッション要約などの制御更新では本文を保留する。
+- ライブ中継は再束縛・ファイル置換・切り詰めで保留を破棄する。履歴取得では選択した末尾行に
+  同じ判定を適用し、境界に達していない本文を phase なしで返す。単行変換と raw 履歴は従来どおり。
+
 ## agy SQLite reader
 
 Actio `actio:6719398b-e0f9-4a6f-9cec-a328756c97db`
