@@ -129,6 +129,42 @@
       "module": "src/contracts/grok-install-paths.contract.ts",
       "mode": "observe",
       "sample": 1
+    },
+    {
+      "id": "C-15",
+      "criterion": "C-15 grokPinnedTranscriptFile(cwd, uuid, env): Grok のホームとエンコードした cwd から指定 UUID の updates.jsonl を求める",
+      "symbol": "grokPinnedTranscriptFile",
+      "file": "src/provider.ts",
+      "module": "src/contracts/grok-transcript-path.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-16",
+      "criterion": "C-16 resolveGrokTranscriptPin(provider, args, cwd, env, createUuid): Grok の明示 ID を使い、再開指定では発番せず、新規セッションだけに ID を付ける",
+      "symbol": "resolveGrokTranscriptPin",
+      "file": "src/grok-transcript-pin.ts",
+      "module": "src/contracts/grok-transcript-pin.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-17",
+      "criterion": "C-17 grokUpdateToFrames(params, previewJson): Grok の本文・思考・ツールを既存フレームへ変換し、制御イベントと途中のツール更新を省く",
+      "symbol": "grokUpdateToFrames",
+      "file": "src/grok-transcript-frames.ts",
+      "module": "src/contracts/grok-transcript-frames.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-18",
+      "criterion": "C-18 grokSessionIdFromTranscriptPath(path): updates.jsonl の親が UUID の場合にだけセッション ID を返す",
+      "symbol": "grokSessionIdFromTranscriptPath",
+      "file": "src/provider.ts",
+      "module": "src/contracts/grok-transcript-session.contract.ts",
+      "mode": "observe",
+      "sample": 1
     }
   ]
 }

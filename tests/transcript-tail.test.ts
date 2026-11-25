@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,7 +17,7 @@ import {
   isTranscriptDebugEnabled,
   extractCodexAssistantDedupeKey,
 } from "../src/transcript-tail.js";
-import { PROVIDERS, makeLocalLlmProvider } from "../src/provider.js";
+import { grokSessionIdFromTranscriptPath, PROVIDERS, makeLocalLlmProvider } from "../src/provider.js";
 import { claudeTranscriptStatePath } from "../src/active-repos.js";
 import { OrderedTranscriptSink } from "../src/transcript-sink.js";
 
@@ -26,6 +26,107 @@ import { OrderedTranscriptSink } from "../src/transcript-sink.js";
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const grokSessionId = "96a8a47c-0184-433f-ab6b-5e53153a7633";
+const otherGrokSessionId = "9ab4960c-7008-4ff7-ad49-2d917406df48";
+
+function grokLine(update: object, method = "session/update"): string {
+  return JSON.stringify({ jsonrpc: "2.0", method, params: { sessionId: grokSessionId, update } });
+}
+
+test("lineToFrames relays Grok messages and thinking from both update methods", () => {
+  const text = "作業中 🧪";
+  assert.deepEqual(lineToFrames(grokLine({ sessionUpdate: "agent_message_chunk", content: { text } })),
+    [{ kind: "text", payload: { role: "assistant", text } }]);
+  assert.deepEqual(lineToFrames(grokLine({ sessionUpdate: "user_message_chunk", content: { text } }, "_x.ai/session/update")),
+    [{ kind: "text", payload: { role: "user", text } }]);
+  assert.deepEqual(lineToFrames(grokLine({ sessionUpdate: "agent_thought_chunk", content: { text: "t".repeat(401) } })),
+    [{ kind: "thinking", payload: { role: "assistant", preview: "t".repeat(400) } }]);
+});
+
+test("lineToFrames relays Grok tool calls and terminal results with previews", () => {
+  const toolCallId = "call-1";
+  assert.deepEqual(lineToFrames(grokLine({
+    sessionUpdate: "tool_call", toolCallId, title: "Display title", rawInput: { file: "notes" },
+    _meta: { "x.ai/tool": { name: "read" } },
+  })), [{
+    kind: "tool-use",
+    payload: { role: "assistant", name: "read", tool_use_id: toolCallId, input_preview: '{"file":"notes"}' },
+  }]);
+  for (const [status, isError] of [["completed", false], ["failed", true]] as const) {
+    assert.deepEqual(lineToFrames(grokLine({
+      sessionUpdate: "tool_call_update", toolCallId, status,
+      content: [
+        { type: "diff", content: { text: "ignored" } },
+        { type: "content", content: { type: "text", text: "output" } },
+        { type: "content", content: { type: "text", text: "x".repeat(210) } },
+      ],
+    })), [{ kind: "tool-result", payload: { tool_use_id: toolCallId, is_error: isError, preview: `output\n${"x".repeat(193)}` } }]);
+  }
+});
+
+test("lineToFrames drops Grok control events and unfinished tool updates", () => {
+  for (const sessionUpdate of ["turn_completed", "hook_execution", "retry_state", "agent_message_chunk"]) {
+    assert.deepEqual(lineToFrames(grokLine({ sessionUpdate }, "_x.ai/session/update")), []);
+  }
+  for (const status of [undefined, "pending", "in_progress"]) {
+    assert.deepEqual(lineToFrames(grokLine({ sessionUpdate: "tool_call_update", toolCallId: "call-1", status })), []);
+  }
+});
+
+test("Grok session ID comes from the updates.jsonl parent on both path styles", () => {
+  assert.equal(grokSessionIdFromTranscriptPath(`E:\\sessions\\${grokSessionId}\\updates.jsonl`), grokSessionId);
+  assert.equal(grokSessionIdFromTranscriptPath(`/sessions/${grokSessionId}/updates.jsonl`), grokSessionId);
+  assert.equal(grokSessionIdFromTranscriptPath(`/sessions/${grokSessionId}/events.jsonl`), null);
+  assert.equal(grokSessionIdFromTranscriptPath(`/sessions/other-${grokSessionId}/updates.jsonl`), null);
+});
+
+for (const pinned of [false, true]) {
+  test(`startTranscriptTail(grok): ${pinned ? "honors an exact pin" : "ignores newer sibling logs"}`, async () => {
+    const root = mkdtempSync(join(tmpdir(), "lictor-grok-tail-"));
+    const own = join(root, grokSessionId);
+    const other = join(root, otherGrokSessionId);
+    mkdirSync(own);
+    mkdirSync(other);
+    const updates = join(own, "updates.jsonl");
+    const frame = { kind: "text", payload: { role: "assistant", text: "Grok response" } };
+    const body = grokLine({ sessionUpdate: "agent_message_chunk", content: { text: frame.payload.text } }) + "\n";
+    if (!pinned) writeFileSync(updates, body);
+    const decoys = [join(root, "prompt_history.jsonl"), ...["chat_history", "events", "rewind_points"]
+      .map((name) => join(other, `${name}.jsonl`))];
+    if (pinned) decoys.push(join(other, "updates.jsonl"));
+    for (const path of decoys) writeFileSync(path, body.replace("Grok response", "other session"));
+    const relayed: unknown[] = [];
+    const tail = startTranscriptTail({
+      cwd: root,
+      provider: { ...PROVIDERS.grok, transcriptDir: () => root },
+      concordiaBaseUrl: "http://127.0.0.1:1",
+      sessionId: "lictor-grok-test",
+      pinnedTranscriptPath: pinned ? updates : null,
+      transcriptSink: {
+        post: async (kind, payload) => ({ seq: relayed.push({ kind, payload }), persisted: true }),
+        flush: async () => {},
+      },
+    });
+    try {
+      if (pinned) {
+        await sleep(100);
+        assert.equal(tail.getTranscriptPath(), null);
+        assert.deepEqual(relayed, []);
+        writeFileSync(updates, body);
+      }
+      for (let i = 0; i < 40 && relayed.length === 0; i++) await sleep(50);
+      assert.equal(tail.getTranscriptPath(), updates);
+      assert.equal(tail.getSessionUuid(), grokSessionId);
+      assert.deepEqual(relayed, [frame]);
+      assert.deepEqual(tail.readRecent(10).frames, [frame]);
+      assert.ok(decoys.every((path) => !existsSync(`${path}.lictor-claim`)));
+    } finally {
+      tail.stop();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("transcript debug logging is opt-in through the existing flag", () => {
   assert.equal(isTranscriptDebugEnabled({}), false);

@@ -10,10 +10,12 @@
 
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, posix, win32 } from "node:path";
+import { join, posix, resolve, win32 } from "node:path";
 import { cwdToProjectKey } from "./memory-loader.js";
 import { contract } from './contracts/contract-runtime.js'; /* augur-inject:import:b580951b */
-import augurContract_4f62ec97 from './contracts/grok-install-paths.contract.js'; /* augur-inject:contract-predicate:5b6f5efc */
+import augurContract_4f62ec97 from './contracts/grok-install-paths.contract.js';
+import augurContract_ce3f5f6c from './contracts/grok-transcript-path.contract.js'; /* augur-inject:contract-predicate:6c537d0e */
+import augurContract_58ff5617 from './contracts/grok-transcript-session.contract.js'; /* augur-inject:contract-predicate:29c4b114 */ /* augur-inject:contract-predicate:5b6f5efc */
 
 /**
  * How lictor delivers SKILL.md files to the wrapped CLI.
@@ -106,7 +108,7 @@ export interface ProviderConfig {
    * 場合は呼び出し側で `existsSync` チェックされる前提で、 resolver は
    * 「あるべき path」 を返すだけで実在確認はしない.
    */
-  transcriptDir: (cwd: string) => string | null;
+  transcriptDir: (cwd: string, env?: NodeJS.ProcessEnv) => string | null;
   /**
    * `<sessionDir>/<filename.jsonl>` の `<filename>` 部分から session UUID を
    * 抽出する関数. provider 別の filename 規約に対応する.
@@ -140,7 +142,7 @@ export interface ProviderConfig {
    * 固定 uuid に対応する transcript JSONL の絶対パスを返す。
    * {@link supportsSessionPin} が true のとき必須。dir が解決できなければ null。
    */
-  pinnedTranscriptFile?: (cwd: string, uuid: string) => string | null;
+  pinnedTranscriptFile?: (cwd: string, uuid: string, env?: NodeJS.ProcessEnv) => string | null;
   /**
    * mtime discover の候補 JSONL が「このセッションのものでありうるか」 を
    * 先頭行メタデータで判定する任意フィルタ ({@link supportsSessionPin} が
@@ -455,6 +457,39 @@ function extractUuid(basename: string): string | null {
   return m ? m[1] : null;
 }
 
+const GROK_TRANSCRIPT_FILENAME = "updates.jsonl";
+
+export function grokHomeRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return env.GROK_HOME?.trim() || join(homedir(), ".grok");
+}
+
+export function encodeGrokCwd(cwd: string): string {
+  return encodeURIComponent(resolve(cwd));
+}
+
+export function grokTranscriptDir(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
+  return resolve(grokHomeRoot(env), "sessions", encodeGrokCwd(cwd));
+}
+
+export function grokPinnedTranscriptFile(cwd: string, uuid: string, env: NodeJS.ProcessEnv = process.env): string {
+  return join(grokTranscriptDir(cwd, env), uuid, GROK_TRANSCRIPT_FILENAME);
+}
+// @ts-expect-error augur-inject
+grokPinnedTranscriptFile = contract(grokPinnedTranscriptFile, { ...augurContract_ce3f5f6c, contractId: 'C-15', mode: 'observe', sample: 1, where: 'src/provider.ts:472', rule: 'contract-wrap', id: 'ce3f5f6c' }); /* augur-inject:contract-wrap:ce3f5f6c */
+
+function extractGrokUuid(value: string): string | null {
+  return extractUuid(value) === value ? value : null;
+}
+
+export function grokSessionIdFromTranscriptPath(path: string): string | null {
+  const parts = path.split(/[\\/]/);
+  const filename = parts.pop();
+  const sessionDir = parts.pop();
+  return filename === GROK_TRANSCRIPT_FILENAME && sessionDir ? extractGrokUuid(sessionDir) : null;
+}
+// @ts-expect-error augur-inject
+grokSessionIdFromTranscriptPath = contract(grokSessionIdFromTranscriptPath, { ...augurContract_58ff5617, contractId: 'C-18', mode: 'observe', sample: 1, where: 'src/provider.ts:480', rule: 'contract-wrap', id: '58ff5617' }); /* augur-inject:contract-wrap:58ff5617 */
+
 /**
  * ローカルLLM/Ollama 系 provider を作る共通ファクトリ。 runner (Famulus 等) は
  * `<sessionsDir>/<LICTOR_SESSION_ID>.jsonl` に `{ts, role, content}` 形式の JSONL を
@@ -600,9 +635,11 @@ export const PROVIDERS: Record<string, ProviderConfig> = {
     concordiaProvider: "grok-cli",
     displayName: "Grok CLI",
     submitInject: submitInjectTwoStep,
-    transcriptDir: () => null,
-    extractSessionId: () => null,
-    supportsSessionPin: false,
+    transcriptDir: grokTranscriptDir,
+    extractSessionId: extractGrokUuid,
+    supportsSessionPin: true,
+    sessionPinArgs: (uuid) => ["--session-id", uuid],
+    pinnedTranscriptFile: grokPinnedTranscriptFile,
   },
   // ローカル LLM エージェント (既定モデル gemma4:12b)。実体は別リポ Famulus
   // (@ludiars/famulus、ローカル LLM スポナー) の `famulus run` を pty で起動する。

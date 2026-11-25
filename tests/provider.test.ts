@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agyDefaultInstallPaths, getProvider, grokDefaultInstallPaths, isOnPath, PROVIDERS, resolveBinary } from "../src/provider.js";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import {
+  agyDefaultInstallPaths, encodeGrokCwd, getProvider, grokDefaultInstallPaths, grokHomeRoot,
+  grokPinnedTranscriptFile, grokTranscriptDir, isOnPath, PROVIDERS, resolveBinary,
+} from "../src/provider.js";
+import { resolveGrokTranscriptPin } from "../src/grok-transcript-pin.js";
 
 test("PROVIDERS registers claude with claude-add-dir skill strategy", () => {
   const p = PROVIDERS.claude;
@@ -395,9 +401,46 @@ test("PROVIDERS registers Grok CLI with native skill discovery and two-step inje
   assert.equal(grok.concordiaProvider, "grok-cli");
   assert.equal(grok.displayName, "Grok CLI");
   assert.equal(grok.submitInject, PROVIDERS.codex.submitInject);
-  assert.equal(grok.transcriptDir("/tmp/project"), null);
+  assert.equal(grok.transcriptDir, grokTranscriptDir);
   assert.equal(grok.extractSessionId("anything"), null);
-  assert.equal(grok.supportsSessionPin, false);
+  assert.equal(grok.supportsSessionPin, true);
+  assert.equal(grok.pinnedTranscriptFile, grokPinnedTranscriptFile);
+});
+
+const grokSessionId = "96a8a47c-0184-433f-ab6b-5e53153a7633";
+
+test("Grok transcript paths honor GROK_HOME and encode the absolute native cwd", () => {
+  const cwd = join("repo space", "folder#1");
+  const env = { GROK_HOME: resolve("custom grok") };
+  const encoded = encodeURIComponent(resolve(cwd));
+  assert.equal(encodeGrokCwd(cwd), encoded);
+  assert.equal(grokHomeRoot({}), join(homedir(), ".grok"));
+  assert.equal(grokHomeRoot({ GROK_HOME: "  " }), join(homedir(), ".grok"));
+  assert.equal(grokTranscriptDir(cwd, env), join(env.GROK_HOME, "sessions", encoded));
+  assert.equal(grokPinnedTranscriptFile(cwd, grokSessionId, env),
+    join(env.GROK_HOME, "sessions", encoded, grokSessionId, "updates.jsonl"));
+  assert.equal(PROVIDERS.grok.extractSessionId(grokSessionId), grokSessionId);
+  assert.equal(PROVIDERS.grok.extractSessionId(`other-${grokSessionId}`), null);
+});
+
+test("Grok adds a session ID only for new sessions and pins explicit IDs", () => {
+  const cwd = resolve("repo");
+  const env = { GROK_HOME: resolve("grok-home") };
+  const path = grokPinnedTranscriptFile(cwd, grokSessionId, env);
+  const avoidGeneratingId = () => assert.fail("should not generate a session ID");
+  const grok = PROVIDERS.grok;
+  assert.deepEqual(resolveGrokTranscriptPin(grok, [], cwd, env, () => grokSessionId),
+    { args: ["--session-id", grokSessionId], path });
+  assert.deepEqual(resolveGrokTranscriptPin(grok, ["--", "--resume"], cwd, env, () => grokSessionId),
+    { args: ["--session-id", grokSessionId], path });
+  for (const args of [["-s", grokSessionId], ["--session-id", grokSessionId], [`--session-id=${grokSessionId}`]]) {
+    assert.deepEqual(resolveGrokTranscriptPin(grok, args, cwd, env, avoidGeneratingId), { args: [], path });
+  }
+  for (const args of [["-r"], ["--resume"], ["--resume=last"], ["-c"], ["--continue"],
+    ["--fork-session"], ["--session-id"], ["-s", `../${grokSessionId}`]]) {
+    assert.equal(resolveGrokTranscriptPin(grok, args, cwd, env, avoidGeneratingId), null);
+  }
+  assert.equal(resolveGrokTranscriptPin(PROVIDERS.claude, [], cwd, env, avoidGeneratingId), null);
 });
 
 const grokPlatforms = [

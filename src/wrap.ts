@@ -34,6 +34,7 @@ import {
 import { type ProviderConfig, PROVIDERS, resolveBinary } from "./provider.js";
 import { prepareAgyLaunch, type AgyLaunch } from "./agy-pty.js";
 import { startTranscriptTail, type TranscriptTailHandle } from "./transcript-tail.js";
+import { resolveGrokTranscriptPin } from "./grok-transcript-pin.js";
 import { scheduleGracefulExit, type GracefulExitHandle } from "./graceful-exit.js";
 import { exitAfterCleanup } from "./exit-deadline.js";
 import { archiveSessionLog } from "./session-archive.js";
@@ -658,7 +659,7 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   }
   if (extraSettingsPath) providerArgs.push("--settings", extraSettingsPath);
 
-  // セッション ID 固定束縛 (`--session-id <uuid>`) は撤去した。
+  // Claude のセッション ID 固定束縛 (`--session-id <uuid>`) は撤去した。
   //
   // 旧実装は uuid を発番して `--session-id` で渡し、 transcript-tail に
   // `<uuid>.jsonl` だけを claim させて crosstalk を防いでいた。 しかし
@@ -681,7 +682,9 @@ export async function runWrapped(args: string[], provider: ProviderConfig = PROV
   // LICTOR_TRANSCRIPT_FILE は pin 撤去で起動時に先出しできなくなった。 ワーカーは
   // `<stateDir>/claude-transcript-<lictorId>.txt` (SessionStart hook が書く実パス) を
   // 読むこと。
-  const pinnedTranscriptPath: string | null = null;
+  const grokPin = resolveGrokTranscriptPin(provider, providerArgs, meta.cwd, env, randomUUID);
+  const pinnedTranscriptPath = grokPin?.path ?? null;
+  if (grokPin) providerArgs.unshift(...grokPin.args);
 
   // ask マーカーの検出と provider 固有のステアリング注入。
   //   - claude: 共通マーカールール + 組み込み AskUserQuestion 禁止 を常時

@@ -1,14 +1,14 @@
 # transcript リレー / pull
 
 ## 目的
-ラップ中の CLI（Claude / Codex / agy / ローカルLLM）の transcript を読み取り、
+ラップ中の CLI（Claude / Codex / Grok / agy / ローカルLLM）の transcript を読み取り、
 Discord リレーやダッシュボードへ転送・取得できるようにする。
 
 ## 振る舞い
 - App Server経路のCodexは、束縛済みthreadのeventを直接frame化し、JSONL discoveryを行わない。
-- legacy/Claude/ローカルLLM経路は
+- legacy/Claude/Grok/ローカルLLM経路は
   [`../../src/transcript-tail.ts`](../../src/transcript-tail.ts) で対象JSONLを発見・束縛する。
-- provider 差を吸収して frame 化（Claude / Codex / ローカルLLM JSONL の形式翻訳、
+- provider 差を吸収して frame 化（Claude / Codex / Grok / ローカルLLM JSONL の形式翻訳、
   `lineToFrame`）。ローカルLLM は `{ts, role, content}` を text/system frame 化する。
 - **pull**: `GET /v1/transcript?limit=N&raw=0|1`。`limit` 1–500（既定 50）。
   `raw=1` はパース済オブジェクト、既定は slim `lineToFrame` frame。返却は
@@ -17,6 +17,19 @@ Discord リレーやダッシュボードへ転送・取得できるようにす
 - **push（現行legacy）**: fire-and-forget で Discord リレー等へ送る経路（best-effort）。
 - **push（App Server target）**: session内で直列化し、HTTP statusと`persisted`を確認する。
   詳細はCodex初回sequence仕様のtranscript sink節に従う。
+
+## Grok CLI transcript
+
+Actio `actio:9f0725c9-83bd-4c89-bf15-2b3d67732eb5`
+
+- Grok CLI 1.0.92 の `updates.jsonl` を監視する。パスは
+  `<GROK_HOME または ~/.grok>/sessions/<encodeURIComponent(path.resolve(cwd))>/<UUID>/updates.jsonl`。
+- 新規セッションには Lictor が `--session-id <UUID>` を渡し、対応するファイルの作成を待つ。
+  `-s` または `--session-id` が指定されている場合はその UUID を使う。
+  ID を伴わない再開・継続・フォーク指定では、起動時刻に近い候補を既存の discovery で探し、
+  一度束縛した UUID で以後の探索を絞る。他の JSONL ファイルは探索対象から外す。
+- `session/update` と `_x.ai/session/update` の user・assistant 本文、思考の先頭 400 文字、
+  ツール呼び出しと終端結果を既存のフレーム形式で中継する。制御イベントと途中のツール更新は省く。
 
 ## agy SQLite reader
 
@@ -67,6 +80,8 @@ mtime 推測を避け、provider 種別ごとに **誤掴みが構造的に起�
   rollout だけを読む。mtime、cwd、filename UUID を所有権判定に使わない。
 - **Codex legacy**: 現行の `session_meta` + mtime discovery は明示的な互換モードに隔離する。
   App Server 経路の失敗時に自動 fallback してはならない。
+- **Grok**: CLI に渡した UUID がある場合は対応するファイルだけを読む。再開などで UUID が
+  未指定の場合は、`updates.jsonl` の親ディレクトリの UUID を初回束縛後の照合に使う。
 - **ローカルLLM / Ollama 系（filename 施錠, `usesFilenameSessionLock`）**: runner
   （Famulus 等）は `<sessionsDir>/<LICTOR_SESSION_ID>.jsonl` に書き、ファイル名の
   末尾 UUID が Lictor の session id そのもの。よって起動時に自分の session id を

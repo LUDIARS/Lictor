@@ -7,6 +7,7 @@
  *
  *  - Claude Code: `~/.claude/projects/<cwdEncoded>/<uuid>.jsonl`
  *  - OpenAI Codex CLI: `~/.codex/sessions/<YYYY>/<MM>/<DD>/rollout-<ISO>-<uuid>.jsonl`
+ *  - Grok CLI: `<GROK_HOME>/sessions/<cwdEncoded>/<uuid>/updates.jsonl`
  *
  * Provider config が `transcriptDir` を `null` で返す場合 (e.g. Gemini) は
  * transcript-tail は no-op で起動する (frame は流れない).
@@ -23,6 +24,7 @@
 
 import { TranscriptPathReport } from "./transcript-path-report.js";
 import { startAgyTranscript } from "./agy-transcript.js";
+import { grokUpdateToFrames } from "./grok-transcript-frames.js";
 import type { AgyLaunch } from "./agy-pty.js";
 import { isResumeRelayRecord } from "./codex-resume-binding.js";
 import {
@@ -41,6 +43,7 @@ import {
 } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
 import type { ProviderConfig } from "./provider.js";
+import { grokSessionIdFromTranscriptPath } from "./provider.js";
 import { findCodexTranscriptSuccessor } from "./codex-transcript-successor.js";
 import { readClaudeTranscriptPath } from "./active-repos.js";
 import {
@@ -503,12 +506,12 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   // codex 束縛を拒否したときの fail-loud (沈黙死禁止)。 曖昧 (同 cwd 並走) /
   // 施錠喪失で「掴まない」 判断をしたことを stderr に 1 度出す。 まだ発話されていない
   // アイドルは正常なので鳴らさない。
-  const warnCodexFailLoud = (detail: string): void => {
+  const warnDiscoveryHeld = (detail: string): void => {
     if (codexFailLoudWarned) return;
     if (opts.isSessionActive && !opts.isSessionActive()) return;
     codexFailLoudWarned = true;
     try {
-      process.stderr.write(`lictor: codex transcript relay held — ${detail}\n`);
+      process.stderr.write(`lictor: ${opts.provider.name} transcript relay held — ${detail}\n`);
     } catch { /* best-effort */ }
   };
 
@@ -565,6 +568,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
   };
 
   const sessionIdFromTranscriptPath = (path: string): string | null => {
+    if (opts.provider.name === "grok") return grokSessionIdFromTranscriptPath(path);
     const slash = path.lastIndexOf("/");
     const back = path.lastIndexOf("\\");
     let base = path.slice(Math.max(slash, back) + 1);
@@ -585,10 +589,11 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     walkJsonl(dir, MAX_DISCOVERY_DEPTH, (p, st) => {
       // 過去セッションの継承を防ぐ recency 下限。候補が複数なら mtime で最新を選ぶ。
       if (!opts.resumedCodexThreadId && st.mtimeMs < startedAt - 5_000) return;
+      const fileSid = sessionIdFromTranscriptPath(p);
+      if (opts.provider.name === "grok" && !fileSid) return;
       const meta = readCandidateMeta(p, st); // cwd / exec / head-ts (先頭行は 1 度だけ読む)
       if (!meta.accepted) return;
       const metaSid = meta.first ? opts.provider.transcriptMetaSessionId?.(meta.first) ?? null : null;
-      const fileSid = sessionIdFromTranscriptPath(p);
       const sid = metaSid ?? fileSid;
       candidates.push({ path: p, firstLine: meta.first, sessionId: sid, fileSessionId: fileSid, mtime: st.mtimeMs });
     });
@@ -627,7 +632,7 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
         // 一度でも束縛できていれば「喪失」 として fail-loud。 事前施錠で未束縛のまま
         // (runner がまだ書いていない) なら正常な待機なので黙って待つ。
         if (hasBoundOnce) {
-          warnCodexFailLoud(`bound session_id=${boundSessionId} rollout not found; relay held (no mtime fallback)`);
+          warnDiscoveryHeld(`bound session_id=${boundSessionId} transcript not found; no mtime fallback`);
         }
         return null;
       }
@@ -649,8 +654,8 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     })));
     if (decision.action === "wait") return null;
     if (decision.action === "ambiguous") {
-      warnCodexFailLoud(
-        `${decision.paths.length} concurrent codex rollouts in this cwd; refusing to bind ` +
+      warnDiscoveryHeld(
+        `${decision.paths.length} concurrent transcripts in this cwd; refusing to bind ` +
           `(crosstalk guard, no guess). paths=${decision.paths.join(", ")}`,
       );
       return null;
@@ -786,7 +791,8 @@ export function startTranscriptTail(opts: TranscriptTailOptions): TranscriptTail
     if (opts.lictorTranscriptStatePath) return recoverByAuthority();
     // codex (session_meta 施錠) と ローカルLLM (filename 施錠) はどちらも施錠キーで
     // discoverCodex を取り直す。別 wrapper の会話へは降りない。
-    if (opts.provider.transcriptMetaSessionId || opts.provider.usesFilenameSessionLock) {
+    if (opts.provider.transcriptMetaSessionId || opts.provider.usesFilenameSessionLock
+      || (opts.provider.name === "grok" && !pinnedPath)) {
       return recoverCodexLocked();
     }
     return recoverByPin();
@@ -1232,12 +1238,13 @@ export interface Frame { kind: string; payload: unknown }
 /**
  * Convert one JSONL line into the slim envelope Concordia broadcasts.
  *
- * Claude Code 形式と OpenAI Codex CLI 形式を両方サポート:
+ * Claude Code、OpenAI Codex CLI、Grok CLI の各形式をサポート:
  *  - Claude : `{type:"user"|"assistant", message:{role,content:[...]}, uuid}`
  *           : `{type:"summary"|"system"|...}`
  *  - Codex  : `{timestamp, type:"response_item", payload:{type:"message", role, content:[{type:"input_text"|"output_text", text}]}}`
  *           : `{timestamp, type:"event_msg", payload:{type:"user_message"|"agent_message", message}}`
  *           : `{timestamp, type:"session_meta"|"turn_context", payload:{...}}`
+ *  - Grok   : `{method, params:{sessionId, update:{sessionUpdate, ...}}}`
  *
  * 未知の type は最後に `raw` frame として落とす.
  */
@@ -1249,6 +1256,10 @@ export function lineToFrames(line: string): Frame[] {
     return [];
   }
   if (!msg || typeof msg !== "object") return [];
+
+  if (msg.method === "session/update" || msg.method === "_x.ai/session/update") {
+    return grokUpdateToFrames(msg.params, previewJson);
+  }
 
   // ─── Lictor ローカル LLM エージェント形式 ──────────────────────────────
   // local-agent (`lictor cli local-agent`) の独自 JSONL は {ts, role, content}
